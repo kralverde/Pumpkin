@@ -35,12 +35,16 @@ use super::{authentication::AuthError, Client, PlayerConfig};
 /// TODO: REMOVE ALL UNWRAPS
 impl Client {
     pub async fn handle_handshake(&self, handshake: SHandShake) {
-        dbg!("handshake");
         let version = handshake.protocol_version.0;
         self.protocol_version
             .store(version, std::sync::atomic::Ordering::Relaxed);
         *self.server_address.lock().await = handshake.server_address;
 
+        log::debug!(
+            "Handshake: id {} is now in state {:?}",
+            self.id,
+            &handshake.next_state
+        );
         self.connection_state.store(handshake.next_state);
         if self.connection_state.load() != ConnectionState::Status {
             let protocol = version;
@@ -61,7 +65,6 @@ impl Client {
     }
 
     pub async fn handle_ping_request(&self, ping_request: SStatusPingRequest) {
-        dbg!("ping");
         self.send_packet(&CPingResponse::new(ping_request.payload))
             .await;
         self.close();
