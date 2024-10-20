@@ -182,13 +182,14 @@ impl Level {
                 };
                 match chunk_data {
                     Ok(data) => {
-                        let loaded_chunks = self.loaded_chunks.write();
+                        let mut loaded_chunks = self.loaded_chunks.write();
                         if let Some(data) = loaded_chunks.get(at) {
                             // Another thread populated in between the previous check and now
                             // We did work, but this is basically like a cache miss, not much we
                             // can do about it
                             Some(data.clone())
                         } else {
+                            loaded_chunks.insert(*at, data.clone());
                             Some(data)
                         }
                     }
