@@ -148,6 +148,12 @@ impl Player {
             .world
             .mark_chunks_as_not_watched(&cylindrical.all_chunks_within())
             .await;
+
+        log::debug!(
+            "Removed player id {} ({} chunks remain cached)",
+            self.client.id,
+            self.living_entity.entity.world.get_cached_chunk_len().await
+        );
     }
 
     pub const fn entity_id(&self) -> EntityId {

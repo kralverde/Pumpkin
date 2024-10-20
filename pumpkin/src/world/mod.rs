@@ -255,6 +255,11 @@ impl World {
         level.mark_chunk_as_newly_watched(chunks);
     }
 
+    pub async fn get_cached_chunk_len(&self) -> usize {
+        let level = self.level.lock().await;
+        level.loaded_chunk_count()
+    }
+
     async fn spawn_world_chunks(&self, client: Arc<Client>, chunks: Vec<Vector2<i32>>) {
         if client.closed.load(std::sync::atomic::Ordering::Relaxed) {
             log::info!(

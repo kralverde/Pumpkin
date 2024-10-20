@@ -73,6 +73,11 @@ impl Level {
 
     pub fn get_block() {}
 
+    pub fn loaded_chunk_count(&self) -> usize {
+        let loaded_chunks = self.loaded_chunks.read();
+        loaded_chunks.len()
+    }
+
     /// Marks chunks as "watched" by a unique player. When no players are watching a chunk,
     /// it is removed from memory. Should only be called on chunks the player was not watching
     /// before
@@ -164,8 +169,6 @@ impl Level {
                             ) => {
                                 // This chunk was not generated yet.
                                 let chunk = Arc::new(self.world_gen.generate_chunk(*at));
-                                let mut loaded_chunks = self.loaded_chunks.write();
-                                loaded_chunks.insert(*at, chunk.clone());
                                 Ok(chunk)
                             }
                             Err(err) => Err(err),
@@ -174,13 +177,21 @@ impl Level {
                     None => {
                         // There is no savefile yet -> generate the chunks
                         let chunk = Arc::new(self.world_gen.generate_chunk(*at));
-                        let mut loaded_chunks = self.loaded_chunks.write();
-                        loaded_chunks.insert(*at, chunk.clone());
                         Ok(chunk)
                     }
                 };
                 match chunk_data {
-                    Ok(data) => Some(data),
+                    Ok(data) => {
+                        let loaded_chunks = self.loaded_chunks.write();
+                        if let Some(data) = loaded_chunks.get(at) {
+                            // Another thread populated in between the previous check and now
+                            // We did work, but this is basically like a cache miss, not much we
+                            // can do about it
+                            Some(data.clone())
+                        } else {
+                            Some(data)
+                        }
+                    }
                     Err(err) => {
                         // TODO: Panic here?
                         log::warn!("Failed to read chunk {:?}: {:?}", at, err);
