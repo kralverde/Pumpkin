@@ -273,13 +273,13 @@ impl World {
         // level.fetch_chunks is synchronous
         // if level.fetch_chunks is spawned before the chunk sender is spawned,
         // can block as the channel capacity is reached
-        let (sender, mut chunk_receiver) = mpsc::unbounded_channel();
+        let (sender, mut chunk_receiver) = mpsc::channel(10);
 
         let level = self.level.clone();
         let chunks = Arc::new(chunks);
         tokio::spawn(async move {
             let level = level.lock().await;
-            level.fetch_chunks(&chunks, sender)
+            level.fetch_chunks(&chunks, sender).await;
         });
 
         tokio::spawn(async move {

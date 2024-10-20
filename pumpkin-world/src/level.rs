@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use dashmap::{DashMap, Entry};
 use pumpkin_core::math::vector2::Vector2;
-use rayon::prelude::*;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -26,10 +26,11 @@ pub struct Level {
     loaded_chunks: Arc<DashMap<Vector2<i32>, Arc<ChunkData>>>,
     // NOTE: I dont imagine more that 65565 or whatever people viewing 1 chunk
     chunk_watchers: Arc<DashMap<Vector2<i32>, u16>>,
-    chunk_reader: Box<dyn ChunkReader>,
-    world_gen: Box<dyn WorldGenerator>,
+    chunk_reader: Arc<dyn ChunkReader>,
+    world_gen: Arc<dyn WorldGenerator>,
 }
 
+#[derive(Clone)]
 pub struct SaveFile {
     #[expect(dead_code)]
     root_folder: PathBuf,
@@ -48,12 +49,12 @@ impl Level {
             );
 
             Self {
-                world_gen,
+                world_gen: world_gen.into(),
                 save_file: Some(SaveFile {
                     root_folder,
                     region_folder,
                 }),
-                chunk_reader: Box::new(AnvilChunkReader::new()),
+                chunk_reader: Arc::new(AnvilChunkReader::new()),
                 loaded_chunks: Arc::new(DashMap::new()),
                 chunk_watchers: Arc::new(DashMap::new()),
             }
@@ -63,9 +64,9 @@ impl Level {
             );
 
             Self {
-                world_gen,
+                world_gen: world_gen.into(),
                 save_file: None,
-                chunk_reader: Box::new(AnvilChunkReader::new()),
+                chunk_reader: Arc::new(AnvilChunkReader::new()),
                 loaded_chunks: Arc::new(DashMap::new()),
                 chunk_watchers: Arc::new(DashMap::new()),
             }
@@ -82,7 +83,7 @@ impl Level {
     /// it is removed from memory. Should only be called on chunks the player was not watching
     /// before
     pub fn mark_chunk_as_newly_watched(&self, chunks: &[Vector2<i32>]) {
-        for chunk in chunks {
+        chunks.par_iter().for_each(|chunk| {
             match self.chunk_watchers.entry(*chunk) {
                 Entry::Occupied(mut occupied) => {
                     let value = occupied.get_mut();
@@ -97,7 +98,7 @@ impl Level {
                     vacant.insert(1);
                 }
             }
-        }
+        });
     }
 
     /// Marks chunks no longer "watched" by a unique player. When no players are watching a chunk,
@@ -105,7 +106,7 @@ impl Level {
     pub fn mark_chunk_as_not_watched_and_clean(&self, chunks: &[Vector2<i32>]) {
         let dropped_chunks = {
             chunks
-                .iter()
+                .par_iter()
                 .filter(|chunk| match self.chunk_watchers.entry(**chunk) {
                     Entry::Occupied(mut occupied) => {
                         let value = occupied.get_mut();
@@ -128,7 +129,7 @@ impl Level {
                 .collect::<Vec<_>>()
         };
         let dropped_chunk_data = dropped_chunks
-            .iter()
+            .par_iter()
             .filter_map(|chunk| {
                 //log::debug!("Unloading chunk {:?}", chunk);
                 self.loaded_chunks.remove(chunk)
@@ -147,73 +148,80 @@ impl Level {
     ///
     /// Note: The order of the output chunks will almost never be in the same order as the order of input chunks
 
-    pub fn fetch_chunks(
+    pub async fn fetch_chunks(
         &self,
         chunks: &[Vector2<i32>],
-        channel: mpsc::UnboundedSender<Arc<ChunkData>>,
+        channel: mpsc::Sender<Arc<ChunkData>>,
     ) {
-        chunks.into_par_iter().for_each(|at| {
+        chunks.iter().for_each(|at| {
             let channel = channel.clone();
+            let loaded_chunks = self.loaded_chunks.clone();
+            let chunk_reader = self.chunk_reader.clone();
+            let save_file = self.save_file.clone();
+            let world_gen = self.world_gen.clone();
+            let chunk_pos = *at;
 
-            let maybe_chunk = {
-                self.loaded_chunks
-                    .get(at)
-                    .map(|entry| entry.value().clone())
-            }
-            .or_else(|| {
-                let chunk_data = match &self.save_file {
-                    Some(save_file) => {
-                        match self.chunk_reader.read_chunk(save_file, at) {
-                            Ok(data) => Ok(Arc::new(data)),
-                            Err(
-                                ChunkReadingError::ChunkNotExist
-                                | ChunkReadingError::ParsingError(
-                                    ChunkParsingError::ChunkNotGenerated,
-                                ),
-                            ) => {
-                                // This chunk was not generated yet.
-                                let chunk = Arc::new(self.world_gen.generate_chunk(*at));
-                                Ok(chunk)
+            tokio::spawn(async move {
+                let maybe_chunk = {
+                    loaded_chunks
+                        .get(&chunk_pos)
+                        .map(|entry| entry.value().clone())
+                }
+                .or_else(|| {
+                    let chunk_data = match save_file {
+                        Some(save_file) => {
+                            match chunk_reader.read_chunk(&save_file, &chunk_pos) {
+                                Ok(data) => Ok(Arc::new(data)),
+                                Err(
+                                    ChunkReadingError::ChunkNotExist
+                                    | ChunkReadingError::ParsingError(
+                                        ChunkParsingError::ChunkNotGenerated,
+                                    ),
+                                ) => {
+                                    // This chunk was not generated yet.
+                                    let chunk = Arc::new(world_gen.generate_chunk(chunk_pos));
+                                    Ok(chunk)
+                                }
+                                Err(err) => Err(err),
                             }
-                            Err(err) => Err(err),
                         }
+                        None => {
+                            // There is no savefile yet -> generate the chunks
+                            let chunk = Arc::new(world_gen.generate_chunk(chunk_pos));
+                            Ok(chunk)
+                        }
+                    };
+                    match chunk_data {
+                        Ok(data) => {
+                            if let Some(data) = loaded_chunks.get(&chunk_pos) {
+                                // Another thread populated in between the previous check and now
+                                // We did work, but this is basically like a cache miss, not much we
+                                // can do about it
+                                Some(data.value().clone())
+                            } else {
+                                // TODO: What to do about caching
+                                //self.loaded_chunks.insert(*at, data.clone());
+                                Some(data)
+                            }
+                        }
+                        Err(err) => {
+                            // TODO: Panic here?
+                            log::warn!("Failed to read chunk {:?}: {:?}", chunk_pos, err);
+                            None
+                        }
+                    }
+                });
+                match maybe_chunk {
+                    Some(chunk) => {
+                        let _ = channel.send(chunk).await.inspect_err(|err| {
+                            log::error!("unable to send chunk to channel: {}", err)
+                        });
                     }
                     None => {
-                        // There is no savefile yet -> generate the chunks
-                        let chunk = Arc::new(self.world_gen.generate_chunk(*at));
-                        Ok(chunk)
+                        log::error!("Unable to send chunk {:?}!", chunk_pos);
                     }
                 };
-                match chunk_data {
-                    Ok(data) => {
-                        if let Some(data) = self.loaded_chunks.get(at) {
-                            // Another thread populated in between the previous check and now
-                            // We did work, but this is basically like a cache miss, not much we
-                            // can do about it
-                            Some(data.value().clone())
-                        } else {
-                            // TODO: What to do about caching
-                            //self.loaded_chunks.insert(*at, data.clone());
-                            Some(data)
-                        }
-                    }
-                    Err(err) => {
-                        // TODO: Panic here?
-                        log::warn!("Failed to read chunk {:?}: {:?}", at, err);
-                        None
-                    }
-                }
             });
-            match maybe_chunk {
-                Some(chunk) => {
-                    let _ = channel
-                        .send(chunk)
-                        .inspect_err(|err| log::error!("unable to send chunk to channel: {}", err));
-                }
-                None => {
-                    log::error!("Unable to send chunk {:?}!", at);
-                }
-            };
         })
     }
 }
