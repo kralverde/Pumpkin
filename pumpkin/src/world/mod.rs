@@ -255,12 +255,7 @@ impl World {
         level.mark_chunk_as_newly_watched(chunks);
     }
 
-    async fn spawn_world_chunks(
-        &self,
-        client: Arc<Client>,
-        chunks: Vec<Vector2<i32>>,
-        distance: i32,
-    ) {
+    async fn spawn_world_chunks(&self, client: Arc<Client>, chunks: Vec<Vector2<i32>>) {
         if client.closed.load(std::sync::atomic::Ordering::Relaxed) {
             log::info!(
                 "The connection with {} has closed before world chunks were spawned",
@@ -269,7 +264,11 @@ impl World {
             return;
         }
         let inst = std::time::Instant::now();
-        let (sender, mut chunk_receiver) = mpsc::channel(distance as usize);
+
+        // level.fetch_chunks is synchronous
+        // if level.fetch_chunks is spawned before the chunk sender is spawned,
+        // can block as the channel capacity is reached
+        let (sender, mut chunk_receiver) = mpsc::unbounded_channel();
 
         let level = self.level.clone();
         let chunks = Arc::new(chunks);

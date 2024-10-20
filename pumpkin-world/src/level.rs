@@ -139,7 +139,11 @@ impl Level {
     ///
     /// Note: The order of the output chunks will almost never be in the same order as the order of input chunks
 
-    pub fn fetch_chunks(&self, chunks: &[Vector2<i32>], channel: mpsc::Sender<Arc<ChunkData>>) {
+    pub fn fetch_chunks(
+        &self,
+        chunks: &[Vector2<i32>],
+        channel: mpsc::UnboundedSender<Arc<ChunkData>>,
+    ) {
         chunks.into_par_iter().for_each(|at| {
             let channel = channel.clone();
 
@@ -160,6 +164,8 @@ impl Level {
                             ) => {
                                 // This chunk was not generated yet.
                                 let chunk = Arc::new(self.world_gen.generate_chunk(*at));
+                                let mut loaded_chunks = self.loaded_chunks.write();
+                                loaded_chunks.insert(*at, chunk.clone());
                                 Ok(chunk)
                             }
                             Err(err) => Err(err),
@@ -168,6 +174,8 @@ impl Level {
                     None => {
                         // There is no savefile yet -> generate the chunks
                         let chunk = Arc::new(self.world_gen.generate_chunk(*at));
+                        let mut loaded_chunks = self.loaded_chunks.write();
+                        loaded_chunks.insert(*at, chunk.clone());
                         Ok(chunk)
                     }
                 };
@@ -182,9 +190,9 @@ impl Level {
             });
             match maybe_chunk {
                 Some(chunk) => {
-                    channel
-                        .blocking_send(chunk.clone())
-                        .expect("Failed sending ChunkData.");
+                    let _ = channel
+                        .send(chunk)
+                        .inspect_err(|err| log::error!("unable to send chunk to channel: {}", err));
                 }
                 None => {
                     log::error!("Unable to send chunk {:?}!", at);
