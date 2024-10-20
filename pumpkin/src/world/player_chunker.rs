@@ -63,6 +63,7 @@ pub async fn player_join(world: &World, player: Arc<Player>) {
     }
 
     if !unloading_chunks.is_empty() {
+        log::warn!("Unloading chunks on join");
         world.mark_chunks_as_not_watched(&unloading_chunks).await;
         for chunk in unloading_chunks {
             if !player
@@ -84,6 +85,7 @@ pub async fn update_position(player: &Player) {
     let current_watched = player.watched_section.load();
     let new_watched = chunk_section_from_pos(&entity.block_pos.load());
     if current_watched != new_watched {
+        //log::debug!("changing chunks");
         let chunk_pos = entity.chunk_pos.load();
         player
             .client

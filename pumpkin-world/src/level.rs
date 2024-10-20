@@ -1,6 +1,6 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
-use parking_lot::{Mutex, RwLock};
+use dashmap::{DashMap, Entry};
 use pumpkin_core::math::vector2::Vector2;
 use rayon::prelude::*;
 use tokio::sync::mpsc;
@@ -23,8 +23,9 @@ use crate::{
 /// For more details on world generation, refer to the `WorldGenerator` module.
 pub struct Level {
     save_file: Option<SaveFile>,
-    loaded_chunks: Arc<RwLock<HashMap<Vector2<i32>, Arc<ChunkData>>>>,
-    chunk_watchers: Arc<Mutex<HashMap<Vector2<i32>, usize>>>,
+    loaded_chunks: Arc<DashMap<Vector2<i32>, Arc<ChunkData>>>,
+    // NOTE: I dont imagine more that 65565 or whatever people viewing 1 chunk
+    chunk_watchers: Arc<DashMap<Vector2<i32>, u16>>,
     chunk_reader: Box<dyn ChunkReader>,
     world_gen: Box<dyn WorldGenerator>,
 }
@@ -53,8 +54,8 @@ impl Level {
                     region_folder,
                 }),
                 chunk_reader: Box::new(AnvilChunkReader::new()),
-                loaded_chunks: Arc::new(RwLock::new(HashMap::new())),
-                chunk_watchers: Arc::new(Mutex::new(HashMap::new())),
+                loaded_chunks: Arc::new(DashMap::new()),
+                chunk_watchers: Arc::new(DashMap::new()),
             }
         } else {
             log::warn!(
@@ -65,8 +66,8 @@ impl Level {
                 world_gen,
                 save_file: None,
                 chunk_reader: Box::new(AnvilChunkReader::new()),
-                loaded_chunks: Arc::new(RwLock::new(HashMap::new())),
-                chunk_watchers: Arc::new(Mutex::new(HashMap::new())),
+                loaded_chunks: Arc::new(DashMap::new()),
+                chunk_watchers: Arc::new(DashMap::new()),
             }
         }
     }
@@ -74,22 +75,25 @@ impl Level {
     pub fn get_block() {}
 
     pub fn loaded_chunk_count(&self) -> usize {
-        let loaded_chunks = self.loaded_chunks.read();
-        loaded_chunks.len()
+        self.loaded_chunks.len()
     }
 
     /// Marks chunks as "watched" by a unique player. When no players are watching a chunk,
     /// it is removed from memory. Should only be called on chunks the player was not watching
     /// before
     pub fn mark_chunk_as_newly_watched(&self, chunks: &[Vector2<i32>]) {
-        let mut watchers = self.chunk_watchers.lock();
         for chunk in chunks {
-            match watchers.entry(*chunk) {
-                std::collections::hash_map::Entry::Occupied(mut occupied) => {
+            match self.chunk_watchers.entry(*chunk) {
+                Entry::Occupied(mut occupied) => {
                     let value = occupied.get_mut();
-                    *value = value.saturating_add(1);
+                    if let Some(new_value) = value.checked_add(1) {
+                        *value = new_value;
+                        //log::debug!("Watch value for {:?}: {}", chunk, value);
+                    } else {
+                        log::error!("Watching overflow on chunk {:?}", chunk);
+                    }
                 }
-                std::collections::hash_map::Entry::Vacant(vacant) => {
+                Entry::Vacant(vacant) => {
                     vacant.insert(1);
                 }
             }
@@ -100,11 +104,10 @@ impl Level {
     /// it is removed from memory. Should only be called on chunks the player was watching before
     pub fn mark_chunk_as_not_watched_and_clean(&self, chunks: &[Vector2<i32>]) {
         let dropped_chunks = {
-            let mut watchers = self.chunk_watchers.lock();
             chunks
                 .iter()
-                .filter(|chunk| match watchers.entry(**chunk) {
-                    std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                .filter(|chunk| match self.chunk_watchers.entry(**chunk) {
+                    Entry::Occupied(mut occupied) => {
                         let value = occupied.get_mut();
                         *value = value.saturating_sub(1);
                         if *value == 0 {
@@ -114,7 +117,7 @@ impl Level {
                             false
                         }
                     }
-                    std::collections::hash_map::Entry::Vacant(_) => {
+                    Entry::Vacant(_) => {
                         log::error!(
                             "Marking a chunk as not watched, but was vacant! ({:?})",
                             chunk
@@ -124,14 +127,14 @@ impl Level {
                 })
                 .collect::<Vec<_>>()
         };
-        let mut loaded_chunks = self.loaded_chunks.write();
         let dropped_chunk_data = dropped_chunks
             .iter()
             .filter_map(|chunk| {
-                log::debug!("Unloading chunk {:?}", chunk);
-                loaded_chunks.remove_entry(*chunk)
+                //log::debug!("Unloading chunk {:?}", chunk);
+                self.loaded_chunks.remove(chunk)
             })
             .collect();
+
         self.write_chunks(dropped_chunk_data);
     }
 
@@ -153,8 +156,9 @@ impl Level {
             let channel = channel.clone();
 
             let maybe_chunk = {
-                let loaded_chunks = self.loaded_chunks.read();
-                loaded_chunks.get(at).cloned()
+                self.loaded_chunks
+                    .get(at)
+                    .map(|entry| entry.value().clone())
             }
             .or_else(|| {
                 let chunk_data = match &self.save_file {
@@ -182,14 +186,14 @@ impl Level {
                 };
                 match chunk_data {
                     Ok(data) => {
-                        let mut loaded_chunks = self.loaded_chunks.write();
-                        if let Some(data) = loaded_chunks.get(at) {
+                        if let Some(data) = self.loaded_chunks.get(at) {
                             // Another thread populated in between the previous check and now
                             // We did work, but this is basically like a cache miss, not much we
                             // can do about it
-                            Some(data.clone())
+                            Some(data.value().clone())
                         } else {
-                            loaded_chunks.insert(*at, data.clone());
+                            // TODO: What to do about caching
+                            //self.loaded_chunks.insert(*at, data.clone());
                             Some(data)
                         }
                     }
