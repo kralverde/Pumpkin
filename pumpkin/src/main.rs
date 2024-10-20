@@ -187,7 +187,7 @@ async fn main() -> io::Result<()> {
                         if now.duration_since(client.last_alive_received.load())
                             >= Duration::from_secs(15)
                         {
-                            dbg!("no keep alive");
+                            log::debug!("No keep alive sent for id {}", id);
                             client.kick("No keep alive received").await;
                             break;
                         }
