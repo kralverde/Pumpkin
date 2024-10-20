@@ -277,20 +277,20 @@ impl Client {
         &self,
         packet: &mut RawPacket,
     ) -> Result<(), DeserializerError> {
+        log::debug!("Handling handshake group for id {}", self.id);
         let bytebuf = &mut packet.bytebuf;
         match packet.id.0 {
             SHandShake::PACKET_ID => {
                 self.handle_handshake(SHandShake::read(bytebuf)?).await;
-                Ok(())
             }
             _ => {
                 log::error!(
                     "Failed to handle packet id {} while in Handshake state",
                     packet.id.0
                 );
-                Ok(())
             }
-        }
+        };
+        Ok(())
     }
 
     async fn handle_status_packet(
@@ -298,26 +298,25 @@ impl Client {
         server: &Arc<Server>,
         packet: &mut RawPacket,
     ) -> Result<(), DeserializerError> {
+        log::debug!("Handling status group for id {}", self.id);
         let bytebuf = &mut packet.bytebuf;
         match packet.id.0 {
             SStatusRequest::PACKET_ID => {
                 self.handle_status_request(server, SStatusRequest::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             SStatusPingRequest::PACKET_ID => {
                 self.handle_ping_request(SStatusPingRequest::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             _ => {
                 log::error!(
                     "Failed to handle packet id {} while in Status state",
                     packet.id.0
                 );
-                Ok(())
             }
-        }
+        };
+        Ok(())
     }
 
     async fn handle_login_packet(
@@ -325,36 +324,33 @@ impl Client {
         server: &Arc<Server>,
         packet: &mut RawPacket,
     ) -> Result<(), DeserializerError> {
+        log::debug!("Handling login group for id {}", self.id);
         let bytebuf = &mut packet.bytebuf;
         match packet.id.0 {
             SLoginStart::PACKET_ID => {
                 self.handle_login_start(server, SLoginStart::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             SEncryptionResponse::PACKET_ID => {
                 self.handle_encryption_response(server, SEncryptionResponse::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             SLoginPluginResponse::PACKET_ID => {
                 self.handle_plugin_response(SLoginPluginResponse::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             SLoginAcknowledged::PACKET_ID => {
                 self.handle_login_acknowledged(server, SLoginAcknowledged::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             _ => {
                 log::error!(
                     "Failed to handle packet id {} while in Login state",
                     packet.id.0
                 );
-                Ok(())
             }
-        }
+        };
+        Ok(())
     }
 
     async fn handle_config_packet(
@@ -362,36 +358,33 @@ impl Client {
         server: &Arc<Server>,
         packet: &mut RawPacket,
     ) -> Result<(), DeserializerError> {
+        log::debug!("Handling config group for id {}", self.id);
         let bytebuf = &mut packet.bytebuf;
         match packet.id.0 {
             SClientInformationConfig::PACKET_ID => {
                 self.handle_client_information_config(SClientInformationConfig::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             SPluginMessage::PACKET_ID => {
                 self.handle_plugin_message(SPluginMessage::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             SAcknowledgeFinishConfig::PACKET_ID => {
                 self.handle_config_acknowledged(SAcknowledgeFinishConfig::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             SKnownPacks::PACKET_ID => {
                 self.handle_known_packs(server, SKnownPacks::read(bytebuf)?)
                     .await;
-                Ok(())
             }
             _ => {
                 log::error!(
                     "Failed to handle packet id {} while in Config state",
                     packet.id.0
                 );
-                Ok(())
             }
-        }
+        };
+        Ok(())
     }
 
     /// Reads the connection until our buffer of len 4096 is full, then decode
