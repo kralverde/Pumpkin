@@ -282,7 +282,6 @@ impl World {
             return;
         }
         let inst = std::time::Instant::now();
-
         let (sender, mut chunk_receiver) = mpsc::channel(distance as usize);
         let client_id = client.id;
 
@@ -291,7 +290,7 @@ impl World {
         tokio::spawn(async move {
             log::debug!("Spawned chunk fetcher for {}", client_id);
             let level = level.lock().await;
-            level.fetch_chunks(&chunks, sender).await;
+            level.fetch_chunks(&chunks, sender)
         });
 
         tokio::spawn(async move {
