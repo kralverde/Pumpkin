@@ -252,7 +252,7 @@ impl World {
 
     pub async fn mark_chunks_as_watched(&self, chunks: &[Vector2<i32>]) {
         let level = self.level.lock().await;
-        level.mark_chunk_as_newly_watched(chunks);
+        level.mark_chunks_as_newly_watched(chunks);
     }
 
     pub async fn get_cached_chunk_len(&self) -> usize {
@@ -270,9 +270,7 @@ impl World {
         }
         let inst = std::time::Instant::now();
 
-        // level.fetch_chunks is synchronous
-        // if level.fetch_chunks is spawned before the chunk sender is spawned,
-        // can block as the channel capacity is reached
+        // The smaller the channel, the less memory but the slower it is
         let (sender, mut chunk_receiver) = mpsc::channel(10);
 
         let level = self.level.clone();
