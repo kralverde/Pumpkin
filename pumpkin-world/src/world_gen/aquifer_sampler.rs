@@ -4,6 +4,7 @@ use pumpkin_core::{
     math::{floor_div, vector2::Vector2, vector3::Vector3},
     random::RandomDeriver,
 };
+use wide::i32x4;
 
 use crate::block::BlockState;
 
@@ -499,8 +500,9 @@ impl WorldAquiferSampler {
                             let local_y = block_pos::unpack_y(packed_random) - j;
                             let local_z = block_pos::unpack_z(packed_random) - k;
 
-                            let hypot_squared =
-                                local_x * local_x + local_y * local_y + local_z * local_z;
+                            let pos_simd = i32x4::new([local_x, local_y, local_z, 0]);
+                            let pos_simd_squared = pos_simd * pos_simd;
+                            let hypot_squared = pos_simd_squared.reduce_add();
 
                             if hypot_packed_block[0].1 >= hypot_squared {
                                 hypot_packed_block[2] = hypot_packed_block[1];
