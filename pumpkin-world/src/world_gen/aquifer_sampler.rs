@@ -4,7 +4,7 @@ use pumpkin_core::{
     math::{floor_div, vector2::Vector2, vector3::Vector3},
     random::RandomDeriver,
 };
-use wide::i32x4;
+use wide::{f64x4, i32x4};
 
 use crate::block::BlockState;
 
@@ -196,8 +196,8 @@ impl WorldAquiferSampler {
     }
 
     #[inline]
-    fn max_distance(i: i32, a: i32) -> f64 {
-        1f64 - ((a - i).abs() as f64) / 25f64
+    fn max_distance(i: f64x4, a: f64x4) -> f64x4 {
+        f64x4::ONE - (a - i).abs() / f64x4::splat(25f64)
     }
 
     fn calculate_density(
@@ -520,12 +520,24 @@ impl WorldAquiferSampler {
 
                 let fluid_level2 =
                     self.get_water_level(hypot_packed_block[0].0, height_estimator, state);
-                let d = Self::max_distance(hypot_packed_block[0].1, hypot_packed_block[1].1);
                 let block_state = fluid_level2.get_block_state(j);
 
-                if d <= 0f64 {
-                    // TODO: Handle fluid tick
+                let dist_1 = f64x4::new([
+                    hypot_packed_block[0].1 as f64,
+                    hypot_packed_block[0].1 as f64,
+                    hypot_packed_block[1].1 as f64,
+                    0f64,
+                ]);
+                let dist_2 = f64x4::new([
+                    hypot_packed_block[1].1 as f64,
+                    hypot_packed_block[2].1 as f64,
+                    hypot_packed_block[2].1 as f64,
+                    0f64,
+                ]);
+                let [max1, max2, max3, _] = Self::max_distance(dist_1, dist_2).to_array();
 
+                if max1 <= 0f64 {
+                    // TODO: Handle fluid tick
                     Some(block_state)
                 } else if block_state.of_block(WATER_BLOCK.block_id)
                     && self
@@ -539,52 +551,50 @@ impl WorldAquiferSampler {
                     let barrier_sample = self.barrier_noise.sample_mut(pos, state);
                     let fluid_level3 =
                         self.get_water_level(hypot_packed_block[1].0, height_estimator, state);
-                    let e = d * self.calculate_density(
-                        pos,
-                        barrier_sample,
-                        fluid_level2.clone(),
-                        fluid_level3.clone(),
-                    );
+                    let e = max1
+                        * self.calculate_density(
+                            pos,
+                            barrier_sample,
+                            fluid_level2.clone(),
+                            fluid_level3.clone(),
+                        );
 
                     if density + e > 0f64 {
                         None
                     } else {
                         let fluid_level4 =
                             self.get_water_level(hypot_packed_block[2].0, height_estimator, state);
-                        let f =
-                            Self::max_distance(hypot_packed_block[0].1, hypot_packed_block[2].1);
-                        if f > 0f64 {
-                            let g = d
-                                * f
+                        if max2 > 0f64 {
+                            let g = max1
+                                * max2
                                 * self.calculate_density(
                                     pos,
                                     barrier_sample,
                                     fluid_level2,
                                     fluid_level4.clone(),
                                 );
+
                             if density + g > 0f64 {
                                 return None;
                             }
                         }
 
-                        let g =
-                            Self::max_distance(hypot_packed_block[1].1, hypot_packed_block[2].1);
-                        if g > 0f64 {
-                            let h = d
-                                * g
+                        if max3 > 0f64 {
+                            let h = max1
+                                * max3
                                 * self.calculate_density(
                                     pos,
                                     barrier_sample,
                                     fluid_level3,
                                     fluid_level4,
                                 );
+
                             if density + h > 0f64 {
                                 return None;
                             }
                         }
 
                         //TODO Handle fluid tick
-
                         Some(block_state)
                     }
                 }

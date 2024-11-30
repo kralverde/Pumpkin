@@ -3,6 +3,7 @@ use std::sync::Arc;
 use itertools::{izip, Itertools};
 use num_traits::Pow;
 use pumpkin_core::random::RandomGenerator;
+use wide::f64x4;
 
 use super::{lerp3, GRADIENTS};
 
@@ -81,17 +82,20 @@ impl PerlinNoiseSampler {
 
     #[inline]
     fn grad(hash: i32, x: f64, y: f64, z: f64) -> f64 {
-        GRADIENTS[(hash & 15) as usize].dot(x, y, z)
+        GRADIENTS[hash as usize & 15].dot(x, y, z)
     }
 
     #[inline]
-    fn perlin_fade(value: f64) -> f64 {
-        value * value * value * (value * (value * 6f64 - 15f64) + 10f64)
+    fn perlin_fade(value: f64x4) -> f64x4 {
+        value
+            * value
+            * value
+            * (value * (value * f64x4::splat(6f64) - f64x4::splat(15f64)) + f64x4::splat(10f64))
     }
 
     #[inline]
     fn map(&self, input: i32) -> i32 {
-        self.permutation[(input & 0xFF) as usize] as i32
+        self.permutation[input as usize & 0xFF] as i32
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -126,9 +130,9 @@ impl PerlinNoiseSampler {
             local_y - 1f64,
             local_z - 1f64,
         );
-        let r = Self::perlin_fade(local_x);
-        let s = Self::perlin_fade(fade_local_y);
-        let t = Self::perlin_fade(local_z);
+
+        let simd = f64x4::new([local_x, fade_local_y, local_z, 0f64]);
+        let [r, s, t, _] = Self::perlin_fade(simd).to_array();
 
         lerp3(r, s, t, d, e, f, g, h, o, p, q)
     }
