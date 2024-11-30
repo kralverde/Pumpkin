@@ -37,6 +37,10 @@ noise = "0.9.0"
 
 rand = "0.8.5"
 
+wide = { git = "https://github.com/kralverde/wide.git", rev = "be0a32e6c6841ae41f726ed2f69de0c79e9d436b", features = [
+    "std",
+] }
+
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
 

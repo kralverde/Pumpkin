@@ -1,4 +1,5 @@
 use num_traits::Float;
+use wide::f64x4;
 pub mod config;
 pub mod density;
 pub mod perlin;
@@ -258,98 +259,31 @@ pub fn lerp3(
     )
 }
 
-struct Gradient {
-    x: f64,
-    y: f64,
-    z: f64,
-}
+struct Gradient(f64x4);
 
 const GRADIENTS: [Gradient; 16] = [
-    Gradient {
-        x: 1f64,
-        y: 1f64,
-        z: 0f64,
-    },
-    Gradient {
-        x: -1f64,
-        y: 1f64,
-        z: 0f64,
-    },
-    Gradient {
-        x: 1f64,
-        y: -1f64,
-        z: 0f64,
-    },
-    Gradient {
-        x: -1f64,
-        y: -1f64,
-        z: 0f64,
-    },
-    Gradient {
-        x: 1f64,
-        y: 0f64,
-        z: 1f64,
-    },
-    Gradient {
-        x: -1f64,
-        y: 0f64,
-        z: 1f64,
-    },
-    Gradient {
-        x: 1f64,
-        y: 0f64,
-        z: -1f64,
-    },
-    Gradient {
-        x: -1f64,
-        y: 0f64,
-        z: -1f64,
-    },
-    Gradient {
-        x: 0f64,
-        y: 1f64,
-        z: 1f64,
-    },
-    Gradient {
-        x: 0f64,
-        y: -1f64,
-        z: 1f64,
-    },
-    Gradient {
-        x: 0f64,
-        y: 1f64,
-        z: -1f64,
-    },
-    Gradient {
-        x: 0f64,
-        y: -1f64,
-        z: -1f64,
-    },
-    Gradient {
-        x: 1f64,
-        y: 1f64,
-        z: 0f64,
-    },
-    Gradient {
-        x: 0f64,
-        y: -1f64,
-        z: 1f64,
-    },
-    Gradient {
-        x: -1f64,
-        y: 1f64,
-        z: 0f64,
-    },
-    Gradient {
-        x: 0f64,
-        y: -1f64,
-        z: -1f64,
-    },
+    Gradient(f64x4::new([1f64, 1f64, 0f64, 0f64])),
+    Gradient(f64x4::new([-1f64, 1f64, 0f64, 0f64])),
+    Gradient(f64x4::new([1f64, -1f64, 0f64, 0f64])),
+    Gradient(f64x4::new([-1f64, -1f64, 0f64, 0f64])),
+    Gradient(f64x4::new([1f64, 0f64, 1f64, 0f64])),
+    Gradient(f64x4::new([-1f64, 0f64, 1f64, 0f64])),
+    Gradient(f64x4::new([1f64, 0f64, -1f64, 0f64])),
+    Gradient(f64x4::new([-1f64, 0f64, -1f64, 0f64])),
+    Gradient(f64x4::new([0f64, 1f64, 1f64, 0f64])),
+    Gradient(f64x4::new([0f64, -1f64, 1f64, 0f64])),
+    Gradient(f64x4::new([0f64, 1f64, -1f64, 0f64])),
+    Gradient(f64x4::new([0f64, -1f64, -1f64, 0f64])),
+    Gradient(f64x4::new([1f64, 1f64, 0f64, 0f64])),
+    Gradient(f64x4::new([0f64, -1f64, 1f64, 0f64])),
+    Gradient(f64x4::new([-1f64, 1f64, 0f64, 0f64])),
+    Gradient(f64x4::new([0f64, -1f64, -1f64, 0f64])),
 ];
 
 impl Gradient {
     #[inline]
     fn dot(&self, x: f64, y: f64, z: f64) -> f64 {
-        self.x * x + self.y * y + self.z * z
+        let input = f64x4::new([x, y, z, 0f64]);
+        (self.0 * input).reduce_add()
     }
 }
