@@ -16,7 +16,7 @@ use super::{
 const REGION_SIZE: usize = 32; // 32x32 chunks
 const CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
 
-const SIGNATURE: [u8; 8] = (0xc3ff13183cca9d9a as u64).to_be_bytes(); // as described in https://gist.github.com/Aaron2550/5701519671253d4c6190bde6706f9f98
+const SIGNATURE: [u8; 8] = (0xc3ff13183cca9d9a_u64).to_be_bytes(); // as described in https://gist.github.com/Aaron2550/5701519671253d4c6190bde6706f9f98
 const CHUNK_HEADER_BYTES_SIZE: usize = CHUNK_COUNT * size_of::<LinearChunkHeader>();
 
 #[derive(Default, PartialEq, Eq, Clone, Copy)]
@@ -122,7 +122,7 @@ impl LinearFile {
 
         true
     }
-    fn from_file(path: &Path) -> Result<Self, ChunkReadingError> {
+    fn load(path: &Path) -> Result<Self, ChunkReadingError> {
         let mut file =
             OpenOptions::new()
                 .read(true)
@@ -173,7 +173,7 @@ impl LinearFile {
         })
     }
 
-    fn to_file(&mut self, path: &Path) -> Result<(), ChunkWritingError> {
+    fn save(&mut self, path: &Path) -> Result<(), ChunkWritingError> {
         // Parse the headers to a buffer
         let headers_buffer: [u8; CHUNK_HEADER_BYTES_SIZE] =
             unsafe { transmute(self.chunks_headers) };
@@ -199,7 +199,7 @@ impl LinearFile {
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&path)
+            .open(path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
         file.write_vectored(&[
@@ -323,7 +323,7 @@ impl ChunkReader for LinearChunkFormat {
             .region_folder
             .join(format!("./r.{}.{}.linear", region_x, region_z));
 
-        let file_data = LinearFile::from_file(&path)?;
+        let file_data = LinearFile::load(&path)?;
 
         file_data.get_chunk(at)
     }
@@ -345,7 +345,7 @@ impl ChunkWriter for LinearChunkFormat {
         let mut file_data = if !path.is_file() {
             LinearFile::new()
         } else {
-            LinearFile::from_file(&path).map_err(|err| match err {
+            LinearFile::load(&path).map_err(|err| match err {
                 ChunkReadingError::IoError(err) => ChunkWritingError::IoError(err),
                 ChunkReadingError::InvalidHeader => {
                     ChunkWritingError::IoError(std::io::ErrorKind::InvalidData)
@@ -358,7 +358,7 @@ impl ChunkWriter for LinearChunkFormat {
             .put_chunk(chunk, at)
             .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
-        file_data.to_file(&path)?;
+        file_data.save(&path)?;
 
         Ok(())
     }
