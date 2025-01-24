@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub mod anvil;
+pub mod linear;
 
 pub const CHUNK_AREA: usize = 16 * 16;
 pub const SUBCHUNK_VOLUME: usize = CHUNK_AREA * 16;
@@ -72,6 +73,8 @@ pub enum CompressionError {
     GZipError(std::io::Error),
     #[error("Error while working with LZ4 compression: {0}")]
     LZ4Error(std::io::Error),
+    #[error("Error while working with zstd compression: {0}")]
+    ZstdError(std::io::Error),
 }
 
 pub struct ChunkData {
