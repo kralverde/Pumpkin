@@ -30,7 +30,7 @@ pub enum LinearVersion {
 struct LinearFileHeader {
     version: LinearVersion, // ( 0.. 1 Byte)
     newest_timestamp: u32,  // ( 1.. 5 Byte) newest chunk timestamp
-    compresion_level: u8,   // ( 5.. 6 Byte) compression level used with zlib
+    compression_level: u8,  // ( 5.. 6 Byte) compression level used with zlib
     chunks_count: u8,       // ( 6.. 7 Byte) number of non 0 size chunks
     chunks_bytes: u32, // ( 7..11 Byte) size of the Compressed Chunk Heades Bytes (fixed size) + Chunk Data Bytes (dynamic size)
     region_hash: u64,  // (11..19 Byte) hash of the region file (apparently not used)
@@ -68,7 +68,7 @@ impl LinearFileHeader {
         LinearFileHeader {
             version: bytes[0].into(),
             newest_timestamp: u32::from_be_bytes(bytes[1..5].try_into().unwrap()),
-            compresion_level: bytes[5],
+            compression_level: bytes[5],
             chunks_count: bytes[6],
             chunks_bytes: u32::from_be_bytes(bytes[7..11].try_into().unwrap()),
             region_hash: u64::from_be_bytes(bytes[11..19].try_into().unwrap()),
@@ -79,7 +79,7 @@ impl LinearFileHeader {
         let mut bytes = [0u8; LinearFileHeader::FILE_HEADER_SIZE];
         bytes[0] = self.version as u8;
         bytes[1..5].copy_from_slice(&self.newest_timestamp.to_be_bytes());
-        bytes[5] = self.compresion_level;
+        bytes[5] = self.compression_level;
         bytes[6] = self.chunks_count;
         bytes[7..11].copy_from_slice(&self.chunks_bytes.to_be_bytes());
         bytes[11..19].copy_from_slice(&self.region_hash.to_be_bytes());
@@ -94,7 +94,7 @@ impl LinearFile {
             header: LinearFileHeader {
                 version: LinearVersion::V1,
                 newest_timestamp: 0,
-                compresion_level: ADVANCED_CONFIG.chunk.compression.compression_level as u8,
+                compression_level: ADVANCED_CONFIG.chunk.compression.compression_level as u8,
                 chunks_count: 0,
                 chunks_bytes: 0,
                 region_hash: 0,
@@ -192,7 +192,7 @@ impl LinearFile {
 
         // Update the header
         self.header.chunks_bytes = compressed_buffer.len() as u32;
-        self.header.compresion_level = ADVANCED_CONFIG.chunk.compression.compression_level as u8;
+        self.header.compression_level = ADVANCED_CONFIG.chunk.compression.compression_level as u8;
 
         // Write/OverWrite the data to the file
         let mut file = OpenOptions::new()
@@ -317,7 +317,6 @@ impl ChunkReader for LinearChunkFormat {
         save_file: &LevelFolder,
         at: &pumpkin_util::math::vector2::Vector2<i32>,
     ) -> Result<ChunkData, ChunkReadingError> {
-
         let (region_x, region_z) = LinearChunkFormat::get_region_coords(at);
 
         let path = save_file
@@ -337,7 +336,6 @@ impl ChunkWriter for LinearChunkFormat {
         level_folder: &LevelFolder,
         at: &pumpkin_util::math::vector2::Vector2<i32>,
     ) -> Result<(), ChunkWritingError> {
-        
         let (region_x, region_z) = LinearChunkFormat::get_region_coords(at);
 
         let path = level_folder
