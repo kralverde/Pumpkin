@@ -152,7 +152,7 @@ impl LinearFile {
         // Parse the header
         let file_header = LinearFileHeader::from_bytes(&header_bytes);
         // Check the version
-        if file_header.is_valid_version() {
+        if !file_header.is_valid_version() {
             return Err(ChunkReadingError::InvalidHeader);
         }
 
