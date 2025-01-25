@@ -5,7 +5,6 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pumpkin_config::ADVANCED_CONFIG;
-use zstd::zstd_safe::OutBuffer;
 
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
 
