@@ -325,7 +325,7 @@ impl ChunkReader for LinearChunkFormat {
 
         let path = save_file
             .region_folder
-            .join(format!("./r.{}.{}.linear", region_x, region_z));
+            .join(format!("r.{}.{}.linear", region_x, region_z));
 
         let file_data = LinearFile::load(&path)?;
 
@@ -344,7 +344,7 @@ impl ChunkWriter for LinearChunkFormat {
 
         let path = level_folder
             .region_folder
-            .join(format!("./r.{}.{}.linear", region_x, region_z));
+            .join(format!("r.{}.{}.linear", region_x, region_z));
 
         let mut file_data = if !path.is_file() {
             LinearFile::new()
