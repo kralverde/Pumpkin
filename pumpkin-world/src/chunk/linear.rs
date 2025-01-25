@@ -1,7 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{IoSlice, Read, Seek, SeekFrom, Write};
 use std::mem::transmute;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
@@ -124,7 +124,7 @@ impl LinearFile {
 
         Ok(())
     }
-    fn load(path: &Path) -> Result<Self, ChunkReadingError> {
+    fn load(path: &PathBuf) -> Result<Self, ChunkReadingError> {
         let mut file =
             OpenOptions::new()
                 .read(true)
@@ -167,7 +167,7 @@ impl LinearFile {
         })
     }
 
-    fn save(&self, path: &Path) -> Result<(), ChunkWritingError> {
+    fn save(&self, path: &PathBuf) -> Result<(), ChunkWritingError> {
         // Parse the headers to a buffer
         let headers_buffer: [u8; CHUNK_HEADER_BYTES_SIZE] =
             unsafe { transmute(*self.chunks_headers) };
@@ -298,14 +298,13 @@ impl LinearChunkFormat {
     }
 
     const fn get_chunk_index(at: &pumpkin_util::math::vector2::Vector2<i32>) -> usize {
-        let (region_x, region_z) = Self::get_region_coords(at);
-
+        let (region_x, region_z) = LinearChunkFormat::get_region_coords(at);
         // we need only the 5 last bits of the x and z coordinates
-        let decode_x = (at.x ^ (region_x << 5)) as usize;
-        let decode_z = (at.z ^ (region_z << 5)) as usize;
+        let decode_x = at.x - (region_x * REGION_SIZE as i32);
+        let decode_z = at.z - (region_z * REGION_SIZE as i32);
 
         // we calculate the index of the chunk in the region file
-        decode_x + (decode_z * REGION_SIZE)
+        (decode_x + (decode_z * REGION_SIZE as i32)) as usize
     }
 }
 
