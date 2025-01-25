@@ -4,9 +4,8 @@ use std::mem::transmute;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pumpkin_config::ADVANCED_CONFIG;
-
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
+use pumpkin_config::ADVANCED_CONFIG;
 
 use super::anvil::AnvilChunkFormat;
 use super::{
@@ -18,6 +17,13 @@ const CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
 
 const SIGNATURE: [u8; 8] = (0xc3ff13183cca9d9a_u64).to_be_bytes(); // as described in https://gist.github.com/Aaron2550/5701519671253d4c6190bde6706f9f98
 const CHUNK_HEADER_BYTES_SIZE: usize = CHUNK_COUNT * size_of::<LinearChunkHeader>();
+
+#[derive(Default, Clone, Copy)]
+#[repr(C)]
+struct LinearChunkHeader {
+    size: u32,
+    timestamp: u32,
+}
 
 #[derive(Default, PartialEq, Eq, Clone, Copy)]
 pub enum LinearVersion {
@@ -36,15 +42,7 @@ struct LinearFileHeader {
     region_hash: u64,  // (11..19 Byte) hash of the region file (apparently not used)
 }
 
-#[derive(Default, Clone, Copy)]
-#[repr(C)]
-struct LinearChunkHeader {
-    size: u32,
-    timestamp: u32,
-}
-
 struct LinearFile {
-    header: LinearFileHeader,
     chunks_headers: [LinearChunkHeader; CHUNK_COUNT],
     chunks_data: Vec<u8>,
 }
@@ -98,14 +96,6 @@ impl LinearFileHeader {
 impl LinearFile {
     fn new() -> Self {
         LinearFile {
-            header: LinearFileHeader {
-                version: LinearVersion::V1,
-                newest_timestamp: 0,
-                compression_level: ADVANCED_CONFIG.chunk.compression.compression_level as u8,
-                chunks_count: 0,
-                chunks_bytes: 0,
-                region_hash: 0,
-            },
             chunks_headers: [LinearChunkHeader::default(); CHUNK_COUNT],
             chunks_data: vec![],
         }
@@ -142,12 +132,10 @@ impl LinearFile {
 
         Self::check_signature(&mut file)?;
 
-        //Skip the signature
+        // Skip the signature and read the header
+        let mut header_bytes = [0; LinearFileHeader::FILE_HEADER_SIZE];
         file.seek(SeekFrom::Start(8))
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
-
-        // We read the header
-        let mut header_bytes = [0; LinearFileHeader::FILE_HEADER_SIZE];
         file.read_exact(&mut header_bytes)
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
@@ -156,46 +144,58 @@ impl LinearFile {
         file_header.check_version()?;
 
         // Uncompress the data (header + chunks)
-        let mut decoded_data = zstd::decode_all(file.take(file_header.chunks_bytes as u64))
+        let mut chunk_data = zstd::decode_all(file.take(file_header.chunks_bytes as u64))
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
         // Parse the chunk headers
-        let headers_buffer: [u8; CHUNK_HEADER_BYTES_SIZE] = decoded_data
+        let headers_data: [u8; CHUNK_HEADER_BYTES_SIZE] = chunk_data
             .drain(..CHUNK_HEADER_BYTES_SIZE)
             .collect::<Vec<u8>>()
             .try_into()
-            .unwrap();
+            .map_err(|_| ChunkReadingError::InvalidHeader)?;
 
-        let headers: [LinearChunkHeader; CHUNK_COUNT] =
-            unsafe { std::mem::transmute(headers_buffer) };
+        let chunk_headers: [LinearChunkHeader; CHUNK_COUNT] =
+            unsafe { std::mem::transmute(headers_data) };
 
         Ok(LinearFile {
-            header: file_header,
-            chunks_headers: headers,
-            chunks_data: decoded_data,
+            chunks_headers: chunk_headers,
+            chunks_data: chunk_data,
         })
     }
 
-    fn save(&mut self, path: &Path) -> Result<(), ChunkWritingError> {
+    fn save(&self, path: &Path) -> Result<(), ChunkWritingError> {
         // Parse the headers to a buffer
         let headers_buffer: [u8; CHUNK_HEADER_BYTES_SIZE] =
             unsafe { transmute(self.chunks_headers) };
 
-        // Compose the data buffer (chunk_headers + chunks_data)
-        let mut data_buffer = vec![0; CHUNK_HEADER_BYTES_SIZE + self.chunks_data.len()];
-        data_buffer[..CHUNK_HEADER_BYTES_SIZE].copy_from_slice(&headers_buffer);
-        data_buffer[CHUNK_HEADER_BYTES_SIZE..].copy_from_slice(&self.chunks_data);
-
         // Compress the data buffer
         let compressed_buffer = zstd::encode_all(
-            data_buffer.as_slice(),
+            [headers_buffer.as_slice(), self.chunks_data.as_slice()]
+                .concat()
+                .as_slice(),
             ADVANCED_CONFIG.chunk.compression.compression_level as i32,
         )
         .map_err(|err| ChunkWritingError::Compression(CompressionError::ZstdError(err)))?;
 
         // Update the header
-        self.header.chunks_bytes = compressed_buffer.len() as u32;
-        self.header.compression_level = ADVANCED_CONFIG.chunk.compression.compression_level as u8;
+        let file_header = LinearFileHeader {
+            chunks_bytes: compressed_buffer.len() as u32,
+            compression_level: ADVANCED_CONFIG.chunk.compression.compression_level as u8,
+            chunks_count: self
+                .chunks_headers
+                .iter()
+                .filter(|&header| header.size != 0)
+                .count() as u8,
+            newest_timestamp: self
+                .chunks_headers
+                .iter()
+                .map(|header| header.timestamp)
+                .max()
+                .unwrap_or(0),
+            version: LinearVersion::V1,
+            region_hash: 0,
+        }
+        .to_bytes();
 
         // Write/OverWrite the data to the file
         let mut file = OpenOptions::new()
@@ -207,7 +207,7 @@ impl LinearFile {
 
         file.write_vectored(&[
             IoSlice::new(&SIGNATURE),
-            IoSlice::new(&self.header.to_bytes()),
+            IoSlice::new(&file_header),
             IoSlice::new(&compressed_buffer),
             IoSlice::new(&SIGNATURE),
         ])
@@ -225,6 +225,7 @@ impl LinearFile {
     ) -> Result<ChunkData, ChunkReadingError> {
         // We check if the chunk exists
         let chunk_index: usize = LinearChunkFormat::get_chunk_index(at);
+
         let last_chunk_size = self.chunks_headers[chunk_index].size as usize;
         if last_chunk_size == 0 {
             return Err(ChunkReadingError::ChunkNotExist);
@@ -252,22 +253,12 @@ impl LinearFile {
         let new_chunk_size = chunk_raw.len();
         let old_chunk_size = self.chunks_headers[chunk_index].size as usize;
 
-        // We update headers
-        match (old_chunk_size, new_chunk_size) {
-            (0, 0) => (),
-            (0, _) => self.header.chunks_count += 1,
-            (_, 0) => self.header.chunks_count -= 1,
-            _ => (),
-        }
-
-        self.header.newest_timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
-
         self.chunks_headers[chunk_index] = LinearChunkHeader {
             size: new_chunk_size as u32,
-            timestamp: self.header.newest_timestamp,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as u32,
         };
 
         // We calculate the start point of the chunk in the data buffer
@@ -353,9 +344,6 @@ impl ChunkWriter for LinearChunkFormat {
         } else {
             LinearFile::load(&path).map_err(|err| match err {
                 ChunkReadingError::IoError(err) => ChunkWritingError::IoError(err),
-                ChunkReadingError::InvalidHeader => {
-                    ChunkWritingError::IoError(std::io::ErrorKind::InvalidData)
-                }
                 _ => ChunkWritingError::IoError(std::io::ErrorKind::Other),
             })?
         };
@@ -376,11 +364,10 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use crate::chunk::linear::LinearChunkFormat;
     use crate::chunk::ChunkWriter;
     use crate::generation::{get_world_gen, Seed};
     use crate::{
-        chunk::{ChunkReader, ChunkReadingError},
+        chunk::{linear::LinearChunkFormat, ChunkReader, ChunkReadingError},
         level::LevelFolder,
     };
 
