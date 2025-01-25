@@ -43,7 +43,7 @@ struct LinearFileHeader {
 }
 
 struct LinearFile {
-    chunks_headers: [LinearChunkHeader; CHUNK_COUNT],
+    chunks_headers: Box<[LinearChunkHeader; CHUNK_COUNT]>,
     chunks_data: Vec<u8>,
 }
 
@@ -96,7 +96,7 @@ impl LinearFileHeader {
 impl LinearFile {
     fn new() -> Self {
         LinearFile {
-            chunks_headers: [LinearChunkHeader::default(); CHUNK_COUNT],
+            chunks_headers: Box::new([LinearChunkHeader::default(); CHUNK_COUNT]),
             chunks_data: vec![],
         }
     }
@@ -125,10 +125,14 @@ impl LinearFile {
         Ok(())
     }
     fn load(path: &Path) -> Result<Self, ChunkReadingError> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+        let mut file =
+            OpenOptions::new()
+                .read(true)
+                .open(path)
+                .map_err(|err| match err.kind() {
+                    std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                    kind => ChunkReadingError::IoError(kind),
+                })?;
 
         Self::check_signature(&mut file)?;
 
@@ -158,7 +162,7 @@ impl LinearFile {
             unsafe { std::mem::transmute(headers_data) };
 
         Ok(LinearFile {
-            chunks_headers: chunk_headers,
+            chunks_headers: Box::new(chunk_headers),
             chunks_data: chunk_data,
         })
     }
@@ -166,7 +170,7 @@ impl LinearFile {
     fn save(&self, path: &Path) -> Result<(), ChunkWritingError> {
         // Parse the headers to a buffer
         let headers_buffer: [u8; CHUNK_HEADER_BYTES_SIZE] =
-            unsafe { transmute(self.chunks_headers) };
+            unsafe { transmute(*self.chunks_headers) };
 
         // Compress the data buffer
         let compressed_buffer = zstd::encode_all(
@@ -226,8 +230,8 @@ impl LinearFile {
         // We check if the chunk exists
         let chunk_index: usize = LinearChunkFormat::get_chunk_index(at);
 
-        let last_chunk_size = self.chunks_headers[chunk_index].size as usize;
-        if last_chunk_size == 0 {
+        let chunk_size = self.chunks_headers[chunk_index].size as usize;
+        if chunk_size == 0 {
             return Err(ChunkReadingError::ChunkNotExist);
         }
 
@@ -237,7 +241,7 @@ impl LinearFile {
             bytes += self.chunks_headers[i].size as usize;
         }
 
-        ChunkData::from_bytes(&self.chunks_data[bytes..bytes + last_chunk_size], *at)
+        ChunkData::from_bytes(&self.chunks_data[bytes..bytes + chunk_size], *at)
             .map_err(ChunkReadingError::ParsingError)
     }
 
@@ -317,9 +321,6 @@ impl ChunkReader for LinearChunkFormat {
             .region_folder
             .join(format!("r.{}.{}.linear", region_x, region_z));
 
-        if !path.is_file() {
-            return Err(ChunkReadingError::ChunkNotExist);
-        }
         let file_data = LinearFile::load(&path)?;
 
         file_data.get_chunk(at)
@@ -337,15 +338,13 @@ impl ChunkWriter for LinearChunkFormat {
 
         let path = level_folder
             .region_folder
-            .join(format!("r.{}.{}.linear", region_x, region_z));
+            .join(format!("./r.{}.{}.linear", region_x, region_z));
 
-        let mut file_data = if !path.is_file() {
-            LinearFile::new()
-        } else {
-            LinearFile::load(&path).map_err(|err| match err {
-                ChunkReadingError::IoError(err) => ChunkWritingError::IoError(err),
-                _ => ChunkWritingError::IoError(std::io::ErrorKind::Other),
-            })?
+        let mut file_data = match LinearFile::load(&path) {
+            Ok(file_data) => file_data,
+            Err(ChunkReadingError::ChunkNotExist) => LinearFile::new(),
+            Err(ChunkReadingError::IoError(err)) => return Err(ChunkWritingError::IoError(err)),
+            Err(_) => return Err(ChunkWritingError::IoError(std::io::ErrorKind::Other)),
         };
 
         file_data
