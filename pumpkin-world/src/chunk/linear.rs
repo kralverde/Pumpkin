@@ -135,13 +135,10 @@ impl LinearFile {
         Ok(())
     }
     fn load(path: &Path) -> Result<Self, ChunkReadingError> {
-        let mut file =
-            OpenOptions::new()
-                .read(true)
-                .open(path)
-                .map_err(|err| match err.kind() {
-                    kind => ChunkReadingError::IoError(kind),
-                })?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
         Self::check_signature(&mut file)?;
 
