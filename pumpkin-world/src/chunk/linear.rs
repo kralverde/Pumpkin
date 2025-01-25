@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pumpkin_config::ADVANCED_CONFIG;
+use zstd::zstd_safe::OutBuffer;
 
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
 
@@ -65,8 +66,11 @@ impl From<u8> for LinearVersion {
 impl LinearFileHeader {
     const FILE_HEADER_SIZE: usize = 19;
 
-    fn is_valid_version(&self) -> bool {
-        self.version != LinearVersion::None
+    fn check_version(&self) -> Result<(), ChunkReadingError> {
+        match self.version {
+            LinearVersion::None => Err(ChunkReadingError::InvalidHeader),
+            _ => Ok(()),
+        }
     }
     fn from_bytes(bytes: &[u8; Self::FILE_HEADER_SIZE]) -> Self {
         LinearFileHeader {
@@ -107,24 +111,29 @@ impl LinearFile {
             chunks_data: vec![],
         }
     }
-    fn has_valid_signature(file: &mut File) -> bool {
+    fn check_signature(file: &mut File) -> Result<(), ChunkReadingError> {
         let mut signature = [0; 8];
 
-        file.seek(SeekFrom::Start(0)).unwrap(); //seek to the start of the file
-        file.read_exact(&mut signature).unwrap();
+        file.seek(SeekFrom::Start(0))
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?; //seek to the start of the file
+        file.read_exact(&mut signature)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
         if signature != SIGNATURE {
-            return false;
+            return Err(ChunkReadingError::InvalidHeader);
         }
 
-        file.seek(SeekFrom::End(-8)).unwrap(); //seek to the end of the file
-        file.read_exact(&mut signature).unwrap();
+        file.seek(SeekFrom::End(-8))
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?; //seek to the end of the file
+        file.read_exact(&mut signature)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
         if signature != SIGNATURE {
-            return false;
+            return Err(ChunkReadingError::InvalidHeader);
         }
 
-        file.rewind().unwrap(); //seek to the start of the file
+        file.rewind()
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?; //rewind the file
 
-        true
+        Ok(())
     }
     fn load(path: &Path) -> Result<Self, ChunkReadingError> {
         let mut file =
@@ -132,13 +141,10 @@ impl LinearFile {
                 .read(true)
                 .open(path)
                 .map_err(|err| match err.kind() {
-                    std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
                     kind => ChunkReadingError::IoError(kind),
                 })?;
 
-        if !Self::has_valid_signature(&mut file) {
-            return Err(ChunkReadingError::InvalidHeader);
-        }
+        Self::check_signature(&mut file)?;
 
         //Skip the signature
         file.seek(SeekFrom::Start(8))
@@ -151,10 +157,7 @@ impl LinearFile {
 
         // Parse the header
         let file_header = LinearFileHeader::from_bytes(&header_bytes);
-        // Check the version
-        if !file_header.is_valid_version() {
-            return Err(ChunkReadingError::InvalidHeader);
-        }
+        file_header.check_version()?;
 
         // Uncompress the data (header + chunks)
         let mut decoded_data = zstd::decode_all(file.take(file_header.chunks_bytes as u64))
@@ -223,22 +226,19 @@ impl LinearFile {
     ) -> Result<ChunkData, ChunkReadingError> {
         // We check if the chunk exists
         let chunk_index: usize = LinearChunkFormat::get_chunk_index(at);
-        let last_chunk_size = self.chunks_headers[chunk_index].size;
+        let last_chunk_size = self.chunks_headers[chunk_index].size as usize;
         if last_chunk_size == 0 {
             return Err(ChunkReadingError::ChunkNotExist);
         }
 
         // We iterate over the headers to sum the size of the chunks until the desired one
-        let mut bytes: u32 = 0;
+        let mut bytes: usize = 0;
         for i in 0..chunk_index {
-            bytes += self.chunks_headers[i].size;
+            bytes += self.chunks_headers[i].size as usize;
         }
 
-        ChunkData::from_bytes(
-            &self.chunks_data[bytes as usize..(bytes + last_chunk_size) as usize],
-            *at,
-        )
-        .map_err(ChunkReadingError::ParsingError)
+        ChunkData::from_bytes(&self.chunks_data[bytes..bytes + last_chunk_size], *at)
+            .map_err(ChunkReadingError::ParsingError)
     }
 
     fn put_chunk(
@@ -327,6 +327,9 @@ impl ChunkReader for LinearChunkFormat {
             .region_folder
             .join(format!("r.{}.{}.linear", region_x, region_z));
 
+        if !path.is_file() {
+            return Err(ChunkReadingError::ChunkNotExist);
+        }
         let file_data = LinearFile::load(&path)?;
 
         file_data.get_chunk(at)
