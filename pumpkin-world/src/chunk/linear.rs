@@ -64,6 +64,10 @@ impl From<u8> for LinearVersion {
 
 impl LinearFileHeader {
     const FILE_HEADER_SIZE: usize = 19;
+
+    fn is_valid_version(&self) -> bool {
+        self.version != LinearVersion::None
+    }
     fn from_bytes(bytes: &[u8; Self::FILE_HEADER_SIZE]) -> Self {
         LinearFileHeader {
             version: bytes[0].into(),
@@ -103,7 +107,7 @@ impl LinearFile {
             chunks_data: vec![],
         }
     }
-    fn is_valid_file(file: &mut File) -> bool {
+    fn has_valid_signature(file: &mut File) -> bool {
         let mut signature = [0; 8];
 
         file.seek(SeekFrom::Start(0)).unwrap(); //seek to the start of the file
@@ -132,7 +136,7 @@ impl LinearFile {
                     kind => ChunkReadingError::IoError(kind),
                 })?;
 
-        if !Self::is_valid_file(&mut file) {
+        if !Self::has_valid_signature(&mut file) {
             return Err(ChunkReadingError::InvalidHeader);
         }
 
@@ -148,7 +152,7 @@ impl LinearFile {
         // Parse the header
         let file_header = LinearFileHeader::from_bytes(&header_bytes);
         // Check the version
-        if file_header.version == LinearVersion::None {
+        if file_header.is_valid_version() {
             return Err(ChunkReadingError::InvalidHeader);
         }
 
