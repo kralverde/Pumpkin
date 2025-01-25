@@ -217,6 +217,9 @@ impl LinearFile {
         ])
         .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
+        file.flush()
+            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+
         Ok(())
     }
 
