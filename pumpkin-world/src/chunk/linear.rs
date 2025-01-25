@@ -1,7 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{IoSlice, Read, Seek, SeekFrom, Write};
 use std::mem::transmute;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
@@ -124,7 +124,7 @@ impl LinearFile {
 
         Ok(())
     }
-    fn load(path: &PathBuf) -> Result<Self, ChunkReadingError> {
+    fn load(path: &Path) -> Result<Self, ChunkReadingError> {
         let mut file =
             OpenOptions::new()
                 .read(true)
@@ -167,7 +167,7 @@ impl LinearFile {
         })
     }
 
-    fn save(&self, path: &PathBuf) -> Result<(), ChunkWritingError> {
+    fn save(&self, path: &Path) -> Result<(), ChunkWritingError> {
         // Parse the headers to a buffer
         let headers_buffer: [u8; CHUNK_HEADER_BYTES_SIZE] =
             unsafe { transmute(*self.chunks_headers) };
@@ -205,7 +205,7 @@ impl LinearFile {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
-            .truncate(true)
+            .truncate(false)
             .open(path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
@@ -216,6 +216,8 @@ impl LinearFile {
             IoSlice::new(&SIGNATURE),
         ])
         .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+        file.set_len(((SIGNATURE.len() * 2) + file_header.len() + compressed_buffer.len()) as u64)
+            .map_err(|err| ChunkWritingError::IoError(err.kind()))?; //truncate the file
 
         file.flush()
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
