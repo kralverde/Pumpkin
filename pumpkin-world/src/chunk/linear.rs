@@ -203,7 +203,7 @@ impl LinearFile {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
-            .truncate(false)
+            .truncate(true)
             .open(path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
@@ -214,8 +214,6 @@ impl LinearFile {
             IoSlice::new(&SIGNATURE),
         ])
         .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-        file.set_len(((SIGNATURE.len() * 2) + file_header.len() + compressed_buffer.len()) as u64)
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?; //truncate the file
 
         file.flush()
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
@@ -278,10 +276,12 @@ impl LinearFile {
         if new_chunk_size > old_chunk_size {
             self.chunks_data.resize(new_total_size, 0);
         }
+
         self.chunks_data.copy_within(
             bytes + old_chunk_size..old_total_size,
             bytes + new_chunk_size,
         );
+
         self.chunks_data[bytes..bytes + new_chunk_size].copy_from_slice(&chunk_raw);
 
         if new_chunk_size < old_chunk_size {
@@ -350,9 +350,7 @@ impl ChunkWriter for LinearChunkFormat {
             .put_chunk(chunk, at)
             .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
-        file_data.save(&path)?;
-
-        Ok(())
+        file_data.save(&path)
     }
 }
 
