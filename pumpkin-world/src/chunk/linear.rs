@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{IoSlice, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::transmute;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -100,7 +100,7 @@ impl LinearFile {
     }
     fn check_signature(file: &mut File) -> Result<(), ChunkReadingError> {
         let mut signature = [0; 8];
-
+        
         file.seek(SeekFrom::Start(0))
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?; //seek to the start of the file
         file.read_exact(&mut signature)
@@ -207,17 +207,20 @@ impl LinearFile {
             .open(path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
-        file.write_vectored(&[
-            IoSlice::new(&SIGNATURE),
-            IoSlice::new(&file_header),
-            IoSlice::new(&compressed_buffer),
-            IoSlice::new(&SIGNATURE),
-        ])
+        file.write_all(
+            [
+                SIGNATURE.as_slice(),
+                file_header.as_slice(),
+                compressed_buffer.as_slice(),
+                SIGNATURE.as_slice(),
+            ]
+            .concat()
+            .as_slice(),
+        )
         .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
         file.flush()
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-
         Ok(())
     }
 
@@ -318,7 +321,7 @@ impl ChunkReader for LinearChunkFormat {
 
         let path = save_file
             .region_folder
-            .join(format!("r.{}.{}.linear", region_x, region_z));
+            .join(format!("./r.{}.{}.linear", region_x, region_z));
 
         let file_data = LinearFile::load(&path)?;
 
