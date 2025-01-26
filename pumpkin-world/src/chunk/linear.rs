@@ -100,7 +100,7 @@ impl LinearFile {
     }
     fn check_signature(file: &mut File) -> Result<(), ChunkReadingError> {
         let mut signature = [0; 8];
-        
+
         file.seek(SeekFrom::Start(0))
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?; //seek to the start of the file
         file.read_exact(&mut signature)
