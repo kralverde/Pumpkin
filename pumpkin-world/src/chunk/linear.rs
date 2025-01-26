@@ -32,16 +32,14 @@ pub enum LinearVersion {
     V1 = 0x01, //used by linear.py in xymb-endcrystalme/LinearRegionFileFormatTools
     V2 = 0x02, //Requires investigation about this value/version
 }
-
 struct LinearFileHeader {
     version: LinearVersion, // ( 0.. 1 Byte)
-    newest_timestamp: u32,  // ( 1.. 5 Byte) newest chunk timestamp
-    compression_level: u8,  // ( 5.. 6 Byte) compression level used with zlib
-    chunks_count: u8,       // ( 6.. 7 Byte) number of non 0 size chunks
-    chunks_bytes: u32, // ( 7..11 Byte) size of the Compressed Chunk Heades Bytes (fixed size) + Chunk Data Bytes (dynamic size)
-    region_hash: u64,  // (11..19 Byte) hash of the region file (apparently not used)
+    newest_timestamp: u64,  // ( 1.. 9 Byte) newest chunk timestamp
+    compression_level: u8,  // ( 9.. 10 Byte) compression level used with zlib
+    chunks_count: u16,      // ( 10.. 12 Byte) number of non 0 size chunks
+    chunks_bytes: u32, // ( 12..16 Byte) size of the Compressed Chunk Heades Bytes (fixed size) + Chunk Data Bytes (dynamic size)
+    region_hash: u64,  // (16..24 Byte) hash of the region file (apparently not used)
 }
-
 struct LinearFile {
     chunks_headers: Box<[LinearChunkHeader; CHUNK_COUNT]>,
     chunks_data: Vec<u8>,
@@ -61,7 +59,7 @@ impl From<u8> for LinearVersion {
 }
 
 impl LinearFileHeader {
-    const FILE_HEADER_SIZE: usize = 19;
+    const FILE_HEADER_SIZE: usize = 24;
 
     fn check_version(&self) -> Result<(), ChunkReadingError> {
         match self.version {
@@ -72,22 +70,22 @@ impl LinearFileHeader {
     fn from_bytes(bytes: &[u8; Self::FILE_HEADER_SIZE]) -> Self {
         LinearFileHeader {
             version: bytes[0].into(),
-            newest_timestamp: u32::from_be_bytes(bytes[1..5].try_into().unwrap()),
-            compression_level: bytes[5],
-            chunks_count: bytes[6],
-            chunks_bytes: u32::from_be_bytes(bytes[7..11].try_into().unwrap()),
-            region_hash: u64::from_be_bytes(bytes[11..19].try_into().unwrap()),
+            newest_timestamp: u64::from_be_bytes(bytes[1..9].try_into().unwrap()),
+            compression_level: bytes[9],
+            chunks_count: u16::from_be_bytes(bytes[10..12].try_into().unwrap()),
+            chunks_bytes: u32::from_be_bytes(bytes[12..16].try_into().unwrap()),
+            region_hash: u64::from_be_bytes(bytes[16..24].try_into().unwrap()),
         }
     }
 
     fn to_bytes(&self) -> [u8; Self::FILE_HEADER_SIZE] {
         let mut bytes = [0u8; LinearFileHeader::FILE_HEADER_SIZE];
         bytes[0] = self.version as u8;
-        bytes[1..5].copy_from_slice(&self.newest_timestamp.to_be_bytes());
-        bytes[5] = self.compression_level;
-        bytes[6] = self.chunks_count;
-        bytes[7..11].copy_from_slice(&self.chunks_bytes.to_be_bytes());
-        bytes[11..19].copy_from_slice(&self.region_hash.to_be_bytes());
+        bytes[1..9].copy_from_slice(&self.newest_timestamp.to_be_bytes());
+        bytes[9] = self.compression_level;
+        bytes[10..12].copy_from_slice(&self.chunks_count.to_be_bytes());
+        bytes[12..16].copy_from_slice(&self.chunks_bytes.to_be_bytes());
+        bytes[16..24].copy_from_slice(&self.region_hash.to_be_bytes());
 
         bytes
     }
@@ -189,13 +187,13 @@ impl LinearFile {
                 .chunks_headers
                 .iter()
                 .filter(|&header| header.size != 0)
-                .count() as u8,
+                .count() as u16,
             newest_timestamp: self
                 .chunks_headers
                 .iter()
                 .map(|header| header.timestamp)
                 .max()
-                .unwrap_or(0),
+                .unwrap_or(0) as u64,
             version: LinearVersion::V1,
             region_hash: 0,
         }
