@@ -12,10 +12,20 @@ use super::{
     ChunkData, ChunkReader, ChunkReadingError, ChunkSerializingError, ChunkWriter, CompressionError,
 };
 
-const REGION_SIZE: usize = 32; // 32x32 chunks
+///The side size of a region in chunks (one region is 32x32 chunks)
+const REGION_SIZE: usize = 32;
+
+///The number of bits that identify two chunks in the same region
+const SUBREGION_BITS: u8 = pumpkin_util::math::ceil_log2(REGION_SIZE as u32);
+
+///The number of chunks in a region
 const CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
 
-const SIGNATURE: [u8; 8] = (0xc3ff13183cca9d9a_u64).to_be_bytes(); // as described in https://gist.github.com/Aaron2550/5701519671253d4c6190bde6706f9f98
+/// The signature of the linear file format
+/// used as a header and footer described in https://gist.github.com/Aaron2550/5701519671253d4c6190bde6706f9f98
+const SIGNATURE: [u8; 8] = (0xc3ff13183cca9d9a_u64).to_be_bytes();
+
+/// The size of the ChunkHeaders table in bytes
 const CHUNK_HEADER_BYTES_SIZE: usize = CHUNK_COUNT * size_of::<LinearChunkHeader>();
 
 #[derive(Default, Clone, Copy)]
@@ -28,17 +38,26 @@ struct LinearChunkHeader {
 #[derive(Default, PartialEq, Eq, Clone, Copy)]
 pub enum LinearVersion {
     #[default]
-    None = 0x00, // used for defaults and invalid values
-    V1 = 0x01, //used by linear.py in xymb-endcrystalme/LinearRegionFileFormatTools
-    V2 = 0x02, //Requires investigation about this value/version
+    ///Used for defaults and invalid values
+    None = 0x00,
+    ///used by linear.py in xymb-endcrystalme/LinearRegionFileFormatTools
+    V1 = 0x01,
+    ///Requires investigation about this value/version
+    V2 = 0x02,
 }
 struct LinearFileHeader {
-    version: LinearVersion, // ( 0.. 1 Byte)
-    newest_timestamp: u64,  // ( 1.. 9 Byte) newest chunk timestamp
-    compression_level: u8,  // ( 9.. 10 Byte) compression level used with zlib
-    chunks_count: u16,      // ( 10.. 12 Byte) number of non 0 size chunks
-    chunks_bytes: u32, // ( 12..16 Byte) size of the Compressed Chunk Heades Bytes (fixed size) + Chunk Data Bytes (dynamic size)
-    region_hash: u64,  // (16..24 Byte) hash of the region file (apparently not used)
+    /// ( 0.. 1 Bytes) The Version of the file format
+    version: LinearVersion,
+    /// ( 1.. 9 Bytes) The newest chunk timestamp
+    newest_timestamp: u64,
+    /// ( 9..10 Bytes) The zstd compression level used
+    compression_level: u8,
+    /// (10..12 Bytes) The count of non 0 size chunks
+    chunks_count: u16,
+    /// (12..16 Bytes) size of the Compressed Chunk Heades Bytes (fixed size) + Chunk Data Bytes (dynamic size)
+    chunks_bytes: u32,
+    /// (16..24 Bytes) hash of the region file (apparently not used)
+    region_hash: u64,
 }
 struct LinearFile {
     chunks_headers: Box<[LinearChunkHeader; CHUNK_COUNT]>,
@@ -145,8 +164,17 @@ impl LinearFile {
         let file_header = LinearFileHeader::from_bytes(&header_bytes);
         file_header.check_version()?;
 
+        // Read the compressed data
+        let mut compressed_data = vec![0; file_header.chunks_bytes as usize];
+        file.read_exact(&mut compressed_data)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+
+        if compressed_data.len() != file_header.chunks_bytes as usize {
+            return Err(ChunkReadingError::InvalidHeader);
+        }
+
         // Uncompress the data (header + chunks)
-        let mut chunk_data = zstd::decode_all(file.take(file_header.chunks_bytes as u64))
+        let mut chunk_data = zstd::decode_all(compressed_data.as_slice())
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
         // Parse the chunk headers
@@ -158,6 +186,12 @@ impl LinearFile {
 
         let chunk_headers: [LinearChunkHeader; CHUNK_COUNT] =
             unsafe { std::mem::transmute(headers_data) };
+
+        // Check if the total bytes of the chunks match the header
+        let total_bytes = chunk_headers.iter().map(|header| header.size).sum::<u32>() as usize;
+        if total_bytes != chunk_data.len() {
+            return Err(ChunkReadingError::InvalidHeader);
+        }
 
         Ok(LinearFile {
             chunks_headers: Box::new(chunk_headers),
@@ -237,12 +271,12 @@ impl LinearFile {
         }
 
         // We iterate over the headers to sum the size of the chunks until the desired one
-        let mut bytes: usize = 0;
+        let mut offset: usize = 0;
         for i in 0..chunk_index {
-            bytes += self.chunks_headers[i].size as usize;
+            offset += self.chunks_headers[i].size as usize;
         }
 
-        ChunkData::from_bytes(&self.chunks_data[bytes..bytes + chunk_size], *at)
+        ChunkData::from_bytes(&self.chunks_data[offset..offset + chunk_size], *at)
             .map_err(ChunkReadingError::ParsingError)
     }
 
@@ -267,9 +301,9 @@ impl LinearFile {
         };
 
         // We calculate the start point of the chunk in the data buffer
-        let mut bytes: usize = 0;
+        let mut offset: usize = 0;
         for i in 0..chunk_index {
-            bytes += self.chunks_headers[i].size as usize;
+            offset += self.chunks_headers[i].size as usize;
         }
 
         let old_total_size = self.chunks_data.len();
@@ -281,11 +315,11 @@ impl LinearFile {
         }
 
         self.chunks_data.copy_within(
-            bytes + old_chunk_size..old_total_size,
-            bytes + new_chunk_size,
+            offset + old_chunk_size..old_total_size,
+            offset + new_chunk_size,
         );
 
-        self.chunks_data[bytes..bytes + new_chunk_size].copy_from_slice(&chunk_raw);
+        self.chunks_data[offset..offset + new_chunk_size].copy_from_slice(&chunk_raw);
 
         if new_chunk_size < old_chunk_size {
             self.chunks_data.truncate(new_total_size);
@@ -297,17 +331,16 @@ impl LinearFile {
 
 impl LinearChunkFormat {
     const fn get_region_coords(at: &pumpkin_util::math::vector2::Vector2<i32>) -> (i32, i32) {
-        (at.x >> 5, at.z >> 5) // Divide by 32 for the region coordinates
+        (at.x >> SUBREGION_BITS, at.z >> SUBREGION_BITS) // Divide by 32 for the region coordinates
     }
 
     const fn get_chunk_index(at: &pumpkin_util::math::vector2::Vector2<i32>) -> usize {
-        let (region_x, region_z) = LinearChunkFormat::get_region_coords(at);
         // we need only the 5 last bits of the x and z coordinates
-        let decode_x = at.x - (region_x * REGION_SIZE as i32);
-        let decode_z = at.z - (region_z * REGION_SIZE as i32);
+        let decode_x = at.x - ((at.x >> SUBREGION_BITS) << SUBREGION_BITS);
+        let decode_z = at.z - ((at.z >> SUBREGION_BITS) << SUBREGION_BITS);
 
         // we calculate the index of the chunk in the region file
-        (decode_x + (decode_z * REGION_SIZE as i32)) as usize
+        ((decode_z << SUBREGION_BITS) + decode_x) as usize
     }
 }
 
