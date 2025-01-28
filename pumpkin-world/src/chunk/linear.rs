@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
+use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 
 use super::anvil::AnvilChunkFormat;
@@ -82,7 +83,10 @@ impl LinearFileHeader {
 
     fn check_version(&self) -> Result<(), ChunkReadingError> {
         match self.version {
-            LinearVersion::None => Err(ChunkReadingError::InvalidHeader),
+            LinearVersion::None => {
+                error!("Invalid version in the file header");
+                Err(ChunkReadingError::InvalidHeader)
+            }
             _ => Ok(()),
         }
     }
@@ -125,6 +129,7 @@ impl LinearFile {
         file.read_exact(&mut signature)
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
         if signature != SIGNATURE {
+            error!("Signature at the start of the file is invalid");
             return Err(ChunkReadingError::InvalidHeader);
         }
 
@@ -133,6 +138,7 @@ impl LinearFile {
         file.read_exact(&mut signature)
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
         if signature != SIGNATURE {
+            error!("Signature at the end of the file is invalid");
             return Err(ChunkReadingError::InvalidHeader);
         }
 
@@ -170,6 +176,11 @@ impl LinearFile {
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
         if compressed_data.len() != file_header.chunks_bytes as usize {
+            error!(
+                "Invalid compressed data size {} != {}",
+                compressed_data.len(),
+                file_header.chunks_bytes
+            );
             return Err(ChunkReadingError::InvalidHeader);
         }
 
@@ -190,6 +201,11 @@ impl LinearFile {
         // Check if the total bytes of the chunks match the header
         let total_bytes = chunk_headers.iter().map(|header| header.size).sum::<u32>() as usize;
         if total_bytes != chunk_data.len() {
+            error!(
+                "Invalid total bytes of the chunks {} != {}",
+                total_bytes,
+                chunk_data.len()
+            );
             return Err(ChunkReadingError::InvalidHeader);
         }
 
@@ -234,11 +250,19 @@ impl LinearFile {
         .to_bytes();
 
         // Write/OverWrite the data to the file
+        let tmp_path = format!(
+            "{}.{}.tmp",
+            path.as_os_str().to_str().unwrap(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_micros(),
+        );
+
         let mut file = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
+            .create_new(true)
+            .open(&tmp_path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
         file.write_all(
@@ -253,8 +277,7 @@ impl LinearFile {
         )
         .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
-        file.flush()
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+        std::fs::rename(tmp_path, path).map_err(|err| ChunkWritingError::IoError(err.kind()))?;
         Ok(())
     }
 
@@ -378,7 +401,10 @@ impl ChunkWriter for LinearChunkFormat {
         let mut file_data = match LinearFile::load(&path) {
             Ok(file_data) => file_data,
             Err(ChunkReadingError::ChunkNotExist) => LinearFile::new(),
-            Err(ChunkReadingError::IoError(err)) => return Err(ChunkWritingError::IoError(err)),
+            Err(ChunkReadingError::IoError(err)) => {
+                error!("Error reading the data before write: {}", err);
+                return Err(ChunkWritingError::IoError(err));
+            }
             Err(_) => return Err(ChunkWritingError::IoError(std::io::ErrorKind::Other)),
         };
 
