@@ -10,7 +10,8 @@ use pumpkin_config::ADVANCED_CONFIG;
 
 use super::anvil::AnvilChunkFormat;
 use super::{
-    ChunkData, ChunkReader, ChunkReadingError, ChunkSerializingError, ChunkWriter, CompressionError,
+    ChunkData, ChunkReader, ChunkReadingError, ChunkSerializingError, ChunkWriter,
+    CompressionError, FileLocksManager,
 };
 
 ///The side size of a region in chunks (one region is 32x32 chunks)
@@ -250,19 +251,12 @@ impl LinearFile {
         .to_bytes();
 
         // Write/OverWrite the data to the file
-        let tmp_path = format!(
-            "{}.{}.tmp",
-            path.as_os_str().to_str().unwrap(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_micros(),
-        );
 
         let mut file = OpenOptions::new()
             .write(true)
-            .create_new(true)
-            .open(&tmp_path)
+            .create(true)
+            .truncate(true)
+            .open(path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
         file.write_all(
@@ -276,8 +270,6 @@ impl LinearFile {
             .as_slice(),
         )
         .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-
-        std::fs::rename(tmp_path, path).map_err(|err| ChunkWritingError::IoError(err.kind()))?;
         Ok(())
     }
 
@@ -379,9 +371,12 @@ impl ChunkReader for LinearChunkFormat {
             .region_folder
             .join(format!("./r.{}.{}.linear", region_x, region_z));
 
-        let file_data = LinearFile::load(&path)?;
-
-        file_data.get_chunk(at)
+        tokio::task::block_in_place(|| {
+            let file_lock = FileLocksManager::get_file_lock(&path);
+            let _reader_lock = file_lock.blocking_read();
+            dbg!("Reading chunk at {:?}", at);
+            LinearFile::load(&path)?.get_chunk(at)
+        })
     }
 }
 
@@ -398,21 +393,27 @@ impl ChunkWriter for LinearChunkFormat {
             .region_folder
             .join(format!("./r.{}.{}.linear", region_x, region_z));
 
-        let mut file_data = match LinearFile::load(&path) {
-            Ok(file_data) => file_data,
-            Err(ChunkReadingError::ChunkNotExist) => LinearFile::new(),
-            Err(ChunkReadingError::IoError(err)) => {
-                error!("Error reading the data before write: {}", err);
-                return Err(ChunkWritingError::IoError(err));
-            }
-            Err(_) => return Err(ChunkWritingError::IoError(std::io::ErrorKind::Other)),
-        };
+        tokio::task::block_in_place(|| {
+            let file_lock = FileLocksManager::get_file_lock(&path);
+            let _writer_lock = file_lock.blocking_write();
+            dbg!("Writing chunk at {:?}", at);
 
-        file_data
-            .put_chunk(chunk, at)
-            .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
+            let mut file_data = match LinearFile::load(&path) {
+                Ok(file_data) => file_data,
+                Err(ChunkReadingError::ChunkNotExist) => LinearFile::new(),
+                Err(ChunkReadingError::IoError(err)) => {
+                    error!("Error reading the data before write: {}", err);
+                    return Err(ChunkWritingError::IoError(err));
+                }
+                Err(_) => return Err(ChunkWritingError::IoError(std::io::ErrorKind::Other)),
+            };
 
-        file_data.save(&path)
+            file_data
+                .put_chunk(chunk, at)
+                .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
+
+            file_data.save(&path)
+        })
     }
 }
 
