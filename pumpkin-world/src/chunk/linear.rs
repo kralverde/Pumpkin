@@ -1,6 +1,5 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::mem::transmute;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,7 +30,6 @@ const SIGNATURE: [u8; 8] = (0xc3ff13183cca9d9a_u64).to_be_bytes();
 const CHUNK_HEADER_BYTES_SIZE: usize = CHUNK_COUNT * size_of::<LinearChunkHeader>();
 
 #[derive(Default, Clone, Copy)]
-#[repr(C)]
 struct LinearChunkHeader {
     size: u32,
     timestamp: u32,
@@ -69,6 +67,24 @@ struct LinearFile {
 #[derive(Clone, Default)]
 pub struct LinearChunkFormat;
 
+impl LinearChunkHeader {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let (size_bytes, timestamp_bytes) = bytes.split_at(4);
+        LinearChunkHeader {
+            size: u32::from_be_bytes(size_bytes.try_into().unwrap()),
+            timestamp: u32::from_be_bytes(timestamp_bytes.try_into().unwrap()),
+        }
+    }
+
+    fn to_bytes(self) -> [u8; 8] {
+        let mut bytes = [0u8; 8];
+        bytes[0..4].copy_from_slice(&self.size.to_be_bytes());
+        bytes[4..8].copy_from_slice(&self.timestamp.to_be_bytes());
+
+        bytes
+    }
+}
+
 impl From<u8> for LinearVersion {
     fn from(value: u8) -> Self {
         match value {
@@ -88,10 +104,14 @@ impl LinearFileHeader {
                 error!("Invalid version in the file header");
                 Err(ChunkReadingError::InvalidHeader)
             }
+            LinearVersion::V2 => {
+                error!("LinearFormat Version 2 for Chunks is not supported yet");
+                Err(ChunkReadingError::InvalidHeader)
+            }
             _ => Ok(()),
         }
     }
-    fn from_bytes(bytes: &[u8; Self::FILE_HEADER_SIZE]) -> Self {
+    fn from_bytes(bytes: &[u8]) -> Self {
         LinearFileHeader {
             version: bytes[0].into(),
             newest_timestamp: u64::from_be_bytes(bytes[1..9].try_into().unwrap()),
@@ -148,15 +168,16 @@ impl LinearFile {
 
         Ok(())
     }
+
     fn load(path: &Path) -> Result<Self, ChunkReadingError> {
-        let mut file =
-            OpenOptions::new()
-                .read(true)
-                .open(path)
-                .map_err(|err| match err.kind() {
-                    std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
-                    kind => ChunkReadingError::IoError(kind),
-                })?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|err| match err.kind() {
+                std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                kind => ChunkReadingError::IoError(kind),
+            })?;
 
         Self::check_signature(&mut file)?;
 
@@ -173,7 +194,7 @@ impl LinearFile {
 
         // Read the compressed data
         let mut compressed_data = vec![0; file_header.chunks_bytes as usize];
-        file.read_exact(&mut compressed_data)
+        file.read_exact(compressed_data.as_mut_slice())
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
         if compressed_data.len() != file_header.chunks_bytes as usize {
@@ -186,40 +207,44 @@ impl LinearFile {
         }
 
         // Uncompress the data (header + chunks)
-        let mut chunk_data = zstd::decode_all(compressed_data.as_slice())
+        let buffer = zstd::decode_all(compressed_data.as_slice())
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
+        let (headers_buffer, chunks_buffer) = buffer.split_at(CHUNK_HEADER_BYTES_SIZE);
+
         // Parse the chunk headers
-        let headers_data: [u8; CHUNK_HEADER_BYTES_SIZE] = chunk_data
-            .drain(..CHUNK_HEADER_BYTES_SIZE)
-            .collect::<Vec<u8>>()
+        let chunk_headers: [LinearChunkHeader; CHUNK_COUNT] = headers_buffer
+            .chunks_exact(8)
+            .map(LinearChunkHeader::from_bytes)
+            .collect::<Vec<LinearChunkHeader>>()
             .try_into()
             .map_err(|_| ChunkReadingError::InvalidHeader)?;
 
-        let chunk_headers: [LinearChunkHeader; CHUNK_COUNT] =
-            unsafe { std::mem::transmute(headers_data) };
-
         // Check if the total bytes of the chunks match the header
         let total_bytes = chunk_headers.iter().map(|header| header.size).sum::<u32>() as usize;
-        if total_bytes != chunk_data.len() {
+        if chunks_buffer.len() != total_bytes {
             error!(
                 "Invalid total bytes of the chunks {} != {}",
                 total_bytes,
-                chunk_data.len()
+                chunks_buffer.len(),
             );
             return Err(ChunkReadingError::InvalidHeader);
         }
 
         Ok(LinearFile {
             chunks_headers: Box::new(chunk_headers),
-            chunks_data: chunk_data,
+            chunks_data: chunks_buffer.to_vec(),
         })
     }
 
     fn save(&self, path: &Path) -> Result<(), ChunkWritingError> {
         // Parse the headers to a buffer
-        let headers_buffer: [u8; CHUNK_HEADER_BYTES_SIZE] =
-            unsafe { transmute(*self.chunks_headers) };
+        let headers_buffer: Vec<u8> = self
+            .chunks_headers
+            .as_ref()
+            .iter()
+            .flat_map(|header| header.to_bytes())
+            .collect();
 
         // Compress the data buffer
         let compressed_buffer = zstd::encode_all(
@@ -251,7 +276,6 @@ impl LinearFile {
         .to_bytes();
 
         // Write/OverWrite the data to the file
-
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -270,6 +294,7 @@ impl LinearFile {
             .as_slice(),
         )
         .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+
         Ok(())
     }
 
@@ -374,7 +399,7 @@ impl ChunkReader for LinearChunkFormat {
         tokio::task::block_in_place(|| {
             let file_lock = FileLocksManager::get_file_lock(&path);
             let _reader_lock = file_lock.blocking_read();
-            dbg!("Reading chunk at {:?}", at);
+            //dbg!("Reading chunk at {:?}", at);
             LinearFile::load(&path)?.get_chunk(at)
         })
     }
@@ -396,7 +421,7 @@ impl ChunkWriter for LinearChunkFormat {
         tokio::task::block_in_place(|| {
             let file_lock = FileLocksManager::get_file_lock(&path);
             let _writer_lock = file_lock.blocking_write();
-            dbg!("Writing chunk at {:?}", at);
+            //dbg!("Writing chunk at {:?}", at);
 
             let mut file_data = match LinearFile::load(&path) {
                 Ok(file_data) => file_data,
