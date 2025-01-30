@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 use thiserror::Error;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::{
     block::BlockState,
@@ -29,20 +29,22 @@ pub const CHUNK_VOLUME: usize = CHUNK_AREA * WORLD_HEIGHT;
 
 // Manejador global para múltiples archivos
 static FILE_LOCK_MANAGER: LazyLock<FileLocksManager> = LazyLock::new(FileLocksManager::default);
+
+pub static PERMITS: Semaphore = Semaphore::const_new(5);
+
 pub trait ChunkReader: Sync + Send {
-    fn read_chunk(
+    fn read_chunks(
         &self,
         save_file: &LevelFolder,
-        at: &Vector2<i32>,
-    ) -> Result<ChunkData, ChunkReadingError>;
+        at: &[Vector2<i32>],
+    ) -> Result<Vec<Option<ChunkData>>, ChunkReadingError>;
 }
 
 pub trait ChunkWriter: Send + Sync {
-    fn write_chunk(
+    fn write_chunks(
         &self,
-        chunk: &ChunkData,
         level_folder: &LevelFolder,
-        at: &Vector2<i32>,
+        chunk: &[(Vector2<i32>, &ChunkData)],
     ) -> Result<(), ChunkWritingError>;
 }
 

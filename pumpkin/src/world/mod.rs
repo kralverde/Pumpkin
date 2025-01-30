@@ -596,6 +596,9 @@ impl World {
         let level = self.level.clone();
 
         tokio::spawn(async move {
+            const MAX_CHUNKS_WITING: usize = 32;
+            let mut not_watched_chunks: Vec<Vector2<i32>> = Vec::with_capacity(MAX_CHUNKS_WITING);
+
             while let Some(chunk_data) = receiver.recv().await {
                 let chunk_data = chunk_data.read().await;
                 let packet = CChunkData(&chunk_data);
@@ -613,11 +616,24 @@ impl World {
                 }
 
                 if !level.is_chunk_watched(&chunk_data.position) {
-                    log::trace!(
-                        "Received chunk {:?}, but it is no longer watched... cleaning",
-                        &chunk_data.position
-                    );
-                    level.clean_chunk(&chunk_data.position).await;
+                    not_watched_chunks.push(chunk_data.position);
+                    if not_watched_chunks.len() == MAX_CHUNKS_WITING {
+                        log::trace!(
+                            "Received chunk {:?}, but it is no longer watched... cleaning",
+                            &chunk_data.position
+                        );
+                        level
+                            .clean_chunks(
+                                &not_watched_chunks
+                                    .iter()
+                                    .filter(|c| !level.is_chunk_watched(c))
+                                    .copied()
+                                    .collect::<Vec<_>>(),
+                            )
+                            .await;
+                        not_watched_chunks.clear();
+                        not_watched_chunks.reserve(MAX_CHUNKS_WITING);
+                    }
                     continue;
                 }
 

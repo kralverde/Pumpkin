@@ -145,90 +145,164 @@ impl Compression {
 }
 
 impl ChunkReader for AnvilChunkFormat {
-    fn read_chunk(
+    fn read_chunks(
         &self,
         save_file: &LevelFolder,
-        at: &pumpkin_util::math::vector2::Vector2<i32>,
-    ) -> Result<super::ChunkData, ChunkReadingError> {
-        let region = (at.x >> 5, at.z >> 5);
+        at: &[pumpkin_util::math::vector2::Vector2<i32>],
+    ) -> Result<Vec<Option<ChunkData>>, ChunkReadingError> {
+        let mut result = Vec::with_capacity(at.len());
 
-        let mut region_file = OpenOptions::new()
-            .read(true)
-            .open(
-                save_file
-                    .region_folder
-                    .join(format!("r.{}.{}.mca", region.0, region.1)),
-            )
-            .map_err(|err| match err.kind() {
-                std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
-                kind => ChunkReadingError::IoError(kind),
-            })?;
+        for at in at {
+            let chunk = self.read_chunks(save_file, at);
 
-        let mut location_table: [u8; 4096] = [0; 4096];
-        let mut timestamp_table: [u8; 4096] = [0; 4096];
-
-        // fill the location and timestamp tables
-        region_file
-            .read_exact(&mut location_table)
-            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
-        region_file
-            .read_exact(&mut timestamp_table)
-            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
-
-        let chunk_x = at.x & 0x1F;
-        let chunk_z = at.z & 0x1F;
-        let table_entry = (chunk_x + chunk_z * 32) * 4;
-
-        let mut offset = BytesMut::new();
-        offset.put_u8(0);
-        offset.extend_from_slice(&location_table[table_entry as usize..table_entry as usize + 3]);
-        let offset_at = offset.get_u32() as u64 * 4096;
-        let size_at = location_table[table_entry as usize + 3] as usize * 4096;
-
-        if offset_at == 0 && size_at == 0 {
-            return Err(ChunkReadingError::ChunkNotExist);
+            match chunk {
+                Ok(chunk) => result.push(Some(chunk)),
+                Err(ChunkReadingError::ChunkNotExist) => result.push(None),
+                Err(err) => return Err(err),
+            }
         }
 
-        // Read the file using the offset and size
-        let mut file_buf = {
-            region_file
-                .seek(std::io::SeekFrom::Start(offset_at))
-                .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
-            let mut out = vec![0; size_at];
-            region_file
-                .read_exact(&mut out)
-                .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
-            out
-        };
-
-        let mut header: Bytes = file_buf.drain(0..5).collect();
-        if header.remaining() != 5 {
-            return Err(ChunkReadingError::InvalidHeader);
-        }
-
-        let size = header.get_u32();
-        let compression = header.get_u8();
-
-        let compression = Compression::from_byte(compression)
-            .map_err(|_| ChunkReadingError::Compression(CompressionError::UnknownCompression))?;
-
-        // size includes the compression scheme byte, so we need to subtract 1
-        let chunk_data: Vec<u8> = file_buf.drain(0..size as usize - 1).collect();
-
-        let decompressed_chunk = if let Some(compression) = compression {
-            compression
-                .decompress_data(&chunk_data)
-                .map_err(ChunkReadingError::Compression)?
-        } else {
-            chunk_data
-        };
-
-        ChunkData::from_bytes(&decompressed_chunk, *at).map_err(ChunkReadingError::ParsingError)
+        Ok(result)
     }
 }
 
 impl ChunkWriter for AnvilChunkFormat {
-    fn write_chunk(
+    fn write_chunks(
+        &self,
+        level_folder: &LevelFolder,
+
+        chunk: &[(pumpkin_util::math::vector2::Vector2<i32>, &ChunkData)],
+    ) -> Result<(), ChunkWritingError> {
+        for (at, chunk) in chunk {
+            self.write_chunks(chunk, level_folder, at)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl AnvilChunkFormat {
+    pub fn to_bytes(&self, chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializingError> {
+        let mut sections = Vec::new();
+
+        for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
+            // get unique blocks
+            let unique_blocks: HashSet<_> = blocks.iter().collect();
+
+            let palette: IndexMap<_, _> = unique_blocks
+                .into_iter()
+                .enumerate()
+                .map(|(i, block)| {
+                    let name = BLOCK_ID_TO_REGISTRY_ID.get(block).unwrap().as_str();
+                    (block, (name, i))
+                })
+                .collect();
+
+            // Determine the number of bits needed to represent the largest index in the palette
+            let block_bit_size = if palette.len() < 16 {
+                4
+            } else {
+                ceil_log2(palette.len() as u32).max(4)
+            };
+
+            let mut section_longs = Vec::new();
+            let mut current_pack_long: i64 = 0;
+            let mut bits_used_in_pack: u32 = 0;
+
+            // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
+            // if palette.len() > 1 {}
+            // TODO: Update to write empty data. Rn or read does not handle this elegantly
+            for block in blocks.iter() {
+                // Push if next bit does not fit
+                if bits_used_in_pack + block_bit_size as u32 > 64 {
+                    section_longs.push(current_pack_long);
+                    current_pack_long = 0;
+                    bits_used_in_pack = 0;
+                }
+                let index = palette.get(block).expect("Just added all unique").1;
+                current_pack_long |= (index as i64) << bits_used_in_pack;
+                bits_used_in_pack += block_bit_size as u32;
+
+                assert!(bits_used_in_pack <= 64);
+
+                // If the current 64-bit integer is full, push it to the section_longs and start a new one
+                if bits_used_in_pack >= 64 {
+                    section_longs.push(current_pack_long);
+                    current_pack_long = 0;
+                    bits_used_in_pack = 0;
+                }
+            }
+
+            // Push the last 64-bit integer if it contains any data
+            if bits_used_in_pack > 0 {
+                section_longs.push(current_pack_long);
+            }
+
+            sections.push(ChunkSection {
+                y: i as i8 - 4,
+                block_states: Some(ChunkSectionBlockStates {
+                    data: Some(LongArray::new(section_longs)),
+                    palette: palette
+                        .into_iter()
+                        .map(|entry| PaletteEntry {
+                            name: entry.1 .0.to_owned(),
+                            properties: None,
+                        })
+                        .collect(),
+                }),
+            });
+        }
+
+        let nbt = ChunkNbt {
+            data_version: WORLD_DATA_VERSION,
+            x_pos: chunk_data.position.x,
+            z_pos: chunk_data.position.z,
+            status: super::ChunkStatus::Full,
+            heightmaps: chunk_data.heightmap.clone(),
+            sections,
+        };
+
+        fastnbt::to_bytes(&nbt).map_err(ChunkSerializingError::ErrorSerializingChunk)
+    }
+
+    /// Returns the next free writable sector
+    /// The sector is absolute which means it always has a spacing of 2 sectors
+    fn find_free_sector(&self, location_table: &[u8; 4096], sector_size: usize) -> usize {
+        let mut used_sectors: Vec<u16> = Vec::new();
+        for i in 0..1024 {
+            let entry_offset = i * 4;
+            let location_offset = u32::from_be_bytes([
+                0,
+                location_table[entry_offset],
+                location_table[entry_offset + 1],
+                location_table[entry_offset + 2],
+            ]) as u64;
+            let length = location_table[entry_offset + 3] as u64;
+            let sector_count = location_offset;
+            for used_sector in sector_count..sector_count + length {
+                used_sectors.push(used_sector as u16);
+            }
+        }
+
+        if used_sectors.is_empty() {
+            return 2;
+        }
+
+        used_sectors.sort();
+
+        let mut prev_sector = &used_sectors[0];
+        for sector in used_sectors[1..].iter() {
+            // Iterate over consecutive pairs
+            if sector - prev_sector > sector_size as u16 {
+                return (prev_sector + 1) as usize;
+            }
+            prev_sector = sector;
+        }
+
+        (*used_sectors.last().unwrap() + 1) as usize
+    }
+
+    fn write_chunks(
         &self,
         chunk_data: &ChunkData,
         level_folder: &LevelFolder,
@@ -372,127 +446,86 @@ impl ChunkWriter for AnvilChunkFormat {
 
         Ok(())
     }
-}
 
-impl AnvilChunkFormat {
-    pub fn to_bytes(&self, chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializingError> {
-        let mut sections = Vec::new();
+    fn read_chunks(
+        &self,
+        save_file: &LevelFolder,
+        at: &pumpkin_util::math::vector2::Vector2<i32>,
+    ) -> Result<super::ChunkData, ChunkReadingError> {
+        let region = (at.x >> 5, at.z >> 5);
 
-        for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
-            // get unique blocks
-            let unique_blocks: HashSet<_> = blocks.iter().collect();
+        let mut region_file = OpenOptions::new()
+            .read(true)
+            .open(
+                save_file
+                    .region_folder
+                    .join(format!("r.{}.{}.mca", region.0, region.1)),
+            )
+            .map_err(|err| match err.kind() {
+                std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                kind => ChunkReadingError::IoError(kind),
+            })?;
 
-            let palette: IndexMap<_, _> = unique_blocks
-                .into_iter()
-                .enumerate()
-                .map(|(i, block)| {
-                    let name = BLOCK_ID_TO_REGISTRY_ID.get(block).unwrap().as_str();
-                    (block, (name, i))
-                })
-                .collect();
+        let mut location_table: [u8; 4096] = [0; 4096];
+        let mut timestamp_table: [u8; 4096] = [0; 4096];
 
-            // Determine the number of bits needed to represent the largest index in the palette
-            let block_bit_size = if palette.len() < 16 {
-                4
-            } else {
-                ceil_log2(palette.len() as u32).max(4)
-            };
+        // fill the location and timestamp tables
+        region_file
+            .read_exact(&mut location_table)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+        region_file
+            .read_exact(&mut timestamp_table)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
-            let mut section_longs = Vec::new();
-            let mut current_pack_long: i64 = 0;
-            let mut bits_used_in_pack: u32 = 0;
+        let chunk_x = at.x & 0x1F;
+        let chunk_z = at.z & 0x1F;
+        let table_entry = (chunk_x + chunk_z * 32) * 4;
 
-            // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
-            // if palette.len() > 1 {}
-            // TODO: Update to write empty data. Rn or read does not handle this elegantly
-            for block in blocks.iter() {
-                // Push if next bit does not fit
-                if bits_used_in_pack + block_bit_size as u32 > 64 {
-                    section_longs.push(current_pack_long);
-                    current_pack_long = 0;
-                    bits_used_in_pack = 0;
-                }
-                let index = palette.get(block).expect("Just added all unique").1;
-                current_pack_long |= (index as i64) << bits_used_in_pack;
-                bits_used_in_pack += block_bit_size as u32;
+        let mut offset = BytesMut::new();
+        offset.put_u8(0);
+        offset.extend_from_slice(&location_table[table_entry as usize..table_entry as usize + 3]);
+        let offset_at = offset.get_u32() as u64 * 4096;
+        let size_at = location_table[table_entry as usize + 3] as usize * 4096;
 
-                assert!(bits_used_in_pack <= 64);
-
-                // If the current 64-bit integer is full, push it to the section_longs and start a new one
-                if bits_used_in_pack >= 64 {
-                    section_longs.push(current_pack_long);
-                    current_pack_long = 0;
-                    bits_used_in_pack = 0;
-                }
-            }
-
-            // Push the last 64-bit integer if it contains any data
-            if bits_used_in_pack > 0 {
-                section_longs.push(current_pack_long);
-            }
-
-            sections.push(ChunkSection {
-                y: i as i8 - 4,
-                block_states: Some(ChunkSectionBlockStates {
-                    data: Some(LongArray::new(section_longs)),
-                    palette: palette
-                        .into_iter()
-                        .map(|entry| PaletteEntry {
-                            name: entry.1 .0.to_owned(),
-                            properties: None,
-                        })
-                        .collect(),
-                }),
-            });
+        if offset_at == 0 && size_at == 0 {
+            return Err(ChunkReadingError::ChunkNotExist);
         }
 
-        let nbt = ChunkNbt {
-            data_version: WORLD_DATA_VERSION,
-            x_pos: chunk_data.position.x,
-            z_pos: chunk_data.position.z,
-            status: super::ChunkStatus::Full,
-            heightmaps: chunk_data.heightmap.clone(),
-            sections,
+        // Read the file using the offset and size
+        let mut file_buf = {
+            region_file
+                .seek(std::io::SeekFrom::Start(offset_at))
+                .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
+            let mut out = vec![0; size_at];
+            region_file
+                .read_exact(&mut out)
+                .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
+            out
         };
 
-        fastnbt::to_bytes(&nbt).map_err(ChunkSerializingError::ErrorSerializingChunk)
-    }
-
-    /// Returns the next free writable sector
-    /// The sector is absolute which means it always has a spacing of 2 sectors
-    fn find_free_sector(&self, location_table: &[u8; 4096], sector_size: usize) -> usize {
-        let mut used_sectors: Vec<u16> = Vec::new();
-        for i in 0..1024 {
-            let entry_offset = i * 4;
-            let location_offset = u32::from_be_bytes([
-                0,
-                location_table[entry_offset],
-                location_table[entry_offset + 1],
-                location_table[entry_offset + 2],
-            ]) as u64;
-            let length = location_table[entry_offset + 3] as u64;
-            let sector_count = location_offset;
-            for used_sector in sector_count..sector_count + length {
-                used_sectors.push(used_sector as u16);
-            }
+        let mut header: Bytes = file_buf.drain(0..5).collect();
+        if header.remaining() != 5 {
+            return Err(ChunkReadingError::InvalidHeader);
         }
 
-        if used_sectors.is_empty() {
-            return 2;
-        }
+        let size = header.get_u32();
+        let compression = header.get_u8();
 
-        used_sectors.sort();
+        let compression = Compression::from_byte(compression)
+            .map_err(|_| ChunkReadingError::Compression(CompressionError::UnknownCompression))?;
 
-        let mut prev_sector = &used_sectors[0];
-        for sector in used_sectors[1..].iter() {
-            // Iterate over consecutive pairs
-            if sector - prev_sector > sector_size as u16 {
-                return (prev_sector + 1) as usize;
-            }
-            prev_sector = sector;
-        }
+        // size includes the compression scheme byte, so we need to subtract 1
+        let chunk_data: Vec<u8> = file_buf.drain(0..size as usize - 1).collect();
 
-        (*used_sectors.last().unwrap() + 1) as usize
+        let decompressed_chunk = if let Some(compression) = compression {
+            compression
+                .decompress_data(&chunk_data)
+                .map_err(ChunkReadingError::Compression)?
+        } else {
+            chunk_data
+        };
+
+        ChunkData::from_bytes(&decompressed_chunk, *at).map_err(ChunkReadingError::ParsingError)
     }
 }
 
@@ -502,17 +535,16 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use crate::chunk::ChunkWriter;
     use crate::generation::{get_world_gen, Seed};
     use crate::{
-        chunk::{anvil::AnvilChunkFormat, ChunkReader, ChunkReadingError},
+        chunk::{anvil::AnvilChunkFormat, ChunkReadingError},
         level::LevelFolder,
     };
 
     #[test]
     fn not_existing() {
         let region_path = PathBuf::from("not_existing");
-        let result = AnvilChunkFormat.read_chunk(
+        let result = AnvilChunkFormat.read_chunks(
             &LevelFolder {
                 root_folder: PathBuf::from(""),
                 region_folder: region_path,
@@ -548,7 +580,7 @@ mod tests {
             println!("Iteration {}", i + 1);
             for (at, chunk) in &chunks {
                 AnvilChunkFormat
-                    .write_chunk(chunk, &level_folder, at)
+                    .write_chunks(chunk, &level_folder, at)
                     .expect("Failed to write chunk");
             }
 
@@ -556,7 +588,7 @@ mod tests {
             for (at, _chunk) in &chunks {
                 read_chunks.push(
                     AnvilChunkFormat
-                        .read_chunk(&level_folder, at)
+                        .read_chunks(&level_folder, at)
                         .expect("Could not read chunk"),
                 );
             }
