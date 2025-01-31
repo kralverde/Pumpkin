@@ -1,6 +1,10 @@
-use std::{ops::Deref, path::PathBuf, sync::Arc};
+use std::{
+    ops::Deref,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
 
-use dashmap::{DashMap, Entry};
+use dashmap::{DashMap, Entry, VacantEntry};
 use log::info;
 use num_traits::Zero;
 use pumpkin_config::{chunk::ChunkFormat, ADVANCED_CONFIG};
@@ -8,7 +12,7 @@ use pumpkin_util::math::vector2::Vector2;
 use rayon::iter::{IntoParallelRefIterator, ParallelBridge, ParallelIterator};
 use tokio::{
     runtime::Handle,
-    sync::{mpsc, RwLock},
+    sync::{mpsc, Mutex, RwLock},
 };
 
 use crate::{
@@ -190,17 +194,48 @@ impl Level {
     }
 
     pub async fn clean_chunks(&self, chunks: &[Vector2<i32>]) {
-        let chunks_to_clean = chunks
-            .iter()
-            .filter_map(|chunk| self.loaded_chunks.remove(chunk))
-            .collect::<Vec<_>>();
+        const MAX_NOT_WATCHED_CHUNKS: usize = 2048;
+        static NON_USED_CHUNKS: LazyLock<Arc<RwLock<Vec<Vector2<i32>>>>> =
+            LazyLock::new(|| Arc::new(RwLock::new(Vec::with_capacity(MAX_NOT_WATCHED_CHUNKS))));
 
-        Self::write_chunks(
-            self.chunk_writer.clone(),
-            self.level_folder.clone(),
-            &chunks_to_clean,
-        )
-        .await;
+        let filtered_chunks = {
+            let non_watched_chunks = NON_USED_CHUNKS.read().await;
+
+            chunks
+                .iter()
+                .filter(|chunk| !non_watched_chunks.contains(chunk))
+                .collect::<Vec<_>>()
+        };
+
+        if filtered_chunks.is_empty() {
+            return;
+        }
+
+        let mut not_watched_chunks = NON_USED_CHUNKS.write().await;
+
+        for chunk in filtered_chunks {
+            not_watched_chunks.push(*chunk);
+
+            if not_watched_chunks.len() == MAX_NOT_WATCHED_CHUNKS {
+                info!("flushing chunks");
+
+                let chunks_to_clean = chunks
+                    .iter()
+                    .filter(|chunk| self.chunk_watchers.get(chunk).is_none())
+                    .filter_map(|chunk| self.loaded_chunks.remove(chunk))
+                    .collect::<Vec<_>>();
+
+                Self::write_chunks(
+                    self.chunk_writer.clone(),
+                    self.level_folder.clone(),
+                    &chunks_to_clean,
+                )
+                .await;
+
+                not_watched_chunks.clear();
+                not_watched_chunks.reserve(MAX_NOT_WATCHED_CHUNKS);
+            }
+        }
     }
 
     pub async fn clean_chunk(&self, chunk: &Vector2<i32>) {
@@ -237,7 +272,7 @@ impl Level {
         }
 
         info!("Writing chunks to disk {:}", chunks_to_write.len());
-        let _ = chunk::PERMITS.acquire().await;
+
         let (positions, chunks) = chunks_to_write
             .iter()
             .map(|(pos, chunk)| (pos, chunk.read()))
@@ -264,6 +299,10 @@ impl Level {
         save_file: &LevelFolder,
         chunks_pos: &[Vector2<i32>],
     ) -> Result<Vec<Option<Arc<RwLock<ChunkData>>>>, ChunkReadingError> {
+        if chunks_pos.is_empty() {
+            return Ok(vec![]);
+        }
+        info!("Loading chunks from disk {:}", chunks_pos.len());
         Ok(chunk_reader
             .read_chunks(save_file, chunks_pos)?
             .into_iter()
@@ -279,6 +318,10 @@ impl Level {
         channel: mpsc::Sender<Arc<RwLock<ChunkData>>>,
         rt: &Handle,
     ) {
+        if chunks.is_empty() {
+            return;
+        }
+
         let chunks_to_load = chunks
             .par_iter()
             .filter_map(|pos| {
@@ -298,6 +341,10 @@ impl Level {
             })
             .collect::<Vec<_>>();
 
+        if chunks_to_load.is_empty() {
+            return;
+        }
+
         let chunks_to_write = Self::load_chunks_from_save(
             self.chunk_reader.clone(),
             &self.level_folder,
@@ -308,12 +355,20 @@ impl Level {
         .zip(chunks_to_load.iter())
         .par_bridge()
         .filter_map(|(chunk, pos)| {
-            let (is_new, loaded_chunk) = if let Some(chunk) = chunk {
-                (false, chunk)
-            } else {
-                let chunk = Arc::new(RwLock::new(self.world_gen.generate_chunk(*pos)));
-                self.loaded_chunks.insert(*pos, chunk.clone());
-                (true, chunk)
+            let mut is_new = false;
+            let loaded_chunk = match self.loaded_chunks.entry(*pos) {
+                Entry::Occupied(entry) => entry.get().clone(),
+                Entry::Vacant(entry) => {
+                    let loaded_chunk = if let Some(chunk) = chunk {
+                        chunk
+                    } else {
+                        is_new = true;
+                        Arc::new(RwLock::new(self.world_gen.generate_chunk(*pos)))
+                    };
+
+                    entry.insert(loaded_chunk.clone());
+                    loaded_chunk
+                }
             };
 
             let chunk = loaded_chunk.clone();

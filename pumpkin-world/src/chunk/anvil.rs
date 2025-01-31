@@ -153,7 +153,7 @@ impl ChunkReader for AnvilChunkFormat {
         let mut result = Vec::with_capacity(at.len());
 
         for at in at {
-            let chunk = self.read_chunks(save_file, at);
+            let chunk = self.read_chunk(save_file, at);
 
             match chunk {
                 Ok(chunk) => result.push(Some(chunk)),
@@ -174,7 +174,7 @@ impl ChunkWriter for AnvilChunkFormat {
         chunk: &[(pumpkin_util::math::vector2::Vector2<i32>, &ChunkData)],
     ) -> Result<(), ChunkWritingError> {
         for (at, chunk) in chunk {
-            self.write_chunks(chunk, level_folder, at)?;
+            self.write_chunk(chunk, level_folder, at)?;
         }
 
         Ok(())
@@ -302,7 +302,7 @@ impl AnvilChunkFormat {
         (*used_sectors.last().unwrap() + 1) as usize
     }
 
-    fn write_chunks(
+    fn write_chunk(
         &self,
         chunk_data: &ChunkData,
         level_folder: &LevelFolder,
@@ -447,7 +447,7 @@ impl AnvilChunkFormat {
         Ok(())
     }
 
-    fn read_chunks(
+    fn read_chunk(
         &self,
         save_file: &LevelFolder,
         at: &pumpkin_util::math::vector2::Vector2<i32>,
@@ -535,23 +535,25 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use crate::chunk::anvil::AnvilChunkFormat;
+    use crate::chunk::ChunkWriter;
     use crate::generation::{get_world_gen, Seed};
     use crate::{
-        chunk::{anvil::AnvilChunkFormat, ChunkReadingError},
+        chunk::{linear::LinearChunkFormat, ChunkReader},
         level::LevelFolder,
     };
 
     #[test]
     fn not_existing() {
         let region_path = PathBuf::from("not_existing");
-        let result = AnvilChunkFormat.read_chunks(
+        let result = LinearChunkFormat.read_chunks(
             &LevelFolder {
                 root_folder: PathBuf::from(""),
                 region_folder: region_path,
             },
-            &Vector2::new(0, 0),
+            &[Vector2::new(0, 0)],
         );
-        assert!(matches!(result, Err(ChunkReadingError::ChunkNotExist)));
+        assert!(matches!(result, Ok(chunks) if chunks.len() == 1 && chunks[0].is_none()));
     }
 
     #[test]
@@ -578,20 +580,25 @@ mod tests {
 
         for i in 0..5 {
             println!("Iteration {}", i + 1);
-            for (at, chunk) in &chunks {
-                AnvilChunkFormat
-                    .write_chunks(chunk, &level_folder, at)
-                    .expect("Failed to write chunk");
-            }
+            AnvilChunkFormat
+                .write_chunks(
+                    &level_folder,
+                    &chunks
+                        .iter()
+                        .map(|(at, chunk)| (*at, chunk))
+                        .collect::<Vec<_>>(),
+                )
+                .expect("Failed to write chunk");
 
-            let mut read_chunks = vec![];
-            for (at, _chunk) in &chunks {
-                read_chunks.push(
-                    AnvilChunkFormat
-                        .read_chunks(&level_folder, at)
-                        .expect("Could not read chunk"),
-                );
-            }
+            let read_chunks = AnvilChunkFormat
+                .read_chunks(
+                    &level_folder,
+                    &chunks.iter().map(|(at, _)| *at).collect::<Vec<_>>(),
+                )
+                .expect("Could not read chunk")
+                .into_iter()
+                .map(|chunk| chunk.unwrap())
+                .collect::<Vec<_>>();
 
             for (at, chunk) in &chunks {
                 let read_chunk = read_chunks
