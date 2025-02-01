@@ -20,14 +20,19 @@ pub(crate) fn build() -> TokenStream {
         serde_json::from_str(include_str!("../../assets/noise_parameters.json"))
             .expect("Failed to parse noise_parameters.json");
     let mut variants = TokenStream::new();
+    let mut match_variants = TokenStream::new();
 
     for (name, paremter) in json.iter() {
         let raw_name = format!("minecraft:{name}");
+        let simple_id = name;
         let name = ident(name.to_uppercase());
         let first_octave = paremter.first_octave;
         let amplitudes = &paremter.amplitudes;
         variants.extend([quote! {
             pub const #name: DoublePerlinNoiseParameters = DoublePerlinNoiseParameters::new(#first_octave, &[#(#amplitudes),*], #raw_name);
+        }]);
+        match_variants.extend([quote! {
+            #simple_id => &#name,
         }]);
     }
 
@@ -48,7 +53,14 @@ pub(crate) fn build() -> TokenStream {
             }
 
             pub const fn id(&self) -> &'static str {
-                   self.id
+                self.id
+            }
+
+            pub fn id_to_parameters(id: &str) -> Option<&DoublePerlinNoiseParameters> {
+                Some(match id {
+                    #match_variants
+                    _ => return None,
+                })
             }
         }
 

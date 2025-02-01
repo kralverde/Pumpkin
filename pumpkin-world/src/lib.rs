@@ -18,6 +18,7 @@ mod generation;
 pub mod item;
 pub mod level;
 mod lock;
+mod noise_router;
 pub mod world_info;
 pub const WORLD_HEIGHT: usize = 384;
 pub const WORLD_LOWEST_Y: i16 = -64;

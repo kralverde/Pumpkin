@@ -3,6 +3,7 @@
 pub mod aquifer_sampler;
 mod blender;
 pub mod chunk_noise;
+mod chunk_noise_router;
 pub mod generation_shapes;
 mod generator;
 mod generic_generator;
