@@ -28,14 +28,15 @@ pub const SUBCHUNKS_COUNT: usize = WORLD_HEIGHT / 16;
 pub const CHUNK_VOLUME: usize = CHUNK_AREA * WORLD_HEIGHT;
 
 // Manager for multiple file writers/readers
-static FILE_LOCK_MANAGER: LazyLock<FileLocksManager> = LazyLock::new(FileLocksManager::default);
+static FILE_LOCK_MANAGER: LazyLock<Arc<Mutex<FileLocksManager>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(FileLocksManager::default())));
 
 pub trait ChunkReader: Sync + Send {
     fn read_chunks(
         &self,
         save_file: &LevelFolder,
         at: &[Vector2<i32>],
-    ) -> Result<Vec<Option<ChunkData>>, ChunkReadingError>;
+    ) -> Result<Vec<(Vector2<i32>, Option<ChunkData>)>, ChunkReadingError>;
 }
 
 pub trait ChunkWriter: Send + Sync {
@@ -86,12 +87,11 @@ pub enum CompressionError {
     ZstdError(std::io::Error),
 }
 
-type FileLocks = HashMap<PathBuf, Arc<RwLock<()>>>;
 /// Central File Lock Manager for chunk files
 /// This is used to prevent multiple threads from writing to the same file at the same time
 #[derive(Clone, Default)]
 pub struct FileLocksManager {
-    locks: Arc<Mutex<FileLocks>>,
+    locks: HashMap<PathBuf, Arc<RwLock<()>>>,
 }
 
 pub struct ChunkData {
@@ -185,7 +185,7 @@ struct ChunkNbt {
 impl FileLocksManager {
     pub fn get_file_lock(path: &Path) -> Arc<RwLock<()>> {
         tokio::task::block_in_place(|| {
-            let mut file_locks = FILE_LOCK_MANAGER.locks.blocking_lock();
+            let file_locks = &mut FILE_LOCK_MANAGER.blocking_lock().locks;
 
             if let Some(file_lock) = file_locks.get(path).cloned() {
                 file_lock
@@ -203,7 +203,7 @@ impl FileLocksManager {
 
     pub fn remove_file_lock(path: &Path) {
         tokio::task::block_in_place(|| {
-            FILE_LOCK_MANAGER.locks.blocking_lock().remove(path);
+            FILE_LOCK_MANAGER.blocking_lock().locks.remove(path);
             warn!("Removed FileLock for {:?}", path);
         })
     }

@@ -149,15 +149,18 @@ impl ChunkReader for AnvilChunkFormat {
         &self,
         save_file: &LevelFolder,
         at: &[pumpkin_util::math::vector2::Vector2<i32>],
-    ) -> Result<Vec<Option<ChunkData>>, ChunkReadingError> {
+    ) -> Result<
+        Vec<(pumpkin_util::math::vector2::Vector2<i32>, Option<ChunkData>)>,
+        ChunkReadingError,
+    > {
         let mut result = Vec::with_capacity(at.len());
 
         for at in at {
             let chunk = self.read_chunk(save_file, at);
 
             match chunk {
-                Ok(chunk) => result.push(Some(chunk)),
-                Err(ChunkReadingError::ChunkNotExist) => result.push(None),
+                Ok(chunk) => result.push((*at, Some(chunk))),
+                Err(ChunkReadingError::ChunkNotExist) => result.push((*at, None)),
                 Err(err) => return Err(err),
             }
         }
@@ -553,7 +556,7 @@ mod tests {
             },
             &[Vector2::new(0, 0)],
         );
-        assert!(matches!(result, Ok(chunks) if chunks.len() == 1 && chunks[0].is_none()));
+        assert!(matches!(result, Ok(chunks) if chunks.len() == 1 && chunks[0].1.is_none()));
     }
 
     #[test]
@@ -597,7 +600,7 @@ mod tests {
                 )
                 .expect("Could not read chunk")
                 .into_iter()
-                .map(|chunk| chunk.unwrap())
+                .map(|chunk| chunk.1.unwrap())
                 .collect::<Vec<_>>();
 
             for (at, chunk) in &chunks {

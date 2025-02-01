@@ -5,16 +5,16 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
-use log::error;
+use log::{error, warn};
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
-use rayon::iter::{IntoParallelRefMutIterator, ParallelBridge, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
 
 use super::anvil::AnvilChunkFormat;
 use super::{
     ChunkData, ChunkReader, ChunkReadingError, ChunkSerializingError, ChunkWriter,
-    CompressionError, FileLocksManager,
+    CompressionError, FileLocksManager, FILE_LOCK_MANAGER,
 };
 
 ///The side size of a region in chunks (one region is 32x32 chunks)
@@ -393,7 +393,7 @@ impl ChunkReader for LinearChunkFormat {
         &self,
         save_file: &LevelFolder,
         at: &[Vector2<i32>],
-    ) -> Result<Vec<Option<ChunkData>>, ChunkReadingError> {
+    ) -> Result<Vec<(Vector2<i32>, Option<ChunkData>)>, ChunkReadingError> {
         let mut regions_chunks: HashMap<PathBuf, Vec<Vector2<i32>>> = HashMap::new();
 
         for at in at {
@@ -410,41 +410,44 @@ impl ChunkReader for LinearChunkFormat {
                 .or_insert(vec![*at]);
         }
 
-        let chunks_by_region: Vec<Result<Vec<Option<ChunkData>>, _>> = regions_chunks
-            .par_iter_mut()
-            .map(|(path, chunks)| {
-                chunks.par_sort_unstable_by_key(LinearChunkFormat::get_chunk_index);
+        let chunks_by_region: Vec<Result<Vec<(Vector2<i32>, Option<ChunkData>)>, _>> =
+            regions_chunks
+                .into_par_iter()
+                .map(|(path, mut chunks)| {
+                    chunks.par_sort_unstable_by_key(LinearChunkFormat::get_chunk_index);
 
-                tokio::task::block_in_place(|| {
-                    let file_lock = FileLocksManager::get_file_lock(path);
-                    let _reader_lock = file_lock.blocking_read();
+                    tokio::task::block_in_place(|| {
+                        let file_lock = FileLocksManager::get_file_lock(&path);
+                        let _reader_lock = file_lock.blocking_read();
 
-                    let mut loaded_chunks = Vec::with_capacity(chunks.len());
-                    let region_file = match LinearFile::load(path) {
-                        Ok(file) => file,
-                        Err(ChunkReadingError::ChunkNotExist) => {
-                            for _ in 0..chunks.len() {
-                                loaded_chunks.push(None);
+                        let mut loaded_chunks = Vec::with_capacity(chunks.len());
+                        let region_file = match LinearFile::load(&path) {
+                            Ok(file) => file,
+                            Err(ChunkReadingError::ChunkNotExist) => {
+                                for at in chunks {
+                                    loaded_chunks.push((at, None));
+                                }
+                                return Ok(loaded_chunks);
                             }
-                            return Ok(loaded_chunks);
-                        }
-                        Err(err) => return Err(err),
-                    };
-
-                    for at in chunks {
-                        match region_file.get_chunk(at) {
-                            Ok(chunk) => loaded_chunks.push(Some(chunk)),
-                            Err(ChunkReadingError::ChunkNotExist) => loaded_chunks.push(None),
                             Err(err) => return Err(err),
+                        };
+
+                        for at in chunks {
+                            match region_file.get_chunk(&at) {
+                                Ok(chunk) => loaded_chunks.push((at, Some(chunk))),
+                                Err(ChunkReadingError::ChunkNotExist) => {
+                                    loaded_chunks.push((at, None))
+                                }
+                                Err(err) => return Err(err),
+                            }
                         }
-                    }
 
-                    Ok(loaded_chunks)
+                        Ok(loaded_chunks)
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
-        let mut final_chunks: Vec<Option<ChunkData>> = Vec::with_capacity(at.len());
+        let mut final_chunks: Vec<(Vector2<i32>, Option<ChunkData>)> = Vec::with_capacity(at.len());
         for chunks in chunks_by_region {
             final_chunks.extend(chunks?)
         }
@@ -476,15 +479,11 @@ impl ChunkWriter for LinearChunkFormat {
         }
 
         regions_chunks
-            .par_iter_mut()
-            .map(|(path, chunks)| {
+            .into_par_iter()
+            .map(|(path, mut chunks)| {
                 chunks.par_sort_unstable_by_key(|(at, _)| LinearChunkFormat::get_chunk_index(at));
-
                 tokio::task::block_in_place(|| {
-                    let file_lock = FileLocksManager::get_file_lock(path);
-                    let _writer_lock = file_lock.blocking_write();
-
-                    let mut file_data = match LinearFile::load(path) {
+                    let mut file_data = match LinearFile::load(&path) {
                         Ok(file_data) => file_data,
                         Err(ChunkReadingError::ChunkNotExist) => LinearFile::new(),
                         Err(ChunkReadingError::IoError(err)) => {
@@ -497,12 +496,13 @@ impl ChunkWriter for LinearChunkFormat {
                     };
 
                     for (at, chunk) in chunks {
-                        file_data.put_chunk(chunk, at).map_err(|err| {
+                        file_data.put_chunk(chunk, &at).map_err(|err| {
                             ChunkWritingError::ChunkSerializingError(err.to_string())
                         })?;
                     }
 
-                    file_data.save(path)?;
+                    file_data.save(&path)?;
+
                     Ok(())
                 })?;
 
@@ -521,7 +521,7 @@ mod tests {
     use crate::chunk::ChunkWriter;
     use crate::generation::{get_world_gen, Seed};
     use crate::{
-        chunk::{linear::LinearChunkFormat, ChunkReader, ChunkReadingError},
+        chunk::{linear::LinearChunkFormat, ChunkReader},
         level::LevelFolder,
     };
 
@@ -535,7 +535,7 @@ mod tests {
             },
             &[Vector2::new(0, 0)],
         );
-        assert!(matches!(result, Ok(chunks) if chunks.len() == 1 && chunks[0].is_none()));
+        assert!(matches!(result, Ok(chunks) if chunks.len() == 1 && chunks[0].1.is_none()));
     }
 
     #[test]
@@ -579,7 +579,7 @@ mod tests {
                 )
                 .expect("Could not read chunk")
                 .into_iter()
-                .map(|chunk| chunk.unwrap())
+                .map(|chunk| chunk.1.unwrap())
                 .collect::<Vec<_>>();
 
             for (at, chunk) in &chunks {
