@@ -151,27 +151,31 @@ impl<'a> InterpolatedNoiseSampler<'a> {
         let big_amplitudes = [1.0; 16];
 
         let little_start = -7;
-        let little_amplitudes = [1.0; 16];
+        let little_amplitudes = [1.0; 8];
+
+        let lower_noise = Box::new(OctavePerlinNoiseSampler::new(
+            random,
+            big_start,
+            &big_amplitudes,
+            true,
+        ));
+        let upper_noise = Box::new(OctavePerlinNoiseSampler::new(
+            random,
+            big_start,
+            &big_amplitudes,
+            true,
+        ));
+        let noise = Box::new(OctavePerlinNoiseSampler::new(
+            random,
+            little_start,
+            &little_amplitudes,
+            true,
+        ));
 
         Self {
-            lower_noise: Box::new(OctavePerlinNoiseSampler::new(
-                random,
-                big_start,
-                &big_amplitudes,
-                true,
-            )),
-            upper_noise: Box::new(OctavePerlinNoiseSampler::new(
-                random,
-                big_start,
-                &big_amplitudes,
-                true,
-            )),
-            noise: Box::new(OctavePerlinNoiseSampler::new(
-                random,
-                little_start,
-                &little_amplitudes,
-                true,
-            )),
+            lower_noise,
+            upper_noise,
+            noise,
             data,
         }
     }

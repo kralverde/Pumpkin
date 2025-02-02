@@ -40,7 +40,7 @@ macro_rules! read_data_from_file {
             )
             .expect("no data file"),
         )
-        .expect("failed to decode array")
+        .expect("failed to decode data")
     };
 }
 
