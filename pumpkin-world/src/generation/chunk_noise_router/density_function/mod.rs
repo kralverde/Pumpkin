@@ -27,6 +27,35 @@ pub trait NoisePos {
     fn z(&self) -> i32;
 }
 
+pub struct UnblendedNoisePos {
+    x: i32,
+    y: i32,
+    z: i32,
+}
+
+impl UnblendedNoisePos {
+    pub fn new(x: i32, y: i32, z: i32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+impl NoisePos for UnblendedNoisePos {
+    #[inline]
+    fn x(&self) -> i32 {
+        self.x
+    }
+
+    #[inline]
+    fn y(&self) -> i32 {
+        self.y
+    }
+
+    #[inline]
+    fn z(&self) -> i32 {
+        self.z
+    }
+}
+
 pub trait IndexToNoisePos {
     fn at(&self, index: usize) -> impl NoisePos;
 }

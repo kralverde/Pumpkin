@@ -31,15 +31,18 @@ impl NoisePos for TestNoisePos {
     }
 }
 
+// This is a dummy value because we are not actually building chunk-specific functions
+static TEST_OPTIONS: ChunkNoiseFunctionBuilderOptions =
+    ChunkNoiseFunctionBuilderOptions::new(0, 0, 0, 0, 0, 0, 0);
+
 macro_rules! build_function {
-    ($name:expr) => {
+    ($name:expr) => {{
         ChunkNoiseFunction::new(
             &$name,
             ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-            // This is a dummy value because we are not actually building chunk-specific functions
-            &ChunkNoiseFunctionBuilderOptions::new(0, 0),
+            &TEST_OPTIONS,
         )
-    };
+    }};
 }
 
 macro_rules! sample_router_function {
