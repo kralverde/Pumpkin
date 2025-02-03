@@ -1,12 +1,19 @@
+use std::mem;
+
 use density_function::{
     spline::{Range, Spline, SplineValue},
     ChunkNoiseFunctionRange, NoisePos, ProtoChunkNoiseFunction,
     StaticDependentChunkNoiseFunctionComponent, StaticIndependentChunkNoiseFunctionComponent,
     StaticIndependentChunkNoiseFunctionComponentImpl, UniversalChunkNoiseFunctionComponent,
 };
+use enum_dispatch::enum_dispatch;
 
-use crate::noise_router::density_function_ast::{
-    BinaryData, BinaryOperation, RangeChoiceData, ShiftedNoiseData, WeirdScaledData,
+use crate::{
+    generation::noise::lerp3,
+    noise_router::density_function_ast::{
+        BinaryData, BinaryOperation, RangeChoiceData, ShiftedNoiseData, WeirdScaledData,
+        WrapperType,
+    },
 };
 
 use super::noise::{lerp, perlin::DoublePerlinNoiseSampler};
@@ -21,16 +28,19 @@ impl BinaryData {
         arg1_index: usize,
         arg2_index: usize,
         parent: &mut ChunkNoiseFunction,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> f64 {
-        let density_1 = parent.sample_index(arg1_index, pos);
+        let density_1 = parent.sample_index(arg1_index, pos, sample_options);
 
         match self.operation() {
-            BinaryOperation::Add => density_1 + parent.sample_index(arg2_index, pos),
+            BinaryOperation::Add => {
+                density_1 + parent.sample_index(arg2_index, pos, sample_options)
+            }
             BinaryOperation::Mul => {
                 if density_1 == 0.0 {
                     0.0
                 } else {
-                    density_1 * parent.sample_index(arg2_index, pos)
+                    density_1 * parent.sample_index(arg2_index, pos, sample_options)
                 }
             }
             BinaryOperation::Min => {
@@ -38,7 +48,7 @@ impl BinaryData {
                 if density_1 < min_2 {
                     density_1
                 } else {
-                    density_1.min(parent.sample_index(arg2_index, pos))
+                    density_1.min(parent.sample_index(arg2_index, pos, sample_options))
                 }
             }
             BinaryOperation::Max => {
@@ -46,7 +56,7 @@ impl BinaryData {
                 if density_1 > max_2 {
                     density_1
                 } else {
-                    density_1.max(parent.sample_index(arg2_index, pos))
+                    density_1.max(parent.sample_index(arg2_index, pos, sample_options))
                 }
             }
         }
@@ -54,6 +64,7 @@ impl BinaryData {
 }
 
 impl ShiftedNoiseData {
+    #[allow(clippy::too_many_arguments)]
     fn sample(
         &self,
         pos: &impl NoisePos,
@@ -62,10 +73,14 @@ impl ShiftedNoiseData {
         z_index: usize,
         sampler: &DoublePerlinNoiseSampler,
         parent: &mut ChunkNoiseFunction,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> f64 {
-        let translated_x = pos.x() as f64 * self.xz_scale() + parent.sample_index(x_index, pos);
-        let translated_y = pos.y() as f64 * self.y_scale() + parent.sample_index(y_index, pos);
-        let translated_z = pos.z() as f64 * self.xz_scale() + parent.sample_index(z_index, pos);
+        let translated_x =
+            pos.x() as f64 * self.xz_scale() + parent.sample_index(x_index, pos, sample_options);
+        let translated_y =
+            pos.y() as f64 * self.y_scale() + parent.sample_index(y_index, pos, sample_options);
+        let translated_z =
+            pos.z() as f64 * self.xz_scale() + parent.sample_index(z_index, pos, sample_options);
 
         sampler.sample(translated_x, translated_y, translated_z)
     }
@@ -78,8 +93,9 @@ impl WeirdScaledData {
         input_index: usize,
         sampler: &DoublePerlinNoiseSampler,
         parent: &mut ChunkNoiseFunction,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> f64 {
-        let density = parent.sample_index(input_index, pos);
+        let density = parent.sample_index(input_index, pos, sample_options);
         let scaled_density = self.mapper().scale(density);
         scaled_density
             * sampler
@@ -100,45 +116,64 @@ impl RangeChoiceData {
         when_in_index: usize,
         when_out_index: usize,
         parent: &mut ChunkNoiseFunction,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> f64 {
-        let density = parent.sample_index(input_index, pos);
+        let density = parent.sample_index(input_index, pos, sample_options);
         if density >= *self.min_inclusive() && density < *self.max_exclusive() {
-            parent.sample_index(when_in_index, pos)
+            parent.sample_index(when_in_index, pos, sample_options)
         } else {
-            parent.sample_index(when_out_index, pos)
+            parent.sample_index(when_out_index, pos, sample_options)
         }
     }
 }
 
 impl SplineValue {
-    fn sample(&self, pos: &impl NoisePos, parent: &mut ChunkNoiseFunction) -> f32 {
+    fn sample(
+        &self,
+        pos: &impl NoisePos,
+        parent: &mut ChunkNoiseFunction,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) -> f32 {
         match self {
             Self::Fixed(value) => *value,
-            Self::Spline(spline) => spline.sample_internal(pos, parent),
+            Self::Spline(spline) => spline.sample_internal(pos, parent, sample_options),
         }
     }
 }
 
 impl Spline {
-    fn sample(&self, pos: &impl NoisePos, parent: &mut ChunkNoiseFunction) -> f64 {
-        self.sample_internal(pos, parent) as f64
+    #[inline]
+    fn sample(
+        &self,
+        pos: &impl NoisePos,
+        parent: &mut ChunkNoiseFunction,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) -> f64 {
+        self.sample_internal(pos, parent, sample_options) as f64
     }
 
-    fn sample_internal(&self, pos: &impl NoisePos, parent: &mut ChunkNoiseFunction) -> f32 {
-        let location = parent.sample_index(self.input_index, pos) as f32;
+    fn sample_internal(
+        &self,
+        pos: &impl NoisePos,
+        parent: &mut ChunkNoiseFunction,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) -> f32 {
+        let location = parent.sample_index(self.input_index, pos, sample_options) as f32;
 
         match self.find_index_for_location(location) {
             Range::In(index) => {
                 if index == self.points.len() - 1 {
-                    let last_known_sample = self.points[index].value.sample(pos, parent);
+                    let last_known_sample =
+                        self.points[index].value.sample(pos, parent, sample_options);
                     self.points[index].sample_outside_range(location, last_known_sample)
                 } else {
                     let lower_point = &self.points[index];
                     let upper_point = &self.points[index + 1];
 
-                    let lower_value = lower_point.value.sample(pos, parent);
-                    let upper_value = upper_point.value.sample(pos, parent);
+                    let lower_value = lower_point.value.sample(pos, parent, sample_options);
+                    let upper_value = upper_point.value.sample(pos, parent, sample_options);
 
+                    // Use linear interpolation (-ish cuz of derivatives) to derivate a point between two points
                     let x_scale = (location - lower_point.location)
                         / (upper_point.location - lower_point.location);
                     let extrapolated_lower_value = lower_point.derivative
@@ -154,10 +189,175 @@ impl Spline {
                 }
             }
             Range::Below => {
-                let last_known_sample = self.points[0].value.sample(pos, parent);
+                let last_known_sample = self.points[0].value.sample(pos, parent, sample_options);
                 self.points[0].sample_outside_range(location, last_known_sample)
             }
         }
+    }
+}
+
+pub struct ChunkNoiseFunctionSampleOptions {
+    interpolating: bool,
+    populating_caches: bool,
+
+    // How many cells there are per dimension in the chunk. Cells are groups of blocks in a
+    // rectangular prism with a square base. Cells divide the chunk evenly.
+    vertical_cell_count: usize,
+    horizontal_cell_count: usize,
+
+    // Our relative position within the cell
+    cell_x_block_position: usize,
+    cell_y_block_position: usize,
+    cell_z_block_position: usize,
+
+    // Cell dimensions
+    horizontal_cell_block_count: usize,
+    vertical_cell_block_count: usize,
+}
+
+impl ChunkNoiseFunctionSampleOptions {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        interpolating: bool,
+        populating_caches: bool,
+        vertical_cell_count: usize,
+        horizontal_cell_count: usize,
+        cell_x_block_position: usize,
+        cell_y_block_position: usize,
+        cell_z_block_position: usize,
+        horizontal_cell_block_count: usize,
+        vertical_cell_block_count: usize,
+    ) -> Self {
+        Self {
+            interpolating,
+            populating_caches,
+            vertical_cell_count,
+            horizontal_cell_count,
+            cell_x_block_position,
+            cell_y_block_position,
+            cell_z_block_position,
+            horizontal_cell_block_count,
+            vertical_cell_block_count,
+        }
+    }
+}
+
+pub struct ChunkNoiseFunctionBuilderOptions {
+    // Different world settings have different sub-boxes within the chunk to interpolate across,
+    // smoothing the values
+    vertical_cell_count: usize,
+    horizontal_cell_count: usize,
+}
+
+impl ChunkNoiseFunctionBuilderOptions {
+    pub fn new(vertical_cell_count: usize, horizontal_cell_count: usize) -> Self {
+        Self {
+            vertical_cell_count,
+            horizontal_cell_count,
+        }
+    }
+}
+
+// These are chunk specific function components that are picked based on the wrapper type
+struct DensityInterpolator {
+    // What we are interpolating
+    input_index: usize,
+
+    // y-z plane buffers to be interpolated together, each of these values is that of the cell, not
+    // the block
+    start_buffer: Box<[f64]>,
+    end_buffer: Box<[f64]>,
+
+    first_pass: [f64; 8],
+    second_pass: [f64; 4],
+    third_pass: [f64; 2],
+    result: f64,
+
+    vertical_cell_count: usize,
+    min_value: f64,
+    max_value: f64,
+}
+
+impl ChunkNoiseFunctionRange for DensityInterpolator {
+    fn min(&self) -> f64 {
+        self.min_value
+    }
+
+    fn max(&self) -> f64 {
+        self.max_value
+    }
+}
+
+impl DensityInterpolator {
+    #[inline]
+    fn yz_to_buf_index(&self, cell_y_position: usize, cell_z_position: usize) -> usize {
+        cell_z_position * (self.vertical_cell_count + 1) + cell_y_position
+    }
+
+    fn new(
+        input_index: usize,
+        vertical_cell_count: usize,
+        horizontal_cell_count: usize,
+        min_value: f64,
+        max_value: f64,
+    ) -> Self {
+        // These are all dummy values to be populated when sampling values
+        Self {
+            input_index,
+            start_buffer: Vec::with_capacity(
+                (vertical_cell_count + 1) * (horizontal_cell_count + 1),
+            )
+            .into_boxed_slice(),
+            end_buffer: Vec::with_capacity((vertical_cell_count + 1) * (horizontal_cell_count + 1))
+                .into_boxed_slice(),
+            first_pass: Default::default(),
+            second_pass: Default::default(),
+            third_pass: Default::default(),
+            result: Default::default(),
+            vertical_cell_count,
+            min_value,
+            max_value,
+        }
+    }
+
+    fn on_sampled_cell_corners(&mut self, cell_y_position: usize, cell_z_position: usize) {
+        self.first_pass[0] =
+            self.start_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
+        self.first_pass[1] =
+            self.start_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position + 1)];
+        self.first_pass[4] =
+            self.end_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
+        self.first_pass[5] =
+            self.end_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
+        self.first_pass[2] =
+            self.start_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
+        self.first_pass[3] =
+            self.start_buffer[self.yz_to_buf_index(cell_y_position + 1, cell_z_position + 1)];
+        self.first_pass[6] =
+            self.end_buffer[self.yz_to_buf_index(cell_y_position + 1, cell_z_position)];
+        self.first_pass[7] =
+            self.end_buffer[self.yz_to_buf_index(cell_y_position + 1, cell_z_position + 1)];
+    }
+
+    fn interpolate_y(&mut self, delta: f64) {
+        self.second_pass[0] = lerp(delta, self.first_pass[0], self.first_pass[2]);
+        self.second_pass[2] = lerp(delta, self.first_pass[4], self.first_pass[6]);
+        self.second_pass[1] = lerp(delta, self.first_pass[1], self.first_pass[3]);
+        self.second_pass[3] = lerp(delta, self.first_pass[5], self.first_pass[7]);
+    }
+
+    fn interpolate_x(&mut self, delta: f64) {
+        self.third_pass[0] = lerp(delta, self.second_pass[0], self.second_pass[2]);
+        self.third_pass[1] = lerp(delta, self.second_pass[1], self.second_pass[3]);
+    }
+
+    fn interpolate_z(&mut self, delta: f64) {
+        self.result = lerp(delta, self.third_pass[0], self.third_pass[1]);
+    }
+
+    #[inline]
+    fn swap_buffers(&mut self) {
+        mem::swap(&mut self.start_buffer, &mut self.end_buffer);
     }
 }
 
@@ -169,19 +369,18 @@ pub struct ChunkNoiseFunction<'a> {
 }
 
 pub enum ChunkNoiseFunctionWrapperHandler {
-    Standard,
+    PopulateNoise,
+    External,
     #[cfg(test)]
     TestNoiseConfig,
 }
 
-#[cfg(test)]
 struct PassThrough {
     input_index: usize,
     min_value: f64,
     max_value: f64,
 }
 
-#[cfg(test)]
 impl ChunkNoiseFunctionRange for PassThrough {
     fn min(&self) -> f64 {
         self.min_value
@@ -196,6 +395,7 @@ impl<'a> ChunkNoiseFunction<'a> {
     pub fn new(
         base: &'a ProtoChunkNoiseFunction,
         wrapper_handler: ChunkNoiseFunctionWrapperHandler,
+        options: &ChunkNoiseFunctionBuilderOptions,
     ) -> Self {
         let mut components = Vec::with_capacity(base.components().len());
         base.components()
@@ -208,25 +408,56 @@ impl<'a> ChunkNoiseFunction<'a> {
                     components.push(ChunkNoiseFunctionComponent::StaticDependent(dependent));
                 }
                 // This case handles chunk specific components
-                UniversalChunkNoiseFunctionComponent::Wrapped(wrapped) => match wrapper_handler {
-                    #[cfg(test)]
-                    ChunkNoiseFunctionWrapperHandler::TestNoiseConfig => {
-                        // Due to our previous invariant with the proto-function, it is guaranteed
-                        // that the wrapped function is already on the stack
-                        let min_value = components[wrapped.input_index()].min();
-                        let max_value = components[wrapped.input_index()].max();
+                UniversalChunkNoiseFunctionComponent::Wrapped(wrapped) => {
+                    // Due to our previous invariant with the proto-function, it is guaranteed
+                    // that the wrapped function is already on the stack
+                    let min_value = components[wrapped.input_index()].min();
+                    let max_value = components[wrapped.input_index()].max();
 
-                        components.push(ChunkNoiseFunctionComponent::PassThrough(PassThrough {
-                            input_index: wrapped.input_index(),
-                            min_value,
-                            max_value,
-                        }));
+                    match &wrapper_handler {
+                        #[cfg(test)]
+                        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig => {
+                            components.push(ChunkNoiseFunctionComponent::PassThrough(
+                                PassThrough {
+                                    input_index: wrapped.input_index(),
+                                    min_value,
+                                    max_value,
+                                },
+                            ));
+                        }
+                        _ => match wrapped.wrapper_type() {
+                            WrapperType::Interpolated => {
+                                // Interpolation only occurs within the chunk noise sampler. The
+                                // multi-noise sampler does not interpolate
+                                if matches!(
+                                    wrapper_handler,
+                                    ChunkNoiseFunctionWrapperHandler::External
+                                ) {
+                                    components.push(ChunkNoiseFunctionComponent::PassThrough(
+                                        PassThrough {
+                                            input_index: wrapped.input_index(),
+                                            min_value,
+                                            max_value,
+                                        },
+                                    ));
+                                } else {
+                                    components.push(ChunkNoiseFunctionComponent::ChunkSpecific(
+                                        ChunkSpecificNoiseFunctionComponent::DensityInterpolator(
+                                            DensityInterpolator::new(
+                                                wrapped.input_index(),
+                                                options.vertical_cell_count,
+                                                options.horizontal_cell_count,
+                                                min_value,
+                                                max_value,
+                                            ),
+                                        ),
+                                    ));
+                                }
+                            }
+                            _ => todo!(),
+                        },
                     }
-                    ChunkNoiseFunctionWrapperHandler::Standard => {
-                        let _wrapped = wrapped;
-                        todo!()
-                    }
-                },
+                }
             });
 
         Self {
@@ -244,7 +475,12 @@ impl<'a> ChunkNoiseFunction<'a> {
         self.function_components[index].max()
     }
 
-    fn sample_index(&mut self, index: usize, pos: &impl NoisePos) -> f64 {
+    fn sample_index(
+        &mut self,
+        index: usize,
+        pos: &impl NoisePos,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) -> f64 {
         let component = &self.function_components[index];
         match component {
             ChunkNoiseFunctionComponent::StaticIndependent(static_independent) => {
@@ -256,18 +492,20 @@ impl<'a> ChunkNoiseFunction<'a> {
                     StaticDependentChunkNoiseFunctionComponent::Linear(linear) => {
                         let input_index = linear.arg_index;
                         let data = linear.data;
-                        let input_density = self.sample_index(input_index, pos);
+                        let input_density = self.sample_index(input_index, pos, sample_options);
                         data.apply_density(input_density)
                     }
                     StaticDependentChunkNoiseFunctionComponent::Binary(binary) => {
                         let arg1_index = binary.arg1_index;
                         let arg2_index = binary.arg2_index;
-                        binary.data.sample(pos, arg1_index, arg2_index, self)
+                        binary
+                            .data
+                            .sample(pos, arg1_index, arg2_index, self, sample_options)
                     }
                     StaticDependentChunkNoiseFunctionComponent::Unary(unary) => {
                         let input_index = unary.arg_index;
                         let data = unary.data;
-                        let input_density = self.sample_index(input_index, pos);
+                        let input_density = self.sample_index(input_index, pos, sample_options);
                         data.apply_density(input_density)
                     }
                     StaticDependentChunkNoiseFunctionComponent::ShiftedNoise(shifted_noise) => {
@@ -275,18 +513,26 @@ impl<'a> ChunkNoiseFunction<'a> {
                         let y_index = shifted_noise.y_index;
                         let z_index = shifted_noise.z_index;
                         let sampler = &shifted_noise.sampler;
-                        shifted_noise
-                            .data
-                            .sample(pos, x_index, y_index, z_index, sampler, self)
+                        shifted_noise.data.sample(
+                            pos,
+                            x_index,
+                            y_index,
+                            z_index,
+                            sampler,
+                            self,
+                            sample_options,
+                        )
                     }
                     StaticDependentChunkNoiseFunctionComponent::WeirdScaled(weird_scaled) => {
                         let input_index = weird_scaled.input_index;
                         let sampler = &weird_scaled.sampler;
-                        weird_scaled.data.sample(pos, input_index, sampler, self)
+                        weird_scaled
+                            .data
+                            .sample(pos, input_index, sampler, self, sample_options)
                     }
                     StaticDependentChunkNoiseFunctionComponent::Clamp(clamp) => {
                         let input_index = clamp.input_index;
-                        let input_density = self.sample_index(input_index, pos);
+                        let input_density = self.sample_index(input_index, pos, sample_options);
                         clamp.data.apply_density(input_density)
                     }
                     StaticDependentChunkNoiseFunctionComponent::RangeChoice(range_choice) => {
@@ -299,30 +545,75 @@ impl<'a> ChunkNoiseFunction<'a> {
                             when_in_index,
                             when_out_index,
                             self,
+                            sample_options,
                         )
                     }
                     StaticDependentChunkNoiseFunctionComponent::Spline(spline_function) => {
-                        spline_function.spline.sample(pos, self)
+                        spline_function.spline.sample(pos, self, sample_options)
                     }
                 }
             }
-            #[cfg(test)]
+            ChunkNoiseFunctionComponent::ChunkSpecific(chunk_specific) => match chunk_specific {
+                ChunkSpecificNoiseFunctionComponent::DensityInterpolator(density_interpolator) => {
+                    #[cfg(debug_assertions)]
+                    assert!(sample_options.interpolating);
+
+                    if sample_options.populating_caches {
+                        // This is just what `DensityInterpolator::interpolate_x`, `DensityInterpolator::interpolate_y`, and `DensityInterpolator::interpolate_z` are doing, but all at once instead of in the populate noise loop
+                        lerp3(
+                            sample_options.cell_x_block_position as f64
+                                / sample_options.horizontal_cell_block_count as f64,
+                            sample_options.cell_z_block_position as f64
+                                / sample_options.vertical_cell_block_count as f64,
+                            sample_options.cell_z_block_position as f64
+                                / sample_options.horizontal_cell_block_count as f64,
+                            density_interpolator.first_pass[0],
+                            density_interpolator.first_pass[4],
+                            density_interpolator.first_pass[2],
+                            density_interpolator.first_pass[6],
+                            density_interpolator.first_pass[1],
+                            density_interpolator.first_pass[5],
+                            density_interpolator.first_pass[3],
+                            density_interpolator.first_pass[7],
+                        )
+                    } else {
+                        density_interpolator.result
+                    }
+                }
+            },
             ChunkNoiseFunctionComponent::PassThrough(pass_through) => {
-                self.sample_index(pass_through.input_index, pos)
+                self.sample_index(pass_through.input_index, pos, sample_options)
             }
         }
     }
 
-    pub fn sample(&mut self, pos: &impl NoisePos) -> f64 {
+    pub fn sample(
+        &mut self,
+        pos: &impl NoisePos,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) -> f64 {
         let last_index = self.function_components.len() - 1;
-        self.sample_index(last_index, pos)
+        self.sample_index(last_index, pos, sample_options)
     }
+
+    #[cfg(test)]
+    pub fn sample_test(&mut self, pos: &impl NoisePos) -> f64 {
+        // These options are not actually used because we never build chunk-specific components in
+        // the config tests
+        let dummy_options = ChunkNoiseFunctionSampleOptions::new(false, false, 0, 0, 0, 0, 0, 0, 0);
+        self.sample(pos, &dummy_options)
+    }
+}
+
+#[enum_dispatch(ChunkNoiseFunctionRange)]
+enum ChunkSpecificNoiseFunctionComponent {
+    DensityInterpolator(DensityInterpolator),
 }
 
 enum ChunkNoiseFunctionComponent<'a> {
     StaticIndependent(&'a StaticIndependentChunkNoiseFunctionComponent<'a>),
     StaticDependent(&'a StaticDependentChunkNoiseFunctionComponent<'a>),
-    #[cfg(test)]
+    ChunkSpecific(ChunkSpecificNoiseFunctionComponent),
     PassThrough(PassThrough),
 }
 
@@ -332,7 +623,7 @@ impl ChunkNoiseFunctionRange for ChunkNoiseFunctionComponent<'_> {
         match self {
             Self::StaticDependent(dependent) => dependent.min(),
             Self::StaticIndependent(independent) => independent.min(),
-            #[cfg(test)]
+            Self::ChunkSpecific(chunk_specific) => chunk_specific.min(),
             Self::PassThrough(pass_through) => pass_through.min(),
         }
     }
@@ -342,7 +633,7 @@ impl ChunkNoiseFunctionRange for ChunkNoiseFunctionComponent<'_> {
         match self {
             Self::StaticDependent(dependent) => dependent.max(),
             Self::StaticIndependent(independent) => independent.max(),
-            #[cfg(test)]
+            Self::ChunkSpecific(chunk_specific) => chunk_specific.max(),
             Self::PassThrough(pass_through) => pass_through.max(),
         }
     }

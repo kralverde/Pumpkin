@@ -8,7 +8,9 @@ use crate::noise_router::density_function_ast::DensityFunctionRepr;
 use crate::noise_router::NOISE_ROUTER_ASTS;
 use crate::read_data_from_file;
 
-use super::super::{ChunkNoiseFunction, ChunkNoiseFunctionWrapperHandler};
+use super::super::{
+    ChunkNoiseFunction, ChunkNoiseFunctionBuilderOptions, ChunkNoiseFunctionWrapperHandler,
+};
 use super::{NoisePos, ProtoChunkNoiseFunction};
 
 struct TestNoisePos {
@@ -29,15 +31,23 @@ impl NoisePos for TestNoisePos {
     }
 }
 
+macro_rules! build_function {
+    ($name:expr) => {
+        ChunkNoiseFunction::new(
+            &$name,
+            ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
+            // This is a dummy value because we are not actually building chunk-specific functions
+            &ChunkNoiseFunctionBuilderOptions::new(0, 0),
+        )
+    };
+}
+
 macro_rules! sample_router_function {
     ($name:ident, $seed: expr, $pos: expr) => {{
         let function_ast = NOISE_ROUTER_ASTS.overworld().$name();
         let proto_function = ProtoChunkNoiseFunction::generate(function_ast, $seed);
-        let mut function = ChunkNoiseFunction::new(
-            &proto_function,
-            ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-        );
-        function.sample(&$pos)
+        let mut function = build_function!(proto_function);
+        function.sample_test(&$pos)
     }};
 }
 
@@ -507,15 +517,12 @@ fn test_config_final_density() {
 
     let function_ast = NOISE_ROUTER_ASTS.overworld().final_density();
     let proto_function = ProtoChunkNoiseFunction::generate(function_ast, 0);
-    let mut function = ChunkNoiseFunction::new(
-        &proto_function,
-        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-    );
+    let mut function = build_function!(proto_function);
 
     // This is a lot of data it iter over, one two skip a few done
     for (x, y, z, sample) in expected_data.into_iter().step_by(5) {
         let pos = TestNoisePos { x, y, z };
-        assert_eq_delta!(function.sample(&pos), sample, f64::EPSILON);
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
     }
 }
 
@@ -533,6 +540,16 @@ struct DensityFunctionReprs {
     spaghetti_roughness: DensityFunctionRepr,
     #[serde(rename = "overworld/caves/entrances")]
     cave_entrances: DensityFunctionRepr,
+    #[serde(rename = "overworld/caves/spaghetti_2d")]
+    spaghetti_2d: DensityFunctionRepr,
+    #[serde(rename = "overworld/offset")]
+    offset: DensityFunctionRepr,
+    #[serde(rename = "overworld/depth")]
+    depth: DensityFunctionRepr,
+    #[serde(rename = "overworld/factor")]
+    factor: DensityFunctionRepr,
+    #[serde(rename = "overworld/sloped_cheese")]
+    sloped_cheese: DensityFunctionRepr,
 }
 
 macro_rules! read_data_from_file_json5 {
@@ -557,19 +574,55 @@ static DENSITY_FUNCTION_REPRS: LazyLock<DensityFunctionReprs> =
     LazyLock::new(|| read_data_from_file_json5!("../../../../assets/density_function_tests.json"));
 
 #[test]
-fn test_base_3d_noise() {
+fn test_base_sloped_cheese() {
     let proto_function =
-        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.base_3d_noise, 0);
-    let mut function = ChunkNoiseFunction::new(
-        &proto_function,
-        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-    );
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.sloped_cheese, 0);
+    let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
-        read_data_from_file!("../../../../assets/converted_3d_overworld_7_4.json");
+        read_data_from_file!("../../../../assets/converted_sloped_cheese_7_4.json");
     for (x, y, z, sample) in expected_data {
         let pos = TestNoisePos { x, y, z };
-        assert_eq_delta!(function.sample(&pos), sample, f64::EPSILON);
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
+    }
+}
+
+#[test]
+fn test_base_factor() {
+    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.factor, 0);
+    let mut function = build_function!(proto_function);
+
+    let expected_data: Vec<(i32, i32, i32, f64)> =
+        read_data_from_file!("../../../../assets/converted_factor_7_4.json");
+    for (x, y, z, sample) in expected_data {
+        let pos = TestNoisePos { x, y, z };
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
+    }
+}
+
+#[test]
+fn test_base_depth() {
+    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.depth, 0);
+    let mut function = build_function!(proto_function);
+
+    let expected_data: Vec<(i32, i32, i32, f64)> =
+        read_data_from_file!("../../../../assets/converted_depth_7_4.json");
+    for (x, y, z, sample) in expected_data {
+        let pos = TestNoisePos { x, y, z };
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
+    }
+}
+
+#[test]
+fn test_base_offset() {
+    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.offset, 0);
+    let mut function = build_function!(proto_function);
+
+    let expected_data: Vec<(i32, i32, i32, f64)> =
+        read_data_from_file!("../../../../assets/converted_offset_7_4.json");
+    for (x, y, z, sample) in expected_data {
+        let pos = TestNoisePos { x, y, z };
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
     }
 }
 
@@ -577,16 +630,27 @@ fn test_base_3d_noise() {
 fn test_base_cave_entrances() {
     let proto_function =
         ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_entrances, 0);
-    let mut function = ChunkNoiseFunction::new(
-        &proto_function,
-        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-    );
+    let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
         read_data_from_file!("../../../../assets/converted_cave_entrances_overworld_7_4.json");
     for (x, y, z, sample) in expected_data {
         let pos = TestNoisePos { x, y, z };
-        assert_eq_delta!(function.sample(&pos), sample, f64::EPSILON);
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
+    }
+}
+
+#[test]
+fn test_base_3d_noise() {
+    let proto_function =
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.base_3d_noise, 0);
+    let mut function = build_function!(proto_function);
+
+    let expected_data: Vec<(i32, i32, i32, f64)> =
+        read_data_from_file!("../../../../assets/converted_3d_overworld_7_4.json");
+    for (x, y, z, sample) in expected_data {
+        let pos = TestNoisePos { x, y, z };
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
     }
 }
 
@@ -594,49 +658,40 @@ fn test_base_cave_entrances() {
 fn test_base_spahetti_roughness() {
     let proto_function =
         ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.spaghetti_roughness, 0);
-    let mut function = ChunkNoiseFunction::new(
-        &proto_function,
-        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-    );
+    let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> = read_data_from_file!(
         "../../../../assets/converted_cave_spaghetti_rough_overworld_7_4.json"
     );
     for (x, y, z, sample) in expected_data {
         let pos = TestNoisePos { x, y, z };
-        assert_eq_delta!(function.sample(&pos), sample, f64::EPSILON);
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
     }
 }
 
 #[test]
 fn test_base_cave_noodle() {
     let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_noodle, 0);
-    let mut function = ChunkNoiseFunction::new(
-        &proto_function,
-        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-    );
+    let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
         read_data_from_file!("../../../../assets/converted_cave_noodle_7_4.json");
     for (x, y, z, sample) in expected_data {
         let pos = TestNoisePos { x, y, z };
-        assert_eq_delta!(function.sample(&pos), sample, f64::EPSILON);
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
     }
 }
 
 #[test]
 fn test_base_cave_pillars() {
     let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_pillars, 0);
-    let mut function = ChunkNoiseFunction::new(
-        &proto_function,
-        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-    );
+    let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
         read_data_from_file!("../../../../assets/converted_cave_pillar_7_4.json");
     for (x, y, z, sample) in expected_data {
         let pos = TestNoisePos { x, y, z };
-        assert_eq_delta!(function.sample(&pos), sample, f64::EPSILON);
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
     }
 }
 
@@ -644,15 +699,12 @@ fn test_base_cave_pillars() {
 fn test_base_spaghetti_2d_thickness() {
     let proto_function =
         ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.spaghetti_2d_thickness, 0);
-    let mut function = ChunkNoiseFunction::new(
-        &proto_function,
-        ChunkNoiseFunctionWrapperHandler::TestNoiseConfig,
-    );
+    let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
         read_data_from_file!("../../../../assets/converted_cave_spaghetti_2d_thicc_7_4.json");
     for (x, y, z, sample) in expected_data {
         let pos = TestNoisePos { x, y, z };
-        assert_eq_delta!(function.sample(&pos), sample, f64::EPSILON);
+        assert_eq_delta!(function.sample_test(&pos), sample, f64::EPSILON);
     }
 }
