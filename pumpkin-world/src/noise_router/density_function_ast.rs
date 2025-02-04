@@ -107,6 +107,7 @@ pub enum WrapperType {
     CacheFlat,
     Cache2D,
     CacheOnce,
+    CellCache,
 }
 
 #[derive(Deserialize, Getters)]

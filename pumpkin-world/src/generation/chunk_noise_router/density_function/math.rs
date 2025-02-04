@@ -17,10 +17,12 @@ impl Constant {
 }
 
 impl ChunkNoiseFunctionRange for Constant {
+    #[inline]
     fn min(&self) -> f64 {
         self.value
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.value
     }
@@ -43,10 +45,12 @@ pub struct Linear<'a> {
 }
 
 impl ChunkNoiseFunctionRange for Linear<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         *self.data.min_value()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         *self.data.max_value()
     }
@@ -66,10 +70,12 @@ pub struct Binary<'a> {
 }
 
 impl ChunkNoiseFunctionRange for Binary<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         *self.data.min_value()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         *self.data.max_value()
     }
@@ -92,10 +98,12 @@ pub struct Unary<'a> {
 }
 
 impl ChunkNoiseFunctionRange for Unary<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         *self.data.min_value()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         *self.data.max_value()
     }

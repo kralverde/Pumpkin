@@ -26,10 +26,12 @@ impl<'a> Noise<'a> {
 }
 
 impl ChunkNoiseFunctionRange for Noise<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         -self.max()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.sampler.max_value()
     }
@@ -61,10 +63,12 @@ impl ShiftA {
 }
 
 impl ChunkNoiseFunctionRange for ShiftA {
+    #[inline]
     fn min(&self) -> f64 {
         -self.max()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.sampler.max_value() * 4.0
     }
@@ -87,10 +91,12 @@ impl ShiftB {
 }
 
 impl ChunkNoiseFunctionRange for ShiftB {
+    #[inline]
     fn min(&self) -> f64 {
         -self.max()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.sampler.max_value() * 4.0
     }
@@ -111,10 +117,12 @@ pub struct ShiftedNoise<'a> {
 }
 
 impl ChunkNoiseFunctionRange for ShiftedNoise<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         -self.max()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.sampler.max_value()
     }
@@ -182,10 +190,12 @@ impl<'a> InterpolatedNoiseSampler<'a> {
 }
 
 impl ChunkNoiseFunctionRange for InterpolatedNoiseSampler<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         -self.max()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         *self.data.max_value()
     }

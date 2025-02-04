@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, rc::Rc};
 
 use density_function::{
     spline::{Range, Spline, SplineValue},
@@ -8,6 +8,7 @@ use density_function::{
     UniversalChunkNoiseFunctionComponent,
 };
 use enum_dispatch::enum_dispatch;
+use pumpkin_util::math::vector2::Vector2;
 
 use crate::{
     generation::noise::lerp3,
@@ -20,6 +21,7 @@ use crate::{
 use super::{
     biome_coords,
     noise::{lerp, perlin::DoublePerlinNoiseSampler},
+    positions::chunk_pos,
 };
 
 mod density_function;
@@ -30,7 +32,7 @@ fn sample_component_stack(
     pos: &impl NoisePos,
     sample_options: &ChunkNoiseFunctionSampleOptions,
 ) -> f64 {
-    let component = &component_stack[index];
+    let component = &mut component_stack[index];
     match component {
         ChunkNoiseFunctionComponent::StaticIndependent(static_independent) => {
             static_independent.sample(pos)
@@ -108,17 +110,14 @@ fn sample_component_stack(
                 #[cfg(debug_assertions)]
                 assert!(sample_options.interpolating);
 
-                match sample_options.populating_caches {
-                    IsPopulatingCaches::Yes {
-                        cell_x_block_position,
-                        cell_y_block_position,
-                        cell_z_block_position,
-                        horizontal_cell_block_count,
-                        vertical_cell_block_count,
-                    } => lerp3(
-                        cell_x_block_position as f64 / horizontal_cell_block_count as f64,
-                        cell_y_block_position as f64 / vertical_cell_block_count as f64,
-                        cell_z_block_position as f64 / horizontal_cell_block_count as f64,
+                if sample_options.populating_caches {
+                    lerp3(
+                        sample_options.cell_x_block_position as f64
+                            / sample_options.horizontal_cell_block_count as f64,
+                        sample_options.cell_y_block_position as f64
+                            / sample_options.vertical_cell_block_count as f64,
+                        sample_options.cell_z_block_position as f64
+                            / sample_options.horizontal_cell_block_count as f64,
                         density_interpolator.first_pass[0],
                         density_interpolator.first_pass[4],
                         density_interpolator.first_pass[2],
@@ -127,8 +126,9 @@ fn sample_component_stack(
                         density_interpolator.first_pass[5],
                         density_interpolator.first_pass[3],
                         density_interpolator.first_pass[7],
-                    ),
-                    IsPopulatingCaches::No => density_interpolator.result,
+                    )
+                } else {
+                    density_interpolator.result
                 }
             }
             ChunkSpecificNoiseFunctionComponent::FlatCache(flat_cache) => {
@@ -147,13 +147,76 @@ fn sample_component_stack(
 
                 flat_cache.cache[sample_index]
             }
+            ChunkSpecificNoiseFunctionComponent::Cache2D(cache_2d) => {
+                let packed_column = chunk_pos::packed(&Vector2::new(pos.x(), pos.z()));
+                if packed_column == cache_2d.last_sample_column {
+                    cache_2d.last_sample_result
+                } else {
+                    let mut cache_2d = cache_2d.clone();
+                    let result = sample_component_stack(
+                        component_stack,
+                        cache_2d.input_index,
+                        pos,
+                        sample_options,
+                    );
+                    cache_2d.last_sample_column = packed_column;
+                    cache_2d.last_sample_result = result;
+
+                    // We need to re-write the struct instead of a mutable reference to parameters because of mutability
+                    // rules
+                    component_stack[index] = ChunkNoiseFunctionComponent::ChunkSpecific(
+                        ChunkSpecificNoiseFunctionComponent::Cache2D(cache_2d),
+                    );
+
+                    result
+                }
+            }
+            ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once) => {
+                if let Some(cache) = &cache_once.cache {
+                    if cache_once.cache_fill_unique_id == sample_options.cache_fill_unique_id {
+                        return cache[sample_options.index];
+                    }
+                }
+
+                if cache_once.cache_result_unique_id == sample_options.cache_result_unique_id {
+                    cache_once.last_sample_result
+                } else {
+                    let mut cache_once = cache_once.clone();
+                    let result = sample_component_stack(
+                        component_stack,
+                        cache_once.input_index,
+                        pos,
+                        sample_options,
+                    );
+                    cache_once.cache_result_unique_id = sample_options.cache_result_unique_id;
+                    cache_once.last_sample_result = result;
+                    // We need to re-write the struct instead of a mutable reference to parameters because of mutability
+                    // rules
+                    component_stack[index] = ChunkNoiseFunctionComponent::ChunkSpecific(
+                        ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once),
+                    );
+                    result
+                }
+            }
+            ChunkSpecificNoiseFunctionComponent::CellCache(cell_cache) => {
+                #[cfg(debug_assertions)]
+                assert!(sample_options.interpolating);
+
+                let index = ((sample_options.vertical_cell_block_count
+                    - 1
+                    - sample_options.cell_y_block_position)
+                    * sample_options.horizontal_cell_block_count
+                    + sample_options.cell_x_block_position)
+                    * sample_options.horizontal_cell_block_count
+                    + sample_options.cell_z_block_position;
+
+                cell_cache.cache[index]
+            }
         },
-        ChunkNoiseFunctionComponent::PassThrough(pass_through) => sample_component_stack(
-            component_stack,
-            pass_through.input_index,
-            pos,
-            sample_options,
-        ),
+        ChunkNoiseFunctionComponent::PassThrough(pass_through) => {
+            let defered_index = pass_through.input_index;
+            sample_component_stack(component_stack, defered_index, pos, sample_options)
+        }
     }
 }
 
@@ -356,43 +419,60 @@ impl Spline {
     }
 }
 
-pub enum IsPopulatingCaches {
-    Yes {
-        // Our relative position within the cell
-        cell_x_block_position: usize,
-        cell_y_block_position: usize,
-        cell_z_block_position: usize,
-
-        // Number of blocks per cell per axis
-        horizontal_cell_block_count: usize,
-        vertical_cell_block_count: usize,
-    },
-    No,
-}
-
 pub struct ChunkNoiseFunctionSampleOptions {
     interpolating: bool,
-    populating_caches: IsPopulatingCaches,
+    populating_caches: bool,
+
+    // Our relative position within the cell
+    cell_x_block_position: usize,
+    cell_y_block_position: usize,
+    cell_z_block_position: usize,
+
+    // Number of blocks per cell per axis
+    horizontal_cell_block_count: usize,
+    vertical_cell_block_count: usize,
 
     // The biome coords of this chunk
     start_biome_x: i32,
     start_biome_z: i32,
+
+    // Global IDs for the `CacheOnce` wrapper
+    cache_result_unique_id: u64,
+    cache_fill_unique_id: u64,
+
+    // The current index of a slice being filled by the `fill` function
+    index: usize,
 }
 
 impl ChunkNoiseFunctionSampleOptions {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         interpolating: bool,
-        populating_caches: IsPopulatingCaches,
-
+        populating_caches: bool,
         start_biome_x: i32,
         start_biome_z: i32,
+        cell_x_block_position: usize,
+        cell_y_block_position: usize,
+        cell_z_block_position: usize,
+        horizontal_cell_block_count: usize,
+        vertical_cell_block_count: usize,
+        cache_result_unique_id: u64,
+        cache_fill_unique_id: u64,
+        index: usize,
     ) -> Self {
         Self {
             interpolating,
             populating_caches,
+            cell_x_block_position,
+            cell_y_block_position,
+            cell_z_block_position,
+            horizontal_cell_block_count,
+            vertical_cell_block_count,
             start_biome_x,
             start_biome_z,
+            cache_result_unique_id,
+            cache_fill_unique_id,
+            index,
         }
     }
 }
@@ -457,10 +537,12 @@ struct DensityInterpolator {
 }
 
 impl ChunkNoiseFunctionRange for DensityInterpolator {
+    #[inline]
     fn min(&self) -> f64 {
         self.min_value
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.max_value
     }
@@ -469,23 +551,30 @@ impl ChunkNoiseFunctionRange for DensityInterpolator {
 impl DensityInterpolator {
     fn new(
         input_index: usize,
-        vertical_cell_count: usize,
-        horizontal_cell_count: usize,
         min_value: f64,
         max_value: f64,
+        builder_options: &ChunkNoiseFunctionBuilderOptions,
     ) -> Self {
         // These are all dummy values to be populated when sampling values
         Self {
             input_index,
-            start_buffer: vec![0.0; (vertical_cell_count + 1) * (horizontal_cell_count + 1)]
-                .into_boxed_slice(),
-            end_buffer: vec![0.0; (vertical_cell_count + 1) * (horizontal_cell_count + 1)]
-                .into_boxed_slice(),
+            start_buffer: vec![
+                0.0;
+                (builder_options.vertical_cell_count + 1)
+                    * (builder_options.horizontal_cell_count + 1)
+            ]
+            .into_boxed_slice(),
+            end_buffer: vec![
+                0.0;
+                (builder_options.vertical_cell_count + 1)
+                    * (builder_options.horizontal_cell_count + 1)
+            ]
+            .into_boxed_slice(),
             first_pass: Default::default(),
             second_pass: Default::default(),
             third_pass: Default::default(),
             result: Default::default(),
-            vertical_cell_count,
+            vertical_cell_count: builder_options.vertical_cell_count,
             min_value,
             max_value,
         }
@@ -564,15 +653,19 @@ impl ChunkNoiseFunctionRange for FlatCache {
 impl FlatCache {
     fn new(
         input_index: usize,
-        horizontal_biome_end: usize,
         min_value: f64,
         max_value: f64,
+        builder_options: &ChunkNoiseFunctionBuilderOptions,
     ) -> Self {
         Self {
             input_index,
-            cache: vec![0.0; (horizontal_biome_end + 1) * (horizontal_biome_end + 1)]
-                .into_boxed_slice(),
-            horizontal_biome_end,
+            cache: vec![
+                0.0;
+                (builder_options.horizontal_biome_end + 1)
+                    * (builder_options.horizontal_biome_end + 1)
+            ]
+            .into_boxed_slice(),
+            horizontal_biome_end: builder_options.horizontal_biome_end,
             min_value,
             max_value,
         }
@@ -581,6 +674,125 @@ impl FlatCache {
     #[inline]
     fn xz_to_index_const(&self, biome_x_position: usize, biome_z_position: usize) -> usize {
         biome_x_position * (self.horizontal_biome_end + 1) + biome_z_position
+    }
+}
+
+#[derive(Clone)]
+struct Cache2D {
+    input_index: usize,
+    last_sample_column: u64,
+    last_sample_result: f64,
+
+    min_value: f64,
+    max_value: f64,
+}
+
+impl ChunkNoiseFunctionRange for Cache2D {
+    #[inline]
+    fn min(&self) -> f64 {
+        self.min_value
+    }
+
+    #[inline]
+    fn max(&self) -> f64 {
+        self.max_value
+    }
+}
+
+impl Cache2D {
+    fn new(input_index: usize, min_value: f64, max_value: f64) -> Self {
+        Self {
+            input_index,
+            // I know this is because theres is definately world coords that are this marker, but this
+            // is how vanilla does it, so I'm going to for pairity
+            last_sample_column: chunk_pos::MARKER,
+            last_sample_result: Default::default(),
+            min_value,
+            max_value,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CacheOnce {
+    input_index: usize,
+    cache_result_unique_id: u64,
+    cache_fill_unique_id: u64,
+    last_sample_result: f64,
+
+    // Use an Rc instead of a box so we can clone this without duplicating the cache
+    cache: Option<Rc<[f64]>>,
+
+    min_value: f64,
+    max_value: f64,
+}
+
+impl ChunkNoiseFunctionRange for CacheOnce {
+    #[inline]
+    fn min(&self) -> f64 {
+        self.min_value
+    }
+
+    #[inline]
+    fn max(&self) -> f64 {
+        self.max_value
+    }
+}
+
+impl CacheOnce {
+    fn new(input_index: usize, min_value: f64, max_value: f64) -> Self {
+        Self {
+            input_index,
+            // Make these max, just to be different from the overall default of 0
+            cache_result_unique_id: u64::MAX,
+            cache_fill_unique_id: u64::MAX,
+            last_sample_result: Default::default(),
+            cache: None,
+            min_value,
+            max_value,
+        }
+    }
+}
+
+struct CellCache {
+    input_index: usize,
+    cache: Box<[f64]>,
+
+    min_value: f64,
+    max_value: f64,
+}
+
+impl ChunkNoiseFunctionRange for CellCache {
+    #[inline]
+    fn min(&self) -> f64 {
+        self.min_value
+    }
+
+    #[inline]
+    fn max(&self) -> f64 {
+        self.max_value
+    }
+}
+
+impl CellCache {
+    fn new(
+        input_index: usize,
+        min_value: f64,
+        max_value: f64,
+        build_options: &ChunkNoiseFunctionBuilderOptions,
+    ) -> Self {
+        Self {
+            input_index,
+            cache: vec![
+                0.0;
+                build_options.horizontal_cell_block_count
+                    * build_options.horizontal_cell_block_count
+                    * build_options.vertical_cell_block_count
+            ]
+            .into_boxed_slice(),
+            min_value,
+            max_value,
+        }
     }
 }
 
@@ -606,10 +818,12 @@ struct PassThrough {
 }
 
 impl ChunkNoiseFunctionRange for PassThrough {
+    #[inline]
     fn min(&self) -> f64 {
         self.min_value
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.max_value
     }
@@ -669,10 +883,9 @@ impl<'a> ChunkNoiseFunction<'a> {
                                         ChunkSpecificNoiseFunctionComponent::DensityInterpolator(
                                             DensityInterpolator::new(
                                                 wrapped.input_index(),
-                                                options.vertical_cell_count,
-                                                options.horizontal_cell_count,
                                                 min_value,
                                                 max_value,
+                                                options,
                                             ),
                                         ),
                                     ));
@@ -681,9 +894,9 @@ impl<'a> ChunkNoiseFunction<'a> {
                             WrapperType::CacheFlat => {
                                 let mut flat_cache = FlatCache::new(
                                     wrapped.input_index(),
-                                    options.horizontal_biome_end,
                                     min_value,
                                     max_value,
+                                    options,
                                 );
 
                                 for biome_x_position in 0..options.horizontal_biome_end {
@@ -705,9 +918,17 @@ impl<'a> ChunkNoiseFunction<'a> {
                                         );
                                         let options = ChunkNoiseFunctionSampleOptions::new(
                                             false,
-                                            IsPopulatingCaches::No,
+                                            false,
                                             options.start_biome_x,
                                             options.start_biome_x,
+                                            0,
+                                            0,
+                                            0,
+                                            0,
+                                            0,
+                                            0,
+                                            0,
+                                            0,
                                         );
 
                                         // Due to our stack invariant, what is on the stack is a
@@ -728,7 +949,34 @@ impl<'a> ChunkNoiseFunction<'a> {
                                     ChunkSpecificNoiseFunctionComponent::FlatCache(flat_cache),
                                 ));
                             }
-                            _ => todo!(),
+                            WrapperType::Cache2D => {
+                                components.push(ChunkNoiseFunctionComponent::ChunkSpecific(
+                                    ChunkSpecificNoiseFunctionComponent::Cache2D(Cache2D::new(
+                                        wrapped.input_index(),
+                                        min_value,
+                                        max_value,
+                                    )),
+                                ));
+                            }
+                            WrapperType::CacheOnce => {
+                                components.push(ChunkNoiseFunctionComponent::ChunkSpecific(
+                                    ChunkSpecificNoiseFunctionComponent::CacheOnce(CacheOnce::new(
+                                        wrapped.input_index(),
+                                        min_value,
+                                        max_value,
+                                    )),
+                                ));
+                            }
+                            WrapperType::CellCache => {
+                                components.push(ChunkNoiseFunctionComponent::ChunkSpecific(
+                                    ChunkSpecificNoiseFunctionComponent::CellCache(CellCache::new(
+                                        wrapped.input_index(),
+                                        min_value,
+                                        max_value,
+                                        options,
+                                    )),
+                                ));
+                            }
                         },
                     }
                 }
@@ -750,6 +998,7 @@ impl<'a> ChunkNoiseFunction<'a> {
         sample_component_stack(&mut self.function_components, index, pos, sample_options)
     }
 
+    #[inline]
     pub fn sample(
         &mut self,
         pos: &impl NoisePos,
@@ -764,7 +1013,7 @@ impl<'a> ChunkNoiseFunction<'a> {
         // These options are not actually used because we never build chunk-specific components in
         // the config tests
         let dummy_options =
-            ChunkNoiseFunctionSampleOptions::new(false, IsPopulatingCaches::No, 0, 0);
+            ChunkNoiseFunctionSampleOptions::new(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         self.sample(pos, &dummy_options)
     }
 }
@@ -773,6 +1022,9 @@ impl<'a> ChunkNoiseFunction<'a> {
 enum ChunkSpecificNoiseFunctionComponent {
     DensityInterpolator(DensityInterpolator),
     FlatCache(FlatCache),
+    Cache2D(Cache2D),
+    CacheOnce(CacheOnce),
+    CellCache(CellCache),
 }
 
 enum ChunkNoiseFunctionComponent<'a> {

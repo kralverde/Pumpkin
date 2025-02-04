@@ -89,10 +89,12 @@ impl<'a> SplineFunction<'a> {
 }
 
 impl ChunkNoiseFunctionRange for SplineFunction<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         *self.data.min_value()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         *self.data.max_value()
     }

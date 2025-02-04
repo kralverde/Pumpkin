@@ -61,10 +61,12 @@ impl EndIsland {
 
 // These values are hardcoded from java
 impl ChunkNoiseFunctionRange for EndIsland {
+    #[inline]
     fn min(&self) -> f64 {
         -0.84375
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         0.5625
     }
@@ -97,10 +99,12 @@ impl<'a> WeirdScaled<'a> {
 }
 
 impl ChunkNoiseFunctionRange for WeirdScaled<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         -self.max()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.sampler.max_value() * self.data.mapper().max_multiplier()
     }
@@ -117,10 +121,12 @@ impl<'a> ClampedYGradient<'a> {
 }
 
 impl ChunkNoiseFunctionRange for ClampedYGradient<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         self.data.from_value().min(*self.data.to_value())
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.data.from_value().max(*self.data.to_value())
     }
@@ -150,10 +156,12 @@ impl<'a> Clamp<'a> {
 }
 
 impl ChunkNoiseFunctionRange for Clamp<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         *self.data.min_value()
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         *self.data.max_value()
     }
@@ -189,10 +197,12 @@ impl<'a> RangeChoice<'a> {
 }
 
 impl ChunkNoiseFunctionRange for RangeChoice<'_> {
+    #[inline]
     fn min(&self) -> f64 {
         self.min_value
     }
 
+    #[inline]
     fn max(&self) -> f64 {
         self.max_value
     }
