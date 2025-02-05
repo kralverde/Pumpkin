@@ -1,8 +1,8 @@
-use std::{mem, rc::Rc};
+use std::mem;
 
 use density_function::{
     spline::{Range, Spline, SplineValue},
-    ChunkNoiseFunctionRange, NoisePos, ProtoChunkNoiseFunction,
+    ChunkNoiseFunctionRange, IndexToNoisePos, NoisePos, ProtoChunkNoiseFunction,
     StaticDependentChunkNoiseFunctionComponent, StaticIndependentChunkNoiseFunctionComponent,
     StaticIndependentChunkNoiseFunctionComponentImpl, UnblendedNoisePos,
     UniversalChunkNoiseFunctionComponent,
@@ -172,16 +172,14 @@ fn sample_component_stack(
                 }
             }
             ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once) => {
-                if let Some(cache) = &cache_once.cache {
-                    if cache_once.cache_fill_unique_id == sample_options.cache_fill_unique_id {
-                        return cache[sample_options.index];
-                    }
+                if cache_once.cache_fill_unique_id == sample_options.cache_fill_unique_id {
+                    return cache_once.cache[sample_options.index];
                 }
 
                 if cache_once.cache_result_unique_id == sample_options.cache_result_unique_id {
                     cache_once.last_sample_result
                 } else {
-                    let mut cache_once = cache_once.clone();
+                    let mut cache_once = cache_once.take_cache_clone();
                     let result = sample_component_stack(
                         component_stack,
                         cache_once.input_index,
@@ -713,15 +711,13 @@ impl Cache2D {
     }
 }
 
-#[derive(Clone)]
 struct CacheOnce {
     input_index: usize,
     cache_result_unique_id: u64,
     cache_fill_unique_id: u64,
     last_sample_result: f64,
 
-    // Use an Rc instead of a box so we can clone this without duplicating the cache
-    cache: Option<Rc<[f64]>>,
+    cache: Box<[f64]>,
 
     min_value: f64,
     max_value: f64,
@@ -747,9 +743,25 @@ impl CacheOnce {
             cache_result_unique_id: u64::MAX,
             cache_fill_unique_id: u64::MAX,
             last_sample_result: Default::default(),
-            cache: None,
+            cache: Box::new([]),
             min_value,
             max_value,
+        }
+    }
+
+    /// Clones this instance, creating a new struct taking ownership of the cache and replacing the
+    /// original with a dummy
+    fn take_cache_clone(&mut self) -> Self {
+        let mut cache: Box<[f64]> = Box::new([]);
+        mem::swap(&mut cache, &mut self.cache);
+        Self {
+            input_index: self.input_index,
+            cache_result_unique_id: self.cache_result_unique_id,
+            cache_fill_unique_id: self.cache_fill_unique_id,
+            last_sample_result: self.last_sample_result,
+            cache,
+            min_value: self.min_value,
+            max_value: self.max_value,
         }
     }
 }
@@ -1015,6 +1027,179 @@ impl<'a> ChunkNoiseFunction<'a> {
         let dummy_options =
             ChunkNoiseFunctionSampleOptions::new(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         self.sample(pos, &dummy_options)
+    }
+
+    fn fill(
+        &mut self,
+        index: usize,
+        array: &mut [f64],
+        mapper: &impl IndexToNoisePos,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) {
+        let component = &mut self.function_components[index];
+        match component {
+            ChunkNoiseFunctionComponent::StaticIndependent(static_independent) => {
+                static_independent.fill(array, mapper);
+            }
+            ChunkNoiseFunctionComponent::StaticDependent(
+                StaticDependentChunkNoiseFunctionComponent::RangeChoice(range_choice),
+            ) => {
+                self.fill(range_choice.input_index, array, mapper, sample_options);
+                array.iter_mut().enumerate().for_each(|(index, value)| {
+                    let pos = mapper.at(index);
+                    *value = if *value >= *range_choice.data.min_inclusive()
+                        && *value < *range_choice.data.max_exclusive()
+                    {
+                        sample_component_stack(
+                            &mut self.function_components,
+                            range_choice.when_in_index,
+                            &pos,
+                            sample_options,
+                        )
+                    } else {
+                        sample_component_stack(
+                            &mut self.function_components,
+                            range_choice.when_out_index,
+                            &pos,
+                            sample_options,
+                        )
+                    };
+                });
+            }
+            ChunkNoiseFunctionComponent::StaticDependent(
+                StaticDependentChunkNoiseFunctionComponent::Linear(linear),
+            ) => {
+                self.fill(linear.arg_index, array, mapper, sample_options);
+                array.iter_mut().for_each(|value| {
+                    *value = linear.data.apply_density(*value);
+                });
+            }
+            ChunkNoiseFunctionComponent::StaticDependent(
+                StaticDependentChunkNoiseFunctionComponent::Unary(unary),
+            ) => {
+                self.fill(unary.arg_index, array, mapper, sample_options);
+                array.iter_mut().for_each(|value| {
+                    *value = unary.data.apply_density(*value);
+                });
+            }
+            ChunkNoiseFunctionComponent::StaticDependent(
+                StaticDependentChunkNoiseFunctionComponent::Clamp(clamp),
+            ) => {
+                self.fill(clamp.input_index, array, mapper, sample_options);
+                array.iter_mut().for_each(|value| {
+                    *value = clamp.data.apply_density(*value);
+                });
+            }
+            ChunkNoiseFunctionComponent::StaticDependent(
+                StaticDependentChunkNoiseFunctionComponent::Binary(binary),
+            ) => {
+                self.fill(binary.arg1_index, array, mapper, sample_options);
+                match binary.data.operation() {
+                    BinaryOperation::Add => {
+                        let temp_array = vec![0.0; array.len()];
+                        self.fill(binary.arg2_index, array, mapper, sample_options);
+                        array
+                            .iter_mut()
+                            .zip(temp_array)
+                            .for_each(|(value, temp)| *value += temp);
+                    }
+                    BinaryOperation::Mul => {
+                        array.iter_mut().enumerate().for_each(|(index, value)| {
+                            if *value != 0.0 {
+                                let pos = mapper.at(index);
+                                *value *= sample_component_stack(
+                                    &mut self.function_components,
+                                    binary.arg2_index,
+                                    &pos,
+                                    sample_options,
+                                );
+                            }
+                        });
+                    }
+                    BinaryOperation::Min => {
+                        let min_2 = self.function_components[binary.arg2_index].min();
+                        array.iter_mut().enumerate().for_each(|(index, value)| {
+                            if *value > min_2 {
+                                let pos = mapper.at(index);
+                                *value = value.min(sample_component_stack(
+                                    &mut self.function_components,
+                                    binary.arg2_index,
+                                    &pos,
+                                    sample_options,
+                                ));
+                            }
+                        });
+                    }
+                    BinaryOperation::Max => {
+                        let max_2 = self.function_components[binary.arg2_index].max();
+                        array.iter_mut().enumerate().for_each(|(index, value)| {
+                            if *value < max_2 {
+                                let pos = mapper.at(index);
+                                *value = value.max(sample_component_stack(
+                                    &mut self.function_components,
+                                    binary.arg2_index,
+                                    &pos,
+                                    sample_options,
+                                ));
+                            }
+                        });
+                    }
+                }
+            }
+            ChunkNoiseFunctionComponent::StaticDependent(
+                StaticDependentChunkNoiseFunctionComponent::WeirdScaled(weird_scaled),
+            ) => {
+                self.fill(weird_scaled.input_index, array, mapper, sample_options);
+                array.iter_mut().for_each(|value| {
+                    let pos = mapper.at(index);
+                    let scaled_density = weird_scaled.data.mapper().scale(*value);
+                    *value = scaled_density
+                        * weird_scaled
+                            .sampler
+                            .sample(
+                                pos.x() as f64 / scaled_density,
+                                pos.y() as f64 / scaled_density,
+                                pos.z() as f64 / scaled_density,
+                            )
+                            .abs();
+                });
+            }
+            ChunkNoiseFunctionComponent::ChunkSpecific(
+                ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once),
+            ) => {
+                if cache_once.cache_fill_unique_id == sample_options.cache_fill_unique_id {
+                    array.copy_from_slice(&cache_once.cache);
+                    return;
+                }
+
+                let mut cache_once = cache_once.take_cache_clone();
+                self.fill(cache_once.input_index, array, mapper, sample_options);
+
+                // We need to make a new cache
+                if cache_once.cache.len() != array.len() {
+                    cache_once.cache = vec![0.0; array.len()].into_boxed_slice();
+                }
+
+                // Set values and replace in stack
+                cache_once.cache.copy_from_slice(array);
+                cache_once.cache_fill_unique_id = sample_options.cache_fill_unique_id;
+                self.function_components[index] = ChunkNoiseFunctionComponent::ChunkSpecific(
+                    ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once),
+                );
+            }
+            // The default
+            _ => {
+                array.iter_mut().enumerate().for_each(|(index, value)| {
+                    let pos = mapper.at(index);
+                    *value = sample_component_stack(
+                        &mut self.function_components,
+                        index,
+                        &pos,
+                        sample_options,
+                    );
+                });
+            }
+        }
     }
 }
 
