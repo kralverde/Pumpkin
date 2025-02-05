@@ -483,6 +483,9 @@ impl ChunkWriter for LinearChunkFormat {
             .map(|(path, mut chunks)| {
                 chunks.par_sort_unstable_by_key(|(at, _)| LinearChunkFormat::get_chunk_index(at));
                 tokio::task::block_in_place(|| {
+                    let file_lock = FileLocksManager::get_file_lock(&path);
+                    let _reader_lock = file_lock.blocking_write();
+
                     let mut file_data = match LinearFile::load(&path) {
                         Ok(file_data) => file_data,
                         Err(ChunkReadingError::ChunkNotExist) => LinearFile::new(),
