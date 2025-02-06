@@ -495,7 +495,7 @@ impl ChunkWriter for LinearChunkFormat {
 
         regions_chunks
             .into_par_iter()
-            .map(|(path, mut chunks)| {
+            .try_for_each(|(path, mut chunks)| {
                 chunks.par_sort_unstable_by_key(|(at, _)| LinearChunkFormat::get_chunk_index(at));
                 tokio::task::block_in_place(|| {
                     let _writer_guard = FILE_LOCK_MANAGER.get_write_guard(&path);
@@ -524,8 +524,9 @@ impl ChunkWriter for LinearChunkFormat {
                 })?;
 
                 Ok(())
-            })
-            .collect()
+            })?;
+
+        Ok(())
     }
 }
 

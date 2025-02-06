@@ -105,15 +105,6 @@ impl Level {
         // chunks are automatically saved when all players get removed
         // lets first save all chunks
 
-        self.clean_chunks(
-            self.loaded_chunks
-                .iter()
-                .map(|entry| *entry.key())
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .await;
-
         // then lets save the world info
         self.world_info_writer
             .write_world_info(self.level_info.clone(), &self.level_folder)
@@ -243,26 +234,32 @@ impl Level {
         }
 
         let chunks = chunks_to_write
-            .par_iter()
-            .map(|(pos, chunk)| (*pos, chunk.read()))
+            .iter()
+            .map(|(pos, chunk)| (*pos, chunk.clone()))
             .collect::<Vec<_>>();
+        tokio::spawn(async move {
+            let chunks = chunks
+                .par_iter()
+                .map(|(pos, chunk)| (*pos, chunk.read()))
+                .collect::<Vec<_>>();
 
-        let mut chunk_guards = Vec::with_capacity(chunks.len());
+            let mut chunk_guards = Vec::with_capacity(chunks.len());
 
-        for (pos, guard) in chunks {
-            chunk_guards.push((pos, guard.await));
-        }
+            for (pos, guard) in chunks {
+                chunk_guards.push((pos, guard.await));
+            }
 
-        let chunks = chunk_guards
-            .par_iter()
-            .map(|(pos, guard)| (*pos, guard.deref()))
-            .collect::<Vec<_>>();
+            let chunks = chunk_guards
+                .par_iter()
+                .map(|(pos, guard)| (*pos, guard.deref()))
+                .collect::<Vec<_>>();
 
-        info!("Writing chunks to disk {:}", chunks.len());
+            info!("Writing chunks to disk {:}", chunks.len());
 
-        if let Err(error) = writer.write_chunks(&level_folder, &chunks) {
-            log::error!("Failed writing Chunk to disk {}", error.to_string());
-        }
+            if let Err(error) = writer.write_chunks(&level_folder, &chunks) {
+                log::error!("Failed writing Chunk to disk {}", error.to_string());
+            }
+        });
     }
 
     fn load_chunks_from_save(
@@ -303,7 +300,7 @@ impl Level {
                     let chunk = loaded_chunk.value().clone();
                     let channel = channel.clone();
                     rt.spawn(async move {
-                        let _ = channel.send(chunk).await.inspect_err(|err| {
+                        let _ = channel.send((chunk, false)).await.inspect_err(|err| {
                             log::error!("unable to send chunk to channel: {}", err)
                         });
                     });
@@ -326,14 +323,15 @@ impl Level {
         .unwrap()
         .into_par_iter()
         .for_each(|(pos, chunk)| {
+            let mut first_load = false;
             let chunk = self
                 .loaded_chunks
                 .entry(pos)
                 .or_insert_with(|| match chunk {
                     Some(chunk) => chunk,
                     None => {
-                        let chunk = self.world_gen.generate_chunk(pos);
-                        Arc::new(RwLock::new(chunk))
+                        first_load = true;
+                        Arc::new(RwLock::new(self.world_gen.generate_chunk(pos)))
                     }
                 })
                 .clone();
