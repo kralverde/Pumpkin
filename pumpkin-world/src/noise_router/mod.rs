@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use noise_router_ast::NoiseRouterReprs;
 
 pub mod density_function_ast;
-mod noise_router_ast;
+pub mod noise_router_ast;
 
 pub static NOISE_ROUTER_ASTS: LazyLock<NoiseRouterReprs> = LazyLock::new(|| {
     // JSON5 is needed because of NaN, Inf, and -Inf

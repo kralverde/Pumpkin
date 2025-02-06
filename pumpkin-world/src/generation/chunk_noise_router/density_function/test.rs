@@ -4,13 +4,16 @@ use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use crate::noise_router::density_function_ast::DensityFunctionRepr;
+use crate::generation::chunk_noise_router::chunk_density_function::{
+    ChunkNoiseFunction, ChunkNoiseFunctionWrapperHandler,
+};
 use crate::noise_router::NOISE_ROUTER_ASTS;
 use crate::read_data_from_file;
-
-use super::super::{
-    ChunkNoiseFunction, ChunkNoiseFunctionBuilderOptions, ChunkNoiseFunctionWrapperHandler,
+use crate::{
+    generation::chunk_noise_router::chunk_density_function::ChunkNoiseFunctionBuilderOptions,
+    noise_router::density_function_ast::DensityFunctionRepr,
 };
+
 use super::{NoisePos, ProtoChunkNoiseFunction};
 
 struct TestNoisePos {

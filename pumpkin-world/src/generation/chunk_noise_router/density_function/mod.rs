@@ -13,6 +13,12 @@ use crate::{
     noise_router::density_function_ast::{DensityFunctionRepr, SplineRepr, WrapperType},
 };
 
+// These are for enum_dispatch
+use super::chunk_density_function::{
+    Cache2D, CacheOnce, CellCache, ChunkSpecificNoiseFunctionComponent, DensityInterpolator,
+    FlatCache,
+};
+
 mod math;
 mod misc;
 mod noise;
