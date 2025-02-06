@@ -229,7 +229,8 @@ impl LinearFile {
         let buffer = zstd::decode_all(compressed_data.as_slice())
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
-        let (headers_buffer, chunks_buffer) = buffer.split_at(CHUNK_HEADER_BYTES_SIZE);
+        let (headers_buffer, chunks_buffer) =
+            buffer.split_at(LinearChunkHeader::CHUNK_HEADER_SIZE * CHUNK_COUNT);
 
         // Parse the chunk headers
         let chunk_headers: [LinearChunkHeader; CHUNK_COUNT] = headers_buffer
