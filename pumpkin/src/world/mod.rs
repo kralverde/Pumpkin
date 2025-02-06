@@ -1002,7 +1002,9 @@ impl World {
         let level = self.level.clone();
         let rt = Handle::current();
         rayon::spawn(move || {
-            level.fetch_chunks(&chunks, sender, &rt);
+            chunks.chunks(64).for_each(|chunks| {
+                level.fetch_chunks(chunks, sender.clone(), &rt);
+            });
         });
         receive
     }

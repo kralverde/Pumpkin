@@ -3,6 +3,7 @@ use dashmap::{
     DashMap,
 };
 use fastnbt::LongArray;
+use log::warn;
 use pumpkin_data::chunk::ChunkStatus;
 use pumpkin_util::math::{ceil_log2, vector2::Vector2};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 use thiserror::Error;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     block::BlockState,
@@ -32,20 +34,20 @@ pub const CHUNK_VOLUME: usize = CHUNK_AREA * WORLD_HEIGHT;
 /// File locks manager to prevent multiple threads from writing to the same file at the same time
 /// but allowing multiple threads to read from the same file at the same time.
 static FILE_LOCK_MANAGER: LazyLock<Arc<FileLocksManager>> = LazyLock::new(Arc::default);
+
 pub trait ChunkReader: Sync + Send {
-    fn read_chunk(
+    fn read_chunks(
         &self,
         save_file: &LevelFolder,
-        at: &Vector2<i32>,
-    ) -> Result<ChunkData, ChunkReadingError>;
+        at: &[Vector2<i32>],
+    ) -> Result<Vec<(Vector2<i32>, Option<ChunkData>)>, ChunkReadingError>;
 }
 
 pub trait ChunkWriter: Send + Sync {
-    fn write_chunk(
+    fn write_chunks(
         &self,
-        chunk: &ChunkData,
         level_folder: &LevelFolder,
-        at: &Vector2<i32>,
+        chunk: &[(Vector2<i32>, &ChunkData)],
     ) -> Result<(), ChunkWritingError>;
 }
 
