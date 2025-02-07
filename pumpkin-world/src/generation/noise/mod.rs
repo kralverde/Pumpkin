@@ -1,8 +1,5 @@
 use num_traits::Float;
-pub mod config;
-pub mod density;
 pub mod perlin;
-pub mod router;
 pub mod simplex;
 
 #[inline]

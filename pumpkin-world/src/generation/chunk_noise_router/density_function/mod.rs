@@ -16,7 +16,7 @@ use crate::{
 // These are for enum_dispatch
 use super::chunk_density_function::{
     Cache2D, CacheOnce, CellCache, ChunkSpecificNoiseFunctionComponent, DensityInterpolator,
-    FlatCache,
+    FlatCache, WrapperData,
 };
 
 mod math;
@@ -63,7 +63,8 @@ impl NoisePos for UnblendedNoisePos {
 }
 
 pub trait IndexToNoisePos {
-    fn at(&self, index: usize) -> impl NoisePos;
+    fn at(&self, index: usize, wrapper_inputs: Option<&mut WrapperData>)
+        -> impl NoisePos + 'static;
 }
 
 struct ProtoChunkNoiseFunctionBuilderData<'a> {
@@ -159,6 +160,13 @@ impl<'a> ProtoChunkNoiseFunction<'a> {
     ) -> usize {
         //println!("Generating: {}", function_ast.as_str());
         match function_ast {
+            DensityFunctionRepr::Beardifier => {
+                // TODO: Replace this when world structures are implemented
+                function_vec.push(UniversalChunkNoiseFunctionComponent::StaticIndependent(
+                    StaticIndependentChunkNoiseFunctionComponent::Constant(Constant::new(0.0)),
+                ));
+            }
+
             DensityFunctionRepr::BlendAlpha => {
                 // TODO: Replace this with the cache when the blender is implemented
                 function_vec.push(UniversalChunkNoiseFunctionComponent::StaticIndependent(
@@ -409,7 +417,7 @@ pub trait StaticIndependentChunkNoiseFunctionComponentImpl: ChunkNoiseFunctionRa
     fn sample(&self, pos: &impl NoisePos) -> f64;
     fn fill(&self, array: &mut [f64], mapper: &impl IndexToNoisePos) {
         array.iter_mut().enumerate().for_each(|(index, value)| {
-            let pos = mapper.at(index);
+            let pos = mapper.at(index, None);
             *value = self.sample(&pos);
         });
     }

@@ -3,10 +3,7 @@ use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
 use crate::{
     block::BlockState,
     generation::{
-        chunk_noise::CHUNK_DIM,
-        generation_shapes::GenerationShape,
-        noise::{config::NoiseConfig, router::OVERWORLD_NOISE_ROUTER},
-        positions::chunk_pos,
+        chunk_noise::CHUNK_DIM, generation_shapes::GenerationShape, positions::chunk_pos,
     },
 };
 
@@ -45,18 +42,20 @@ impl FluidLevelSamplerImpl for StandardChunkFluidLevelSampler {
     }
 }
 
-pub struct ProtoChunk {
+pub struct ProtoChunk<'a> {
     chunk_pos: Vector2<i32>,
-    sampler: ChunkNoiseGenerator,
+    sampler: ChunkNoiseGenerator<'a>,
     // These are local positions
     flat_block_map: Vec<BlockState>,
     // may want to use chunk status
 }
 
-impl ProtoChunk {
+impl<'a> ProtoChunk<'a> {
     pub fn new(chunk_pos: Vector2<i32>, seed: u64) -> Self {
         // TODO: Don't hardcode these
 
+        todo!();
+        /*
         let base_router = &OVERWORLD_NOISE_ROUTER;
 
         let generation_shape = GenerationShape::SURFACE;
@@ -87,6 +86,7 @@ impl ProtoChunk {
             sampler,
             flat_block_map: vec![BlockState::AIR; CHUNK_DIM as usize * CHUNK_DIM as usize * height],
         }
+        */
     }
 
     #[inline]
@@ -117,6 +117,8 @@ impl ProtoChunk {
     }
 
     pub fn populate_noise(&mut self) {
+        todo!()
+        /*
         let horizontal_cell_block_count = self.sampler.horizontal_cell_block_count();
         let vertical_cell_block_count = self.sampler.vertical_cell_block_count();
 
@@ -193,6 +195,7 @@ impl ProtoChunk {
             }
         }
         self.sampler.stop_interpolation();
+        */
     }
 
     fn start_cell_x(&self) -> i32 {

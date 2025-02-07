@@ -3,8 +3,8 @@ use derive_getters::Getters;
 
 use crate::noise_router::noise_router_ast::NoiseRouterRepr;
 
-mod chunk_density_function;
-mod density_function;
+pub mod chunk_density_function;
+pub mod density_function;
 
 #[derive(Getters)]
 pub struct GlobalProtoNoiseRouter<'a> {

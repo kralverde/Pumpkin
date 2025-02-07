@@ -98,7 +98,7 @@ impl BiomeGenerator for TestBiomeGenerator {
 }
 
 pub(crate) struct TestTerrainGenerator {
-    chunks: DashMap<Vector2<i32>, (ProtoChunk, Wrapping<u8>)>,
+    chunks: DashMap<Vector2<i32>, (ProtoChunk<'static>, Wrapping<u8>)>,
     seed: Seed,
 }
 

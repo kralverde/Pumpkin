@@ -5,15 +5,15 @@ use super::density_function_ast::DensityFunctionRepr;
 
 #[derive(Deserialize, Getters)]
 pub struct NoiseRouterReprs {
-    overworld: NoiseRouterRepr,
+    pub(crate) overworld: NoiseRouterRepr,
     #[serde(rename(deserialize = "large_biomes"))]
-    overworld_large_biomes: NoiseRouterRepr,
+    pub(crate) overworld_large_biomes: NoiseRouterRepr,
     #[serde(rename(deserialize = "amplified"))]
-    overworld_amplified: NoiseRouterRepr,
-    nether: NoiseRouterRepr,
-    end: NoiseRouterRepr,
+    pub(crate) overworld_amplified: NoiseRouterRepr,
+    pub(crate) nether: NoiseRouterRepr,
+    pub(crate) end: NoiseRouterRepr,
     #[serde(rename(deserialize = "floating_islands"))]
-    end_islands: NoiseRouterRepr,
+    pub(crate) end_islands: NoiseRouterRepr,
 }
 
 #[derive(Deserialize, Getters)]
@@ -35,7 +35,7 @@ pub struct NoiseRouterRepr {
     #[serde(rename(deserialize = "initialDensityWithoutJaggedness"))]
     initial_density_without_jaggedness: DensityFunctionRepr,
     #[serde(rename(deserialize = "finalDensity"))]
-    final_density: DensityFunctionRepr,
+    pub(crate) final_density: DensityFunctionRepr,
     #[serde(rename(deserialize = "veinToggle"))]
     vein_toggle: DensityFunctionRepr,
     #[serde(rename(deserialize = "veinRidged"))]

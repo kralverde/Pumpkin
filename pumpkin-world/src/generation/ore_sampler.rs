@@ -3,26 +3,28 @@ use pumpkin_util::random::RandomDeriver;
 use crate::block::BlockState;
 
 use super::{
-    chunk_noise::ChunkNoiseState,
-    noise::{
-        clamped_map,
-        density::{component_functions::ComponentReference, NoisePos, NoisePosImpl},
+    chunk_noise_router::{
+        chunk_density_function::{
+            ChunkDensityFunctionOwner, ChunkNoiseFunction, ChunkNoiseFunctionSampleOptions,
+        },
+        density_function::{IndexToNoisePos, NoisePos},
     },
+    noise::clamped_map,
 };
 
-pub struct OreVeinSampler {
-    vein_toggle: Box<dyn ComponentReference<ChunkNoiseState>>,
-    vein_ridged: Box<dyn ComponentReference<ChunkNoiseState>>,
-    vein_gap: Box<dyn ComponentReference<ChunkNoiseState>>,
+pub struct OreVeinSampler<'a> {
+    vein_toggle: ChunkNoiseFunction<'a>,
+    vein_ridged: ChunkNoiseFunction<'a>,
+    vein_gap: ChunkNoiseFunction<'a>,
     random_deriver: RandomDeriver,
 }
 
-impl OreVeinSampler {
+impl<'a> OreVeinSampler<'a> {
     pub fn new(
-        vein_toggle: Box<dyn ComponentReference<ChunkNoiseState>>,
-        vein_ridged: Box<dyn ComponentReference<ChunkNoiseState>>,
-        vein_gap: Box<dyn ComponentReference<ChunkNoiseState>>,
         random_deriver: RandomDeriver,
+        vein_toggle: ChunkNoiseFunction<'a>,
+        vein_ridged: ChunkNoiseFunction<'a>,
+        vein_gap: ChunkNoiseFunction<'a>,
     ) -> Self {
         Self {
             vein_toggle,
@@ -31,11 +33,84 @@ impl OreVeinSampler {
             random_deriver,
         }
     }
+
+    #[inline]
+    fn density_functions(&mut self) -> [&mut ChunkNoiseFunction<'a>; 3] {
+        [
+            &mut self.vein_toggle,
+            &mut self.vein_ridged,
+            &mut self.vein_gap,
+        ]
+    }
 }
 
-impl OreVeinSampler {
-    pub fn sample(&mut self, pos: &NoisePos, state: &ChunkNoiseState) -> Option<BlockState> {
-        let vein_sample = self.vein_toggle.sample_mut(pos, state);
+impl ChunkDensityFunctionOwner for OreVeinSampler<'_> {
+    #[inline]
+    fn fill_cell_caches(
+        &mut self,
+        mapper: &impl IndexToNoisePos,
+        options: &mut ChunkNoiseFunctionSampleOptions,
+    ) {
+        self.density_functions()
+            .into_iter()
+            .for_each(|function| function.fill_cell_caches(mapper, options));
+    }
+
+    #[inline]
+    fn fill_interpolator_buffers(
+        &mut self,
+        start: bool,
+        mapper: &impl IndexToNoisePos,
+        options: &mut ChunkNoiseFunctionSampleOptions,
+    ) {
+        self.density_functions()
+            .into_iter()
+            .for_each(|function| function.fill_interpolator_buffers(start, mapper, options));
+    }
+
+    #[inline]
+    fn interpolate_x(&mut self, delta: f64) {
+        self.density_functions()
+            .into_iter()
+            .for_each(|function| function.interpolate_x(delta));
+    }
+
+    #[inline]
+    fn interpolate_y(&mut self, delta: f64) {
+        self.density_functions()
+            .into_iter()
+            .for_each(|function| function.interpolate_y(delta));
+    }
+
+    #[inline]
+    fn interpolate_z(&mut self, delta: f64) {
+        self.density_functions()
+            .into_iter()
+            .for_each(|function| function.interpolate_z(delta));
+    }
+
+    #[inline]
+    fn swap_buffers(&mut self) {
+        self.density_functions()
+            .into_iter()
+            .for_each(|function| function.swap_buffers());
+    }
+
+    #[inline]
+    fn on_sampled_cell_corners(&mut self, cell_y_position: usize, cell_z_position: usize) {
+        self.density_functions().into_iter().for_each(|function| {
+            function.on_sampled_cell_corners(cell_y_position, cell_z_position)
+        });
+    }
+}
+
+impl OreVeinSampler<'_> {
+    pub fn sample(
+        &mut self,
+        pos: &impl NoisePos,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) -> Option<BlockState> {
+        let vein_sample = self.vein_toggle.sample(pos, sample_options);
         let vein_type: &VeinType = if vein_sample > 0f64 {
             &vein_type::COPPER
         } else {
@@ -51,7 +126,9 @@ impl OreVeinSampler {
             let abs_sample = vein_sample.abs();
             if abs_sample + mapped_diff >= 0.4f32 as f64 {
                 let mut random = self.random_deriver.split_pos(pos.x(), block_y, pos.z());
-                if random.next_f32() <= 0.7f32 && self.vein_ridged.sample_mut(pos, state) < 0f64 {
+                if random.next_f32() <= 0.7f32
+                    && self.vein_ridged.sample(pos, sample_options) < 0f64
+                {
                     let clamped_sample = clamped_map(
                         abs_sample,
                         0.4f32 as f64,
@@ -61,7 +138,7 @@ impl OreVeinSampler {
                     );
 
                     return if (random.next_f32() as f64) < clamped_sample
-                        && self.vein_gap.sample_mut(pos, state) > (-0.3f32 as f64)
+                        && self.vein_gap.sample(pos, sample_options) > (-0.3f32 as f64)
                     {
                         Some(if random.next_f32() < 0.02f32 {
                             vein_type.raw_ore

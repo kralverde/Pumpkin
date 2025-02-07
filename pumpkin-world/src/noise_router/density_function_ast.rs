@@ -174,11 +174,11 @@ pub struct ClampedYGradientData {
 #[derive(Deserialize, Getters)]
 pub struct BinaryData {
     #[serde(rename(deserialize = "type"))]
-    operation: BinaryOperation,
+    pub(crate) operation: BinaryOperation,
     #[serde(rename(deserialize = "minValue"))]
-    min_value: f64,
+    pub(crate) min_value: f64,
     #[serde(rename(deserialize = "maxValue"))]
-    max_value: f64,
+    pub(crate) max_value: f64,
 }
 
 #[derive(Deserialize, Getters)]
@@ -275,6 +275,8 @@ pub struct SplineData {
 #[derive(Deserialize)]
 #[serde(tag = "_class", content = "value")]
 pub enum DensityFunctionRepr {
+    // This is a placeholder for leaving space for world structures
+    Beardifier,
     // These functions is initialized by a seed at runtime
     BlendAlpha,
     BlendOffset,
