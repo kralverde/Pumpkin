@@ -5,11 +5,10 @@ use math::{Binary, Constant, Linear, Unary};
 use misc::{Clamp, ClampedYGradient, EndIsland, RangeChoice, WeirdScaled};
 use noise::{InterpolatedNoiseSampler, Noise, ShiftA, ShiftB, ShiftedNoise};
 use pumpkin_data::chunk::DoublePerlinNoiseParameters;
-use pumpkin_util::random::{xoroshiro128::Xoroshiro, RandomDeriver, RandomImpl};
 use spline::{Spline, SplineFunction, SplinePoint, SplineValue};
 
 use crate::{
-    generation::noise::perlin::DoublePerlinNoiseSampler,
+    generation::{noise::perlin::DoublePerlinNoiseSampler, GlobalRandomConfig},
     noise_router::density_function_ast::{DensityFunctionRepr, SplineRepr, WrapperType},
 };
 
@@ -68,17 +67,14 @@ pub trait IndexToNoisePos {
 }
 
 struct ProtoChunkNoiseFunctionBuilderData<'a> {
-    seed: u64,
-    rand: RandomDeriver,
+    random_config: &'a GlobalRandomConfig,
     id_to_sampler_map: Vec<(&'a str, Arc<DoublePerlinNoiseSampler>)>,
 }
 
 impl<'a> ProtoChunkNoiseFunctionBuilderData<'a> {
-    fn new(seed: u64) -> Self {
-        let random_deriver = RandomDeriver::Xoroshiro(Xoroshiro::from_seed(seed).next_splitter());
+    fn new(rand: &'a GlobalRandomConfig) -> Self {
         Self {
-            seed,
-            rand: random_deriver,
+            random_config: rand,
             id_to_sampler_map: Vec::new(),
         }
     }
@@ -98,7 +94,10 @@ impl<'a> ProtoChunkNoiseFunctionBuilderData<'a> {
                     .unwrap_or_else(|| panic!("Unknown noise id: {}", id));
 
                 // Note that the parameters' id is differenent than `id`
-                let mut random = self.rand.split_string(parameters.id());
+                let mut random = self
+                    .random_config
+                    .base_random_deriver
+                    .split_string(parameters.id());
                 let sampler = DoublePerlinNoiseSampler::new(&mut random, parameters, false);
                 let wrapped = Arc::new(sampler);
                 self.id_to_sampler_map.push((id, wrapped.clone()));
@@ -236,7 +235,7 @@ impl<'a> ProtoChunkNoiseFunction<'a> {
             DensityFunctionRepr::EndIslands => {
                 function_vec.push(UniversalChunkNoiseFunctionComponent::StaticIndependent(
                     StaticIndependentChunkNoiseFunctionComponent::EndIsland(EndIsland::new(
-                        build_data.seed,
+                        build_data.random_config.seed,
                     )),
                 ));
             }
@@ -287,7 +286,10 @@ impl<'a> ProtoChunkNoiseFunction<'a> {
                 ));
             }
             DensityFunctionRepr::InterpolatedNoiseSampler { data } => {
-                let mut random = build_data.rand.split_string("minecraft:terrain");
+                let mut random = build_data
+                    .random_config
+                    .base_random_deriver
+                    .split_string("minecraft:terrain");
                 function_vec.push(UniversalChunkNoiseFunctionComponent::StaticIndependent(
                     StaticIndependentChunkNoiseFunctionComponent::InterpolatedNoise(
                         InterpolatedNoiseSampler::new(data, &mut random),
@@ -391,9 +393,12 @@ impl<'a> ProtoChunkNoiseFunction<'a> {
         function_vec.len() - 1
     }
 
-    pub fn generate(function_ast: &'a DensityFunctionRepr, seed: u64) -> Self {
+    pub fn generate(
+        function_ast: &'a DensityFunctionRepr,
+        random_config: &'a GlobalRandomConfig,
+    ) -> Self {
         let mut function_vec = Vec::new();
-        let mut build_data = ProtoChunkNoiseFunctionBuilderData::new(seed);
+        let mut build_data = ProtoChunkNoiseFunctionBuilderData::new(random_config);
         let _top_level = Self::recursive_generate_chunk_noise_function(
             function_ast,
             &mut function_vec,

@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 use crate::generation::chunk_noise_router::chunk_density_function::{
     ChunkNoiseFunction, ChunkNoiseFunctionWrapperHandler,
 };
+use crate::generation::GlobalRandomConfig;
 use crate::noise_router::NOISE_ROUTER_ASTS;
 use crate::read_data_from_file;
 use crate::{
@@ -51,7 +52,8 @@ macro_rules! build_function {
 macro_rules! sample_router_function {
     ($name:ident, $seed: expr, $pos: expr) => {{
         let function_ast = NOISE_ROUTER_ASTS.overworld().$name();
-        let proto_function = ProtoChunkNoiseFunction::generate(function_ast, $seed);
+        let random_config = GlobalRandomConfig::new($seed);
+        let proto_function = ProtoChunkNoiseFunction::generate(function_ast, &random_config);
         let mut function = build_function!(proto_function);
         function.sample_test(&$pos)
     }};
@@ -68,7 +70,6 @@ macro_rules! sample_router_function {
 fn test_normal_surface_noisified() {
     let seed = 0;
     let pos = TestNoisePos { x: 0, y: 0, z: 0 };
-
     // TODO: Move these values to a file and create an extractor for them
     assert_eq!(
         sample_router_function!(barrier_noise, seed, pos),
@@ -522,7 +523,8 @@ fn test_config_final_density() {
         read_data_from_file!("../../../../assets/final_density_dump_7_4.json");
 
     let function_ast = NOISE_ROUTER_ASTS.overworld().final_density();
-    let proto_function = ProtoChunkNoiseFunction::generate(function_ast, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function = ProtoChunkNoiseFunction::generate(function_ast, &random_config);
     let mut function = build_function!(proto_function);
 
     // This is a lot of data it iter over, one two skip a few done
@@ -581,8 +583,9 @@ static DENSITY_FUNCTION_REPRS: LazyLock<DensityFunctionReprs> =
 
 #[test]
 fn test_base_sloped_cheese() {
+    let random_config = GlobalRandomConfig::new(0);
     let proto_function =
-        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.sloped_cheese, 0);
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.sloped_cheese, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -595,7 +598,9 @@ fn test_base_sloped_cheese() {
 
 #[test]
 fn test_base_factor() {
-    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.factor, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function =
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.factor, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -608,7 +613,9 @@ fn test_base_factor() {
 
 #[test]
 fn test_base_depth() {
-    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.depth, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function =
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.depth, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -621,7 +628,9 @@ fn test_base_depth() {
 
 #[test]
 fn test_base_offset() {
-    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.offset, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function =
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.offset, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -634,8 +643,9 @@ fn test_base_offset() {
 
 #[test]
 fn test_base_cave_entrances() {
+    let random_config = GlobalRandomConfig::new(0);
     let proto_function =
-        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_entrances, 0);
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_entrances, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -648,8 +658,9 @@ fn test_base_cave_entrances() {
 
 #[test]
 fn test_base_3d_noise() {
+    let random_config = GlobalRandomConfig::new(0);
     let proto_function =
-        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.base_3d_noise, 0);
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.base_3d_noise, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -662,8 +673,11 @@ fn test_base_3d_noise() {
 
 #[test]
 fn test_base_spahetti_roughness() {
-    let proto_function =
-        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.spaghetti_roughness, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function = ProtoChunkNoiseFunction::generate(
+        &DENSITY_FUNCTION_REPRS.spaghetti_roughness,
+        &random_config,
+    );
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> = read_data_from_file!(
@@ -677,7 +691,9 @@ fn test_base_spahetti_roughness() {
 
 #[test]
 fn test_base_cave_noodle() {
-    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_noodle, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function =
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_noodle, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -690,7 +706,9 @@ fn test_base_cave_noodle() {
 
 #[test]
 fn test_base_cave_pillars() {
-    let proto_function = ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_pillars, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function =
+        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.cave_pillars, &random_config);
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =
@@ -703,8 +721,11 @@ fn test_base_cave_pillars() {
 
 #[test]
 fn test_base_spaghetti_2d_thickness() {
-    let proto_function =
-        ProtoChunkNoiseFunction::generate(&DENSITY_FUNCTION_REPRS.spaghetti_2d_thickness, 0);
+    let random_config = GlobalRandomConfig::new(0);
+    let proto_function = ProtoChunkNoiseFunction::generate(
+        &DENSITY_FUNCTION_REPRS.spaghetti_2d_thickness,
+        &random_config,
+    );
     let mut function = build_function!(proto_function);
 
     let expected_data: Vec<(i32, i32, i32, f64)> =

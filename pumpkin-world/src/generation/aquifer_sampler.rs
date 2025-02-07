@@ -783,10 +783,7 @@ pub trait AquiferSamplerImpl {
 mod test {
     use std::{mem, sync::LazyLock};
 
-    use pumpkin_util::{
-        math::vector2::Vector2,
-        random::{xoroshiro128::Xoroshiro, RandomDeriver, RandomImpl},
-    };
+    use pumpkin_util::math::vector2::Vector2;
 
     use crate::{
         block::BlockState,
@@ -803,6 +800,7 @@ mod test {
             generation_shapes::GenerationShape,
             positions::chunk_pos,
             proto_chunk::StandardChunkFluidLevelSampler,
+            GlobalRandomConfig,
         },
         noise_router::NOISE_ROUTER_ASTS,
     };
@@ -810,14 +808,15 @@ mod test {
     use super::{AquiferSampler, FluidLevel, FluidLevelSampler, WorldAquiferSampler};
 
     const SEED: u64 = 0;
+    static RANDOM_CONFIG: LazyLock<GlobalRandomConfig> =
+        LazyLock::new(|| GlobalRandomConfig::new(SEED));
     static PROTO_ROUTER: LazyLock<GlobalProtoNoiseRouter<'static>> = LazyLock::new(|| {
         let router_ast = NOISE_ROUTER_ASTS.overworld();
-        GlobalProtoNoiseRouter::generate(router_ast, SEED)
+        GlobalProtoNoiseRouter::generate(router_ast, &RANDOM_CONFIG)
     });
 
     fn create_aquifer<'a>(
         base_router: &'a GlobalProtoNoiseRouter<'a>,
-        seed: u64,
     ) -> (
         WorldAquiferSampler<'a>,
         ChunkNoiseHeightEstimator<'a>,
@@ -829,10 +828,9 @@ mod test {
             FluidLevel::new(63, WATER_BLOCK),
             FluidLevel::new(-54, LAVA_BLOCK),
         ));
-        let random_deriver = RandomDeriver::Xoroshiro(Xoroshiro::from_seed(seed).next_splitter());
         let noise = ChunkNoiseGenerator::new(
             base_router,
-            random_deriver,
+            &RANDOM_CONFIG,
             16 / shape.horizontal_cell_block_count(),
             chunk_pos::start_block_x(&chunk_pos),
             chunk_pos::start_block_z(&chunk_pos),
@@ -866,7 +864,7 @@ mod test {
 
     #[test]
     fn test_get_fluid_block_state() {
-        let (mut aquifer, _, options) = create_aquifer(&PROTO_ROUTER, SEED);
+        let (mut aquifer, _, options) = create_aquifer(&PROTO_ROUTER);
         let level = FluidLevel::new(0, WATER_BLOCK);
 
         let values = [
@@ -1007,7 +1005,7 @@ mod test {
 
     #[test]
     fn test_get_noise_based_fluid_level() {
-        let (mut aquifer, _, options) = create_aquifer(&PROTO_ROUTER, SEED);
+        let (mut aquifer, _, options) = create_aquifer(&PROTO_ROUTER);
 
         let values = [
             ((-100, -100, -100), -103),
@@ -1147,7 +1145,7 @@ mod test {
 
     #[test]
     fn test_get_fluid_block_y() {
-        let (mut aquifer, _, env) = create_aquifer(&PROTO_ROUTER, SEED);
+        let (mut aquifer, _, env) = create_aquifer(&PROTO_ROUTER);
         let level = FluidLevel::new(0, WATER_BLOCK);
         let values = [
             ((-100, -100, -100), -32512),
@@ -1422,7 +1420,7 @@ mod test {
 
     #[test]
     fn test_get_fluid_level() {
-        let (mut aquifer, mut funcs, env) = create_aquifer(&PROTO_ROUTER, SEED);
+        let (mut aquifer, mut funcs, env) = create_aquifer(&PROTO_ROUTER);
         let values = [
             ((-100, -100, -100), (-32512, LAVA_BLOCK)),
             ((-100, -100, -50), (-32512, LAVA_BLOCK)),
@@ -1560,7 +1558,7 @@ mod test {
 
     #[test]
     fn test_calculate_density() {
-        let (mut aquifer, _, env) = create_aquifer(&PROTO_ROUTER, SEED);
+        let (mut aquifer, _, env) = create_aquifer(&PROTO_ROUTER);
 
         let values = [
             ((-100, -100, -100, 0, 0), 0.0),
@@ -1704,7 +1702,7 @@ mod test {
 
     #[test]
     fn test_apply() {
-        let (mut aquifer, mut funcs, env) = create_aquifer(&PROTO_ROUTER, SEED);
+        let (mut aquifer, mut funcs, env) = create_aquifer(&PROTO_ROUTER);
         let values = [
             ((112, -100, 64, 0.037482421875), None),
             ((112, -100, 66, 0.037482421875), None),

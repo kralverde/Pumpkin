@@ -2,10 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use enum_dispatch::enum_dispatch;
 use pumpkin_macros::block_state;
-use pumpkin_util::{
-    math::{floor_div, floor_mod, vector2::Vector2},
-    random::RandomDeriver,
-};
+use pumpkin_util::math::{floor_div, floor_mod, vector2::Vector2};
 
 use crate::{block::BlockState, generation::section_coords};
 
@@ -27,6 +24,7 @@ use super::{
     generation_shapes::GenerationShape,
     ore_sampler::OreVeinSampler,
     positions::chunk_pos,
+    GlobalRandomConfig,
 };
 
 pub const STONE_BLOCK: BlockState = block_state!("stone");
@@ -281,7 +279,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         noise_router_base: &'a GlobalProtoNoiseRouter<'a>,
-        random_deriver: RandomDeriver,
+        random_config: &GlobalRandomConfig,
         horizontal_cell_count: u8,
         start_block_x: i32,
         start_block_z: i32,
@@ -329,10 +327,6 @@ impl<'a> ChunkNoiseGenerator<'a> {
         );
 
         // TODO: This can be moved to a global level for a slight speed up
-        let aquifer_deriver = random_deriver
-            .split_string("minecraft:aquifer")
-            .next_splitter();
-        let ore_deriver = random_deriver.split_string("minecraft:ore").next_splitter();
 
         macro_rules! build_function {
             ($func: ident) => {
@@ -361,7 +355,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
                 build_function!(erosion),
                 build_function!(depth),
                 aquifer_density,
-                aquifer_deriver,
+                random_config.aquifier_random_deriver.clone(),
                 generation_shape.min_y(),
                 generation_shape.height(),
                 level_sampler,
@@ -373,7 +367,12 @@ impl<'a> ChunkNoiseGenerator<'a> {
         let mut samplers = vec![BlockStateSampler::Aquifer(aquifer_sampler)];
 
         if ore_veins {
-            let ore_sampler = OreVeinSampler::new(ore_deriver, vein_toggle, vein_ridged, vein_gap);
+            let ore_sampler = OreVeinSampler::new(
+                random_config.ore_random_deriver.clone(),
+                vein_toggle,
+                vein_ridged,
+                vein_gap,
+            );
             samplers.push(BlockStateSampler::Ore(ore_sampler));
         };
 

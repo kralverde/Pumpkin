@@ -1,9 +1,14 @@
+use std::sync::LazyLock;
+
 use generation::{
     aquifer_sampler::{FluidLevel, FluidLevelSampler},
     chunk_noise::{ChunkNoiseGenerator, LAVA_BLOCK, WATER_BLOCK},
+    chunk_noise_router::GlobalProtoNoiseRouter,
     generation_shapes::GenerationShape,
     proto_chunk::{ProtoChunk, StandardChunkFluidLevelSampler},
+    GlobalRandomConfig,
 };
+use noise_router::NOISE_ROUTER_ASTS;
 use pumpkin_util::math::vector2::Vector2;
 
 pub mod biome;
@@ -44,7 +49,14 @@ macro_rules! read_data_from_file {
 }
 
 // TODO: is there a way to do in-file benches?
+const SEED: u64 = 0;
+static RANDOM_CONFIG: LazyLock<GlobalRandomConfig> =
+    LazyLock::new(|| GlobalRandomConfig::new(SEED));
+static BASE_ROUTER: LazyLock<GlobalProtoNoiseRouter> = LazyLock::new(|| {
+    GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &RANDOM_CONFIG)
+});
+
 pub fn bench_create_and_populate_noise() {
-    let mut chunk = ProtoChunk::new(Vector2::new(0, 0), 0);
+    let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &BASE_ROUTER, &RANDOM_CONFIG);
     chunk.populate_noise();
 }

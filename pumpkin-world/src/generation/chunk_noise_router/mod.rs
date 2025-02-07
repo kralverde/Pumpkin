@@ -3,6 +3,8 @@ use derive_getters::Getters;
 
 use crate::noise_router::noise_router_ast::NoiseRouterRepr;
 
+use super::GlobalRandomConfig;
+
 pub mod chunk_density_function;
 pub mod density_function;
 
@@ -26,32 +28,32 @@ pub struct GlobalProtoNoiseRouter<'a> {
 }
 
 impl<'a> GlobalProtoNoiseRouter<'a> {
-    pub fn generate(ast: &'a NoiseRouterRepr, seed: u64) -> Self {
+    pub fn generate(ast: &'a NoiseRouterRepr, random_config: &'a GlobalRandomConfig) -> Self {
         Self {
-            barrier_noise: ProtoChunkNoiseFunction::generate(ast.barrier_noise(), seed),
+            barrier_noise: ProtoChunkNoiseFunction::generate(ast.barrier_noise(), random_config),
             fluid_level_floodedness_noise: ProtoChunkNoiseFunction::generate(
                 ast.fluid_level_floodedness_noise(),
-                seed,
+                random_config,
             ),
             fluid_level_spread_noise: ProtoChunkNoiseFunction::generate(
                 ast.fluid_level_spread_noise(),
-                seed,
+                random_config,
             ),
-            lava_noise: ProtoChunkNoiseFunction::generate(ast.lava_noise(), seed),
-            temperature: ProtoChunkNoiseFunction::generate(ast.temperature(), seed),
-            vegetation: ProtoChunkNoiseFunction::generate(ast.vegetation(), seed),
-            continents: ProtoChunkNoiseFunction::generate(ast.continents(), seed),
-            erosion: ProtoChunkNoiseFunction::generate(ast.erosion(), seed),
-            depth: ProtoChunkNoiseFunction::generate(ast.depth(), seed),
-            ridges: ProtoChunkNoiseFunction::generate(ast.ridges(), seed),
+            lava_noise: ProtoChunkNoiseFunction::generate(ast.lava_noise(), random_config),
+            temperature: ProtoChunkNoiseFunction::generate(ast.temperature(), random_config),
+            vegetation: ProtoChunkNoiseFunction::generate(ast.vegetation(), random_config),
+            continents: ProtoChunkNoiseFunction::generate(ast.continents(), random_config),
+            erosion: ProtoChunkNoiseFunction::generate(ast.erosion(), random_config),
+            depth: ProtoChunkNoiseFunction::generate(ast.depth(), random_config),
+            ridges: ProtoChunkNoiseFunction::generate(ast.ridges(), random_config),
             initial_density_without_jaggedness: ProtoChunkNoiseFunction::generate(
                 ast.initial_density_without_jaggedness(),
-                seed,
+                random_config,
             ),
-            final_density: ProtoChunkNoiseFunction::generate(ast.final_density(), seed),
-            vein_toggle: ProtoChunkNoiseFunction::generate(ast.vein_toggle(), seed),
-            vein_ridged: ProtoChunkNoiseFunction::generate(ast.vein_ridged(), seed),
-            vein_gap: ProtoChunkNoiseFunction::generate(ast.vein_gap(), seed),
+            final_density: ProtoChunkNoiseFunction::generate(ast.final_density(), random_config),
+            vein_toggle: ProtoChunkNoiseFunction::generate(ast.vein_toggle(), random_config),
+            vein_ridged: ProtoChunkNoiseFunction::generate(ast.vein_ridged(), random_config),
+            vein_gap: ProtoChunkNoiseFunction::generate(ast.vein_gap(), random_config),
         }
     }
 }
