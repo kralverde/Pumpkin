@@ -1113,12 +1113,12 @@ impl<'a> ChunkNoiseFunction<'a> {
 
     fn recursive_fill(
         &mut self,
-        index: usize,
+        component_index: usize,
         array: &mut [f64],
         mapper: &impl IndexToNoisePos,
         sample_options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
-        let component = &mut self.function_components[index];
+        let component = &mut self.function_components[component_index];
         match component {
             ChunkNoiseFunctionComponent::StaticIndependent(static_independent) => {
                 static_independent.fill(array, mapper);
@@ -1235,7 +1235,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                 StaticDependentChunkNoiseFunctionComponent::WeirdScaled(weird_scaled),
             ) => {
                 self.recursive_fill(weird_scaled.input_index, array, mapper, sample_options);
-                array.iter_mut().for_each(|value| {
+                array.iter_mut().enumerate().for_each(|(index, value)| {
                     let pos = mapper.at(index, sample_options.action.maybe_wrapper_data());
                     let scaled_density = weird_scaled.data.mapper().scale(*value);
                     *value = scaled_density
@@ -1274,7 +1274,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                         // Set values and replace in stack
                         cache_once.cache.copy_from_slice(array);
                         cache_once.cache_fill_unique_id = cache_fill_unique_id;
-                        self.function_components[index] =
+                        self.function_components[component_index] =
                             ChunkNoiseFunctionComponent::ChunkSpecific(
                                 ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once),
                             );
@@ -1292,7 +1292,7 @@ impl<'a> ChunkNoiseFunction<'a> {
 
                     *value = sample_component_stack(
                         &mut self.function_components,
-                        index,
+                        component_index,
                         &pos,
                         sample_options,
                     );

@@ -129,10 +129,16 @@ impl<'a> ProtoChunk<'a> {
         self.sampler.sample_start_density();
         for cell_x in 0..horizontal_cells {
             self.sampler.sample_end_density(cell_x);
+            let sample_start_x =
+                (self.start_cell_x() + cell_x as i32) * horizontal_cell_block_count as i32;
 
             for cell_z in 0..horizontal_cells {
                 for cell_y in (0..cell_height).rev() {
                     self.sampler.on_sampled_cell_corners(cell_x, cell_y, cell_z);
+                    let sample_start_y =
+                        (minimum_cell_y as i32 + cell_y as i32) * vertical_cell_block_count as i32;
+                    let sample_start_z =
+                        (self.start_cell_z() + cell_z as i32) * horizontal_cell_block_count as i32;
                     for local_y in (0..vertical_cell_block_count).rev() {
                         let block_y = (minimum_cell_y as i32 + cell_y as i32)
                             * vertical_cell_block_count as i32
@@ -156,25 +162,10 @@ impl<'a> ProtoChunk<'a> {
 
                                 // TODO: Can the math here be simplified? Do the above values come
                                 // to the same results?
-                                let sample_start_x = (self.start_cell_x() + cell_x as i32)
-                                    * horizontal_cell_block_count as i32;
                                 let cell_offset_x = block_x - sample_start_x;
-                                let sample_start_y = (minimum_cell_y as i32 + cell_y as i32)
-                                    * vertical_cell_block_count as i32;
                                 let cell_offset_y = block_y - sample_start_y;
-                                let sample_start_z = (self.start_cell_z() + cell_z as i32)
-                                    * horizontal_cell_block_count as i32;
                                 let cell_offset_z = block_z - sample_start_z;
 
-                                panic!(
-                                    "{:?} {:?} {:?} {:?} {:?} {:?}",
-                                    sample_start_x,
-                                    sample_start_y,
-                                    sample_start_z,
-                                    cell_offset_x,
-                                    cell_offset_y,
-                                    cell_offset_z
-                                );
                                 #[cfg(debug_assertions)]
                                 {
                                     assert!(cell_offset_x >= 0);

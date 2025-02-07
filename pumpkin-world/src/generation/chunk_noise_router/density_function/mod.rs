@@ -66,13 +66,13 @@ pub trait IndexToNoisePos {
         -> impl NoisePos + 'static;
 }
 
-struct ProtoChunkNoiseFunctionBuilderData<'a> {
-    random_config: &'a GlobalRandomConfig,
+struct ProtoChunkNoiseFunctionBuilderData<'a, 'b> {
+    random_config: &'b GlobalRandomConfig,
     id_to_sampler_map: Vec<(&'a str, Arc<DoublePerlinNoiseSampler>)>,
 }
 
-impl<'a> ProtoChunkNoiseFunctionBuilderData<'a> {
-    fn new(rand: &'a GlobalRandomConfig) -> Self {
+impl<'a, 'b> ProtoChunkNoiseFunctionBuilderData<'a, 'b> {
+    fn new(rand: &'b GlobalRandomConfig) -> Self {
         Self {
             random_config: rand,
             id_to_sampler_map: Vec::new(),
@@ -121,7 +121,7 @@ impl<'a> ProtoChunkNoiseFunction<'a> {
     fn recursive_generate_spline(
         spline_ast: &'a SplineRepr,
         function_vec: &mut Vec<UniversalChunkNoiseFunctionComponent<'a>>,
-        build_data: &mut ProtoChunkNoiseFunctionBuilderData<'a>,
+        build_data: &mut ProtoChunkNoiseFunctionBuilderData<'a, '_>,
     ) -> SplineValue {
         match spline_ast {
             SplineRepr::Standard {
@@ -155,7 +155,7 @@ impl<'a> ProtoChunkNoiseFunction<'a> {
     fn recursive_generate_chunk_noise_function(
         function_ast: &'a DensityFunctionRepr,
         function_vec: &mut Vec<UniversalChunkNoiseFunctionComponent<'a>>,
-        build_data: &mut ProtoChunkNoiseFunctionBuilderData<'a>,
+        build_data: &mut ProtoChunkNoiseFunctionBuilderData<'a, '_>,
     ) -> usize {
         //println!("Generating: {}", function_ast.as_str());
         match function_ast {
@@ -395,7 +395,7 @@ impl<'a> ProtoChunkNoiseFunction<'a> {
 
     pub fn generate(
         function_ast: &'a DensityFunctionRepr,
-        random_config: &'a GlobalRandomConfig,
+        random_config: &GlobalRandomConfig,
     ) -> Self {
         let mut function_vec = Vec::new();
         let mut build_data = ProtoChunkNoiseFunctionBuilderData::new(random_config);

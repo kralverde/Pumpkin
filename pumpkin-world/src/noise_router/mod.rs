@@ -34,6 +34,7 @@ pub static NOISE_ROUTER_ASTS: LazyLock<NoiseRouterReprs> = LazyLock::new(|| {
     fix_final_density!(reprs.overworld);
     fix_final_density!(reprs.overworld_amplified);
     fix_final_density!(reprs.overworld_large_biomes);
+    fix_final_density!(reprs.nether);
 
     reprs
 });

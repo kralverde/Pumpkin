@@ -211,7 +211,6 @@ impl IndexToNoisePos for InterpolationIndexMapper {
     ) -> impl NoisePos + 'static {
         if let Some(wrapper_data) = wrapper_inputs {
             wrapper_data.cache_result_unique_index += 1;
-            wrapper_data.cell_y_block_position = 0;
             wrapper_data.fill_index = index;
         }
 
@@ -245,7 +244,7 @@ impl IndexToNoisePos for ChunkIndexMapper {
             - floor_div(xy_portion, self.horizontal_cell_block_count);
 
         if let Some(wrapper_data) = wrapper_inputs {
-            wrapper_data.cell_x_block_position = cell_z_position;
+            wrapper_data.cell_x_block_position = cell_x_position;
             wrapper_data.cell_y_block_position = cell_y_position;
             wrapper_data.cell_z_block_position = cell_z_position;
             wrapper_data.fill_index = index;
@@ -325,8 +324,6 @@ impl<'a> ChunkNoiseGenerator<'a> {
             biome_pos.z,
             horizontal_biome_end as usize,
         );
-
-        // TODO: This can be moved to a global level for a slight speed up
 
         macro_rules! build_function {
             ($func: ident) => {

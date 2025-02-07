@@ -19,7 +19,7 @@ use derive_getters::Getters;
 pub use generator::WorldGenerator;
 use implementation::{
     //overworld::biome::plains::PlainsGenerator,
-    test::{TestBiomeGenerator, TestGenerator, TestTerrainGenerator},
+    test::TestGenerator,
 };
 use pumpkin_util::random::{xoroshiro128::Xoroshiro, RandomDeriver, RandomImpl};
 pub use seed::Seed;
@@ -29,7 +29,7 @@ use generator::GeneratorInit;
 pub fn get_world_gen(seed: Seed) -> Box<dyn WorldGenerator> {
     // TODO decide which WorldGenerator to pick based on config.
     //Box::new(PlainsGenerator::new(seed))
-    Box::new(TestGenerator::<TestBiomeGenerator, TestTerrainGenerator>::new(seed))
+    Box::new(TestGenerator::new(seed))
 }
 
 #[derive(Getters)]

@@ -28,7 +28,7 @@ pub struct GlobalProtoNoiseRouter<'a> {
 }
 
 impl<'a> GlobalProtoNoiseRouter<'a> {
-    pub fn generate(ast: &'a NoiseRouterRepr, random_config: &'a GlobalRandomConfig) -> Self {
+    pub fn generate(ast: &'a NoiseRouterRepr, random_config: &GlobalRandomConfig) -> Self {
         Self {
             barrier_noise: ProtoChunkNoiseFunction::generate(ast.barrier_noise(), random_config),
             fluid_level_floodedness_noise: ProtoChunkNoiseFunction::generate(
