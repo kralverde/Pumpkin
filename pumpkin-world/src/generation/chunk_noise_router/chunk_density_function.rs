@@ -233,7 +233,6 @@ fn sample_component_stack(
                             }
                         }
                         SampleAction::SkipWrappers => {
-                            println!("Skip");
                             let input_index = cache_once.input_index;
                             sample_component_stack(
                                 component_stack,
