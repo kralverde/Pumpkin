@@ -17,6 +17,7 @@ use crate::{
 
 use super::{NoisePos, ProtoChunkNoiseFunction};
 
+#[derive(Debug)]
 struct TestNoisePos {
     x: i32,
     y: i32,

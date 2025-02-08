@@ -60,12 +60,13 @@ impl ChunkDensityFunctionOwner for OreVeinSampler<'_> {
     fn fill_interpolator_buffers(
         &mut self,
         start: bool,
+        cell_z: usize,
         mapper: &impl IndexToNoisePos,
         options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
-        self.density_functions()
-            .into_iter()
-            .for_each(|function| function.fill_interpolator_buffers(start, mapper, options));
+        self.density_functions().into_iter().for_each(|function| {
+            function.fill_interpolator_buffers(start, cell_z, mapper, options)
+        });
     }
 
     #[inline]

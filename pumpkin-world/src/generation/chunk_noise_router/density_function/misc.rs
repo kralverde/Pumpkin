@@ -13,6 +13,7 @@ use crate::{
 
 use super::{ChunkNoiseFunctionRange, NoisePos, StaticIndependentChunkNoiseFunctionComponentImpl};
 
+#[derive(Clone)]
 pub struct EndIsland {
     sampler: Arc<SimplexNoiseSampler>,
 }
@@ -78,6 +79,7 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for EndIsland {
     }
 }
 
+#[derive(Clone)]
 pub struct WeirdScaled<'a> {
     pub(crate) input_index: usize,
     pub(crate) sampler: Arc<DoublePerlinNoiseSampler>,
@@ -110,6 +112,7 @@ impl ChunkNoiseFunctionRange for WeirdScaled<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct ClampedYGradient<'a> {
     data: &'a ClampedYGradientData,
 }
@@ -144,6 +147,7 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for ClampedYGradient<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct Clamp<'a> {
     pub(crate) input_index: usize,
     pub(crate) data: &'a ClampData,
@@ -167,6 +171,7 @@ impl ChunkNoiseFunctionRange for Clamp<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct RangeChoice<'a> {
     pub(crate) input_index: usize,
     pub(crate) when_in_index: usize,

@@ -140,12 +140,13 @@ impl ChunkDensityFunctionOwner for ChainedBlockStateSampler<'_> {
     fn fill_interpolator_buffers(
         &mut self,
         start: bool,
+        cell_z: usize,
         mapper: &impl IndexToNoisePos,
         options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
         self.samplers
             .iter_mut()
-            .for_each(|sampler| sampler.fill_interpolator_buffers(start, mapper, options));
+            .for_each(|sampler| sampler.fill_interpolator_buffers(start, cell_z, mapper, options));
     }
 
     #[inline]
@@ -418,6 +419,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
         for cell_z in 0..=self.horizontal_cell_block_count() {
             let current_cell_z_pos = self.start_cell_pos.z + cell_z as i32;
             let z = current_cell_z_pos * self.horizontal_cell_block_count() as i32;
+            self.cache_fill_unique_index += 1;
 
             let mapper = InterpolationIndexMapper {
                 x,
@@ -427,7 +429,6 @@ impl<'a> ChunkNoiseGenerator<'a> {
             };
 
             let mut options = ChunkNoiseFunctionSampleOptions::new(
-                true,
                 false,
                 SampleAction::Wrappers(WrapperData {
                     cell_x_block_position: 0,
@@ -441,8 +442,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
                 }),
             );
 
-            self.cache_fill_unique_index += 1;
-            self.fill_interpolator_buffers(start, &mapper, &mut options);
+            self.fill_interpolator_buffers(start, cell_z as usize, &mapper, &mut options);
             self.cache_result_unique_index = options
                 .action
                 .maybe_wrapper_data()
@@ -456,11 +456,12 @@ impl<'a> ChunkNoiseGenerator<'a> {
     fn fill_interpolator_buffers(
         &mut self,
         start: bool,
+        cell_z: usize,
         mapper: &impl IndexToNoisePos,
         options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
         self.state_sampler
-            .fill_interpolator_buffers(start, mapper, options);
+            .fill_interpolator_buffers(start, cell_z, mapper, options);
     }
 
     #[inline]
@@ -507,7 +508,6 @@ impl<'a> ChunkNoiseGenerator<'a> {
 
         let mut options = ChunkNoiseFunctionSampleOptions::new(
             true,
-            true,
             SampleAction::Wrappers(WrapperData {
                 cell_x_block_position: 0,
                 cell_y_block_position: 0,
@@ -521,7 +521,6 @@ impl<'a> ChunkNoiseGenerator<'a> {
         );
 
         self.state_sampler.fill_cell_caches(&mapper, &mut options);
-
         self.cache_fill_unique_index += 1;
     }
 
@@ -541,7 +540,6 @@ impl<'a> ChunkNoiseGenerator<'a> {
             start_z + cell_z as i32,
         );
         let options = ChunkNoiseFunctionSampleOptions::new(
-            true,
             false,
             SampleAction::Wrappers(WrapperData {
                 cell_x_block_position: cell_x,

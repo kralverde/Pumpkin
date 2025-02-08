@@ -14,6 +14,7 @@ use crate::{
 
 use super::{ChunkNoiseFunctionRange, NoisePos, StaticIndependentChunkNoiseFunctionComponentImpl};
 
+#[derive(Clone)]
 pub struct Noise<'a> {
     sampler: Arc<DoublePerlinNoiseSampler>,
     data: &'a NoiseData,
@@ -52,6 +53,7 @@ fn shift_sample_3d(sampler: &DoublePerlinNoiseSampler, x: f64, y: f64, z: f64) -
     sampler.sample(x * 0.25f64, y * 0.25f64, z * 0.25f64) * 4f64
 }
 
+#[derive(Clone)]
 pub struct ShiftA {
     sampler: Arc<DoublePerlinNoiseSampler>,
 }
@@ -80,6 +82,7 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for ShiftA {
     }
 }
 
+#[derive(Clone)]
 pub struct ShiftB {
     sampler: Arc<DoublePerlinNoiseSampler>,
 }
@@ -108,6 +111,7 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for ShiftB {
     }
 }
 
+#[derive(Clone)]
 pub struct ShiftedNoise<'a> {
     pub(crate) x_index: usize,
     pub(crate) y_index: usize,
@@ -146,6 +150,7 @@ impl<'a> ShiftedNoise<'a> {
     }
 }
 
+#[derive(Clone)]
 pub struct InterpolatedNoiseSampler<'a> {
     lower_noise: Box<OctavePerlinNoiseSampler>,
     upper_noise: Box<OctavePerlinNoiseSampler>,

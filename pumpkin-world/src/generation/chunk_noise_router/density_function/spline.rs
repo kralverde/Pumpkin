@@ -2,11 +2,13 @@ use crate::noise_router::density_function_ast::SplineData;
 
 use super::ChunkNoiseFunctionRange;
 
+#[derive(Clone)]
 pub enum SplineValue {
     Spline(Spline),
     Fixed(f32),
 }
 
+#[derive(Clone)]
 pub struct SplinePoint {
     pub(crate) location: f32,
     pub(crate) value: SplineValue,
@@ -53,6 +55,7 @@ pub enum Range {
     Below,
 }
 
+#[derive(Clone)]
 pub struct Spline {
     pub(crate) input_index: usize,
     pub(crate) points: Box<[SplinePoint]>,
@@ -77,6 +80,7 @@ impl Spline {
     }
 }
 
+#[derive(Clone)]
 pub struct SplineFunction<'a> {
     pub(crate) spline: Spline,
     data: &'a SplineData,

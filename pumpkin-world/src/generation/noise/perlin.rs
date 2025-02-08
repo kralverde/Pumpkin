@@ -4,6 +4,7 @@ use pumpkin_util::random::RandomGenerator;
 
 use super::{lerp3, GRADIENTS};
 
+#[derive(Clone)]
 pub struct PerlinNoiseSampler {
     permutation: [u8; 256],
     x_origin: f64,
@@ -132,6 +133,7 @@ impl PerlinNoiseSampler {
     }
 }
 
+#[derive(Clone)]
 pub struct OctavePerlinNoiseSampler {
     octave_samplers: Box<[Option<PerlinNoiseSampler>]>,
     amplitudes: Box<[f64]>,

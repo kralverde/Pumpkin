@@ -233,13 +233,28 @@ impl<'a> ProtoChunk<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::{fs, path::Path, sync::LazyLock};
+    use std::{cell, fs, mem, path::Path, sync::LazyLock};
 
     use pumpkin_util::math::vector2::Vector2;
 
     use crate::{
-        generation::{chunk_noise_router::GlobalProtoNoiseRouter, GlobalRandomConfig},
-        noise_router::NOISE_ROUTER_ASTS,
+        generation::{
+            aquifer_sampler::AquiferSampler,
+            chunk_noise::{BlockStateSampler, ChainedBlockStateSampler},
+            chunk_noise_router::{
+                chunk_density_function::{
+                    ChunkNoiseFunctionComponent, ChunkSpecificNoiseFunctionComponent,
+                },
+                density_function::{
+                    ChunkNoiseFunctionRange, PassThrough,
+                    StaticDependentChunkNoiseFunctionComponent,
+                    UniversalChunkNoiseFunctionComponent,
+                },
+                GlobalProtoNoiseRouter,
+            },
+            GlobalRandomConfig,
+        },
+        noise_router::{density_function_ast::WrapperType, NOISE_ROUTER_ASTS},
         read_data_from_file,
     };
 
@@ -253,10 +268,37 @@ mod test {
     });
 
     #[test]
-    fn test_no_blend_no_beard() {
+    fn test_no_blend_no_beard_only_cell_cache() {
+        // We say no wrapper, but it technically has a top-level cell cache
         let expected_data: Vec<u16> =
-            read_data_from_file!("../../assets/no_blend_no_beard_0_0.chunk");
-        let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &BASE_NOISE_ROUTER, &RANDOM_CONFIG);
+            read_data_from_file!("../../assets/no_blend_no_beard_only_cell_cache_0_0.chunk");
+
+        let mut base_router = BASE_NOISE_ROUTER.clone();
+        base_router.iter_functions().for_each(|function| {
+            function
+                .function_components
+                .iter_mut()
+                .for_each(|component| {
+                    if let UniversalChunkNoiseFunctionComponent::Wrapped(wrapper) = component {
+                        match wrapper.wrapper_type() {
+                            WrapperType::CellCache => (),
+                            _ => {
+                                *component = UniversalChunkNoiseFunctionComponent::StaticDependent(
+                                    StaticDependentChunkNoiseFunctionComponent::PassThrough(
+                                        PassThrough {
+                                            input_index: wrapper.input_index(),
+                                            min_value: wrapper.min(),
+                                            max_value: wrapper.max(),
+                                        },
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                });
+        });
+
+        let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &base_router, &RANDOM_CONFIG);
         chunk.populate_noise();
 
         expected_data
@@ -268,7 +310,16 @@ mod test {
                     panic!("{} vs {} ({})", expected, actual.state_id, index);
                 }
             });
-        /*
+    }
+
+    /*
+    #[test]
+    fn test_no_blend_no_beard() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_0_0.chunk");
+        let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &BASE_NOISE_ROUTER, &RANDOM_CONFIG);
+        chunk.populate_noise();
+
         assert_eq!(
             expected_data,
             chunk
@@ -277,10 +328,8 @@ mod test {
                 .map(|state| state.state_id)
                 .collect::<Vec<u16>>()
         );
-        */
     }
 
-    /*
     #[test]
     fn test_no_blend_no_beard_aquifer() {
         let expected_data: Vec<u16> =

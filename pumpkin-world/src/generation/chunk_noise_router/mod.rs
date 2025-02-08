@@ -8,7 +8,7 @@ use super::GlobalRandomConfig;
 pub mod chunk_density_function;
 pub mod density_function;
 
-#[derive(Getters)]
+#[derive(Getters, Clone)]
 pub struct GlobalProtoNoiseRouter<'a> {
     barrier_noise: ProtoChunkNoiseFunction<'a>,
     fluid_level_floodedness_noise: ProtoChunkNoiseFunction<'a>,
@@ -55,5 +55,28 @@ impl<'a> GlobalProtoNoiseRouter<'a> {
             vein_ridged: ProtoChunkNoiseFunction::generate(ast.vein_ridged(), random_config),
             vein_gap: ProtoChunkNoiseFunction::generate(ast.vein_gap(), random_config),
         }
+    }
+}
+
+impl<'a> GlobalProtoNoiseRouter<'a> {
+    pub fn iter_functions(&mut self) -> impl Iterator<Item = &mut ProtoChunkNoiseFunction<'a>> {
+        [
+            &mut self.barrier_noise,
+            &mut self.fluid_level_floodedness_noise,
+            &mut self.fluid_level_spread_noise,
+            &mut self.lava_noise,
+            &mut self.temperature,
+            &mut self.vegetation,
+            &mut self.continents,
+            &mut self.erosion,
+            &mut self.depth,
+            &mut self.ridges,
+            &mut self.initial_density_without_jaggedness,
+            &mut self.final_density,
+            &mut self.vein_toggle,
+            &mut self.vein_ridged,
+            &mut self.vein_gap,
+        ]
+        .into_iter()
     }
 }

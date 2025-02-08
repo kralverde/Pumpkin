@@ -86,7 +86,7 @@ pub struct WorldAquiferSampler<'a> {
     fluid_type: ChunkNoiseFunction<'a>,
     erosion: ChunkNoiseFunction<'a>,
     depth: ChunkNoiseFunction<'a>,
-    function: ChunkNoiseFunction<'a>,
+    pub(crate) function: ChunkNoiseFunction<'a>,
     random_deriver: RandomDeriver,
     fluid_level: FluidLevelSampler,
     start_x: i32,
@@ -629,12 +629,13 @@ impl ChunkDensityFunctionOwner for WorldAquiferSampler<'_> {
     fn fill_interpolator_buffers(
         &mut self,
         start: bool,
+        cell_z: usize,
         mapper: &impl IndexToNoisePos,
         options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
-        self.density_functions()
-            .into_iter()
-            .for_each(|function| function.fill_interpolator_buffers(start, mapper, options));
+        self.density_functions().into_iter().for_each(|function| {
+            function.fill_interpolator_buffers(start, cell_z, mapper, options)
+        });
     }
 
     #[inline]
@@ -714,11 +715,12 @@ impl ChunkDensityFunctionOwner for SeaLevelAquiferSampler<'_> {
     fn fill_interpolator_buffers(
         &mut self,
         start: bool,
+        cell_z: usize,
         mapper: &impl IndexToNoisePos,
         options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
         self.function
-            .fill_interpolator_buffers(start, mapper, options);
+            .fill_interpolator_buffers(start, cell_z, mapper, options);
     }
 
     #[inline]
@@ -839,7 +841,7 @@ mod test {
             true,
             true,
         );
-        let options = ChunkNoiseFunctionSampleOptions::new(true, false, SampleAction::SkipWrappers);
+        let options = ChunkNoiseFunctionSampleOptions::new(false, SampleAction::SkipWrappers);
         let sampler = match noise.state_sampler {
             BlockStateSampler::Chained(chained) => chained,
             _ => unreachable!(),

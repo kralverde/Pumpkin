@@ -100,7 +100,7 @@ impl WierdScaledMapper {
     }
 }
 
-#[derive(Copy, Clone, Deserialize)]
+#[derive(Copy, Clone, Deserialize, PartialEq, Eq)]
 pub enum WrapperType {
     Interpolated,
     #[serde(rename(deserialize = "FlatCache"))]

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 use enum_dispatch::enum_dispatch;
 use math::{Binary, Constant, Linear, Unary};
@@ -26,12 +26,13 @@ pub mod spline;
 #[cfg(test)]
 mod test;
 
-pub trait NoisePos {
+pub trait NoisePos: Debug {
     fn x(&self) -> i32;
     fn y(&self) -> i32;
     fn z(&self) -> i32;
 }
 
+#[derive(Debug)]
 pub struct UnblendedNoisePos {
     x: i32,
     y: i32,
@@ -109,8 +110,9 @@ impl<'a, 'b> ProtoChunkNoiseFunctionBuilderData<'a, 'b> {
 /// A proto-noise function that initializes everything specific to the world seed.
 /// This function cannot make any samples because all `Wrapped` components have a
 /// chunk-specific initialization that must take place first
+#[derive(Clone)]
 pub struct ProtoChunkNoiseFunction<'a> {
-    function_components: Box<[UniversalChunkNoiseFunctionComponent<'a>]>,
+    pub(crate) function_components: Box<[UniversalChunkNoiseFunctionComponent<'a>]>,
 }
 
 impl<'a> ProtoChunkNoiseFunction<'a> {
@@ -432,6 +434,7 @@ pub trait StaticIndependentChunkNoiseFunctionComponentImpl: ChunkNoiseFunctionRa
     StaticIndependentChunkNoiseFunctionComponentImpl,
     ChunkNoiseFunctionRange
 )]
+#[derive(Clone)]
 pub enum StaticIndependentChunkNoiseFunctionComponent<'a> {
     Constant(Constant),
     EndIsland(EndIsland),
@@ -443,6 +446,7 @@ pub enum StaticIndependentChunkNoiseFunctionComponent<'a> {
 }
 
 #[enum_dispatch(ChunkNoiseFunctionRange)]
+#[derive(Clone)]
 pub enum StaticDependentChunkNoiseFunctionComponent<'a> {
     Linear(Linear<'a>),
     Unary(Unary<'a>),
@@ -452,8 +456,10 @@ pub enum StaticDependentChunkNoiseFunctionComponent<'a> {
     Clamp(Clamp<'a>),
     RangeChoice(RangeChoice<'a>),
     Spline(SplineFunction<'a>),
+    PassThrough(PassThrough),
 }
 
+#[derive(Clone)]
 pub struct Wrapper {
     input_index: usize,
     wrapper_type: WrapperType,
@@ -495,7 +501,27 @@ impl ChunkNoiseFunctionRange for Wrapper {
     }
 }
 
+#[derive(Clone)]
+pub struct PassThrough {
+    pub(crate) input_index: usize,
+    pub(crate) min_value: f64,
+    pub(crate) max_value: f64,
+}
+
+impl ChunkNoiseFunctionRange for PassThrough {
+    #[inline]
+    fn min(&self) -> f64 {
+        self.min_value
+    }
+
+    #[inline]
+    fn max(&self) -> f64 {
+        self.max_value
+    }
+}
+
 #[enum_dispatch(ChunkNoiseFunctionRange)]
+#[derive(Clone)]
 pub enum UniversalChunkNoiseFunctionComponent<'a> {
     StaticIndependent(StaticIndependentChunkNoiseFunctionComponent<'a>),
     StaticDependent(StaticDependentChunkNoiseFunctionComponent<'a>),
