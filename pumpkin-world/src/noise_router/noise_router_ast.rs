@@ -1,8 +1,9 @@
 use derive_getters::Getters;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
 use super::density_function_ast::DensityFunctionRepr;
 
+#[allow(dead_code)]
 #[derive(Deserialize, Getters)]
 pub struct NoiseRouterReprs {
     pub(crate) overworld: NoiseRouterRepr,

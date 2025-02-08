@@ -118,9 +118,6 @@ fn sample_component_stack(
                             cell_z_block_position,
                             horizontal_cell_block_count,
                             vertical_cell_block_count,
-                            cache_result_unique_index: _,
-                            cache_fill_unique_index: _,
-                            fill_index: _,
                         }) => {
                             if sample_options.populating_caches {
                                 lerp3(
@@ -162,20 +159,19 @@ fn sample_component_stack(
                     let relative_biome_z_position =
                         absolute_biome_z_position - flat_cache.start_biome_z;
 
-                    if relative_biome_x_position < 0
-                        || relative_biome_z_position < 0
-                        || relative_biome_x_position >= flat_cache.horizontal_biome_end as i32
-                        || relative_biome_z_position >= flat_cache.horizontal_biome_end as i32
+                    if relative_biome_x_position >= 0
+                        && relative_biome_z_position >= 0
+                        && relative_biome_x_position <= flat_cache.horizontal_biome_end as i32
+                        && relative_biome_z_position <= flat_cache.horizontal_biome_end as i32
                     {
-                        let input_index = flat_cache.input_index;
-                        sample_component_stack(component_stack, input_index, pos, sample_options)
-                    } else {
-                        let sample_index = flat_cache.xz_to_index_const(
+                        let cache_index = flat_cache.xz_to_index_const(
                             relative_biome_x_position as usize,
                             relative_biome_z_position as usize,
                         );
-
-                        flat_cache.cache[sample_index]
+                        flat_cache.cache[cache_index]
+                    } else {
+                        let input_index = flat_cache.input_index;
+                        sample_component_stack(component_stack, input_index, pos, sample_options)
                     }
                 }
                 ChunkSpecificNoiseFunctionComponent::Cache2D(cache_2d) => {
@@ -204,21 +200,15 @@ fn sample_component_stack(
                 }
                 ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once) => {
                     match sample_options.action {
-                        SampleAction::Wrappers(WrapperData {
-                            cell_x_block_position: _,
-                            cell_y_block_position: _,
-                            cell_z_block_position: _,
-                            horizontal_cell_block_count: _,
-                            vertical_cell_block_count: _,
-                            cache_result_unique_index: cache_result_unique_id,
-                            cache_fill_unique_index: cache_fill_unique_id,
-                            fill_index,
-                        }) => {
-                            if cache_once.cache_fill_unique_id == cache_fill_unique_id {
-                                return cache_once.cache[fill_index];
-                            }
-
-                            if cache_once.cache_result_unique_id == cache_result_unique_id {
+                        SampleAction::Wrappers(_) => {
+                            if cache_once.cache_fill_unique_id
+                                == sample_options.cache_fill_unique_id
+                                && !cache_once.cache.is_empty()
+                            {
+                                cache_once.cache[sample_options.fill_index]
+                            } else if cache_once.cache_result_unique_id
+                                == sample_options.cache_result_unique_id
+                            {
                                 cache_once.last_sample_result
                             } else {
                                 // Effectively take whats on the stack, leaving an invalid state remaining
@@ -231,7 +221,8 @@ fn sample_component_stack(
                                     pos,
                                     sample_options,
                                 );
-                                cache_once.cache_result_unique_id = cache_result_unique_id;
+                                cache_once.cache_result_unique_id =
+                                    sample_options.cache_result_unique_id;
                                 cache_once.last_sample_result = result;
                                 // We need to re-write the struct instead of a mutable reference to parameters because of mutability
                                 // rules
@@ -242,6 +233,7 @@ fn sample_component_stack(
                             }
                         }
                         SampleAction::SkipWrappers => {
+                            println!("Skip");
                             let input_index = cache_once.input_index;
                             sample_component_stack(
                                 component_stack,
@@ -260,9 +252,6 @@ fn sample_component_stack(
                             cell_z_block_position,
                             horizontal_cell_block_count,
                             vertical_cell_block_count,
-                            cache_result_unique_index: _,
-                            cache_fill_unique_index: _,
-                            fill_index: _,
                         }) => {
                             let cache_index =
                                 ((vertical_cell_block_count - 1 - cell_y_block_position)
@@ -501,13 +490,6 @@ pub struct WrapperData {
     // Number of blocks per cell per axis
     pub(crate) horizontal_cell_block_count: usize,
     pub(crate) vertical_cell_block_count: usize,
-
-    // Global IDs for the `CacheOnce` wrapper
-    pub(crate) cache_result_unique_index: u64,
-    pub(crate) cache_fill_unique_index: u64,
-
-    // The current index of a slice being filled by the `fill` function
-    pub(crate) fill_index: usize,
 }
 
 pub enum SampleAction {
@@ -515,25 +497,32 @@ pub enum SampleAction {
     Wrappers(WrapperData),
 }
 
-impl SampleAction {
-    pub fn maybe_wrapper_data(&mut self) -> Option<&mut WrapperData> {
-        match self {
-            Self::Wrappers(wrappers) => Some(wrappers),
-            _ => None,
-        }
-    }
-}
-
 pub struct ChunkNoiseFunctionSampleOptions {
     populating_caches: bool,
     pub(crate) action: SampleAction,
+
+    // Global IDs for the `CacheOnce` wrapper
+    pub(crate) cache_result_unique_id: u64,
+    pub(crate) cache_fill_unique_id: u64,
+
+    // The current index of a slice being filled by the `fill` function
+    pub(crate) fill_index: usize,
 }
 
 impl ChunkNoiseFunctionSampleOptions {
-    pub const fn new(populating_caches: bool, action: SampleAction) -> Self {
+    pub const fn new(
+        populating_caches: bool,
+        action: SampleAction,
+        cache_result_unique_id: u64,
+        cache_fill_unique_id: u64,
+        fill_index: usize,
+    ) -> Self {
         Self {
             populating_caches,
             action,
+            cache_result_unique_id,
+            cache_fill_unique_id,
+            fill_index,
         }
     }
 }
@@ -654,9 +643,9 @@ impl DensityInterpolator {
         self.first_pass[4] =
             self.end_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
         self.first_pass[5] =
-            self.end_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
+            self.end_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position + 1)];
         self.first_pass[2] =
-            self.start_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
+            self.start_buffer[self.yz_to_buf_index(cell_y_position + 1, cell_z_position)];
         self.first_pass[3] =
             self.start_buffer[self.yz_to_buf_index(cell_y_position + 1, cell_z_position + 1)];
         self.first_pass[6] =
@@ -685,7 +674,11 @@ impl DensityInterpolator {
 
     #[inline]
     fn swap_buffers(&mut self) {
+        #[cfg(debug_assertions)]
+        let test = self.start_buffer[0];
         mem::swap(&mut self.start_buffer, &mut self.end_buffer);
+        #[cfg(debug_assertions)]
+        assert_eq!(test, self.end_buffer[0]);
     }
 
     /// Clones this instance, creating a new struct taking ownership of the cache and replacing the
@@ -828,8 +821,8 @@ impl CacheOnce {
         Self {
             input_index,
             // Make these max, just to be different from the overall default of 0
-            cache_result_unique_id: u64::MAX,
-            cache_fill_unique_id: u64::MAX,
+            cache_result_unique_id: 0,
+            cache_fill_unique_id: 0,
             last_sample_result: Default::default(),
             cache: Box::new([]),
             min_value,
@@ -929,7 +922,7 @@ impl<'a> ChunkNoiseFunction<'a> {
     pub fn new(
         base: &'a ProtoChunkNoiseFunction<'a>,
         wrapper_handler: ChunkNoiseFunctionWrapperHandler,
-        options: &ChunkNoiseFunctionBuilderOptions,
+        build_options: &ChunkNoiseFunctionBuilderOptions,
     ) -> Self {
         let mut components = Vec::with_capacity(base.components().len());
         let mut cell_cache_indices = Vec::new();
@@ -983,7 +976,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                                                 wrapped.input_index(),
                                                 min_value,
                                                 max_value,
-                                                options,
+                                                build_options,
                                             ),
                                         ),
                                     ));
@@ -995,18 +988,25 @@ impl<'a> ChunkNoiseFunction<'a> {
                                     wrapped.input_index(),
                                     min_value,
                                     max_value,
-                                    options,
+                                    build_options,
+                                );
+                                let sample_options = ChunkNoiseFunctionSampleOptions::new(
+                                    false,
+                                    SampleAction::SkipWrappers,
+                                    0,
+                                    0,
+                                    0,
                                 );
 
-                                for biome_x_position in 0..options.horizontal_biome_end {
+                                for biome_x_position in 0..=build_options.horizontal_biome_end {
                                     let absolute_biome_x_position =
-                                        options.start_biome_x + biome_x_position as i32;
+                                        build_options.start_biome_x + biome_x_position as i32;
                                     let block_x_position =
                                         biome_coords::to_block(absolute_biome_x_position);
 
-                                    for biome_z_position in 0..options.horizontal_biome_end {
+                                    for biome_z_position in 0..=build_options.horizontal_biome_end {
                                         let absolute_biome_z_position =
-                                            options.start_biome_z + biome_z_position as i32;
+                                            build_options.start_biome_z + biome_z_position as i32;
                                         let block_z_position =
                                             biome_coords::to_block(absolute_biome_z_position);
 
@@ -1015,10 +1015,6 @@ impl<'a> ChunkNoiseFunction<'a> {
                                             0,
                                             block_z_position,
                                         );
-                                        let options = ChunkNoiseFunctionSampleOptions::new(
-                                            false,
-                                            SampleAction::SkipWrappers,
-                                        );
 
                                         // Due to our stack invariant, what is on the stack is a
                                         // valid density function
@@ -1026,7 +1022,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                                             &mut components,
                                             wrapped.input_index(),
                                             &pos,
-                                            &options,
+                                            &sample_options,
                                         );
                                         let cache_index = flat_cache
                                             .xz_to_index_const(biome_x_position, biome_z_position);
@@ -1062,7 +1058,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                                         wrapped.input_index(),
                                         min_value,
                                         max_value,
-                                        options,
+                                        build_options,
                                     )),
                                 ));
                                 cell_cache_indices.push(components.len() - 1);
@@ -1103,7 +1099,8 @@ impl<'a> ChunkNoiseFunction<'a> {
     pub fn sample_test(&mut self, pos: &impl NoisePos) -> f64 {
         // These options are not actually used because we never build chunk-specific components in
         // the config tests
-        let dummy_options = ChunkNoiseFunctionSampleOptions::new(false, SampleAction::SkipWrappers);
+        let dummy_options =
+            ChunkNoiseFunctionSampleOptions::new(false, SampleAction::SkipWrappers, 0, 0, 0);
         self.sample(pos, &dummy_options)
     }
 
@@ -1124,7 +1121,7 @@ impl<'a> ChunkNoiseFunction<'a> {
             ) => {
                 self.recursive_fill(range_choice.input_index, array, mapper, sample_options);
                 array.iter_mut().enumerate().for_each(|(index, value)| {
-                    let pos = mapper.at(index, sample_options.action.maybe_wrapper_data());
+                    let pos = mapper.at(index, Some(sample_options));
                     *value = if *value >= *range_choice.data.min_inclusive()
                         && *value < *range_choice.data.max_exclusive()
                     {
@@ -1189,8 +1186,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                     BinaryOperation::Mul => {
                         array.iter_mut().enumerate().for_each(|(index, value)| {
                             if *value != 0.0 {
-                                let pos =
-                                    mapper.at(index, sample_options.action.maybe_wrapper_data());
+                                let pos = mapper.at(index, Some(sample_options));
                                 *value *= sample_component_stack(
                                     &mut self.function_components,
                                     binary.arg2_index,
@@ -1204,8 +1200,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                         let min_2 = self.function_components[binary.arg2_index].min();
                         array.iter_mut().enumerate().for_each(|(index, value)| {
                             if *value > min_2 {
-                                let pos =
-                                    mapper.at(index, sample_options.action.maybe_wrapper_data());
+                                let pos = mapper.at(index, Some(sample_options));
                                 *value = value.min(sample_component_stack(
                                     &mut self.function_components,
                                     binary.arg2_index,
@@ -1219,8 +1214,7 @@ impl<'a> ChunkNoiseFunction<'a> {
                         let max_2 = self.function_components[binary.arg2_index].max();
                         array.iter_mut().enumerate().for_each(|(index, value)| {
                             if *value < max_2 {
-                                let pos =
-                                    mapper.at(index, sample_options.action.maybe_wrapper_data());
+                                let pos = mapper.at(index, Some(sample_options));
                                 *value = value.max(sample_component_stack(
                                     &mut self.function_components,
                                     binary.arg2_index,
@@ -1237,7 +1231,7 @@ impl<'a> ChunkNoiseFunction<'a> {
             ) => {
                 self.recursive_fill(weird_scaled.input_index, array, mapper, sample_options);
                 array.iter_mut().enumerate().for_each(|(index, value)| {
-                    let pos = mapper.at(index, sample_options.action.maybe_wrapper_data());
+                    let pos = mapper.at(index, Some(sample_options));
                     let scaled_density = weird_scaled.data.mapper().scale(*value);
                     *value = scaled_density
                         * weird_scaled
@@ -1253,46 +1247,58 @@ impl<'a> ChunkNoiseFunction<'a> {
             ChunkNoiseFunctionComponent::ChunkSpecific(
                 ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once),
             ) => {
-                match &sample_options.action {
-                    SampleAction::Wrappers(wrapper_data) => {
-                        let cache_fill_unique_id = wrapper_data.cache_fill_unique_index;
-                        if cache_once.cache_fill_unique_id == cache_fill_unique_id {
-                            array.copy_from_slice(&cache_once.cache);
-                            return;
-                        }
+                if cache_once.cache_fill_unique_id == sample_options.cache_fill_unique_id
+                    && !cache_once.cache.is_empty()
+                {
+                    array.copy_from_slice(&cache_once.cache);
+                    return;
+                }
 
-                        // Effectively take whats on the stack, leaving an invalid state remaining
-                        let mut cache_once = cache_once.take_cache_clone();
-                        #[cfg(debug_assertions)]
-                        assert!(cache_once.cache.len() > 0);
+                // Effectively take whats on the stack, leaving an invalid state remaining
+                let mut cache_once = cache_once.take_cache_clone();
+                #[cfg(debug_assertions)]
+                assert!(cache_once.cache.len() > 0);
 
-                        // This is safe because one of our invariants is no cyclic graphs on the map; the
-                        // input index will never reference this
-                        self.recursive_fill(cache_once.input_index, array, mapper, sample_options);
+                // This is safe because one of our invariants is no cyclic graphs on the map; the
+                // input index will never reference this
+                self.recursive_fill(cache_once.input_index, array, mapper, sample_options);
 
-                        // We need to make a new cache
-                        if cache_once.cache.len() != array.len() {
-                            cache_once.cache = vec![0.0; array.len()].into_boxed_slice();
-                        }
+                // We need to make a new cache
+                if cache_once.cache.len() != array.len() {
+                    cache_once.cache = vec![0.0; array.len()].into_boxed_slice();
+                }
 
-                        // Set values and replace in stack
-                        cache_once.cache.copy_from_slice(array);
-                        cache_once.cache_fill_unique_id = cache_fill_unique_id;
-                        self.function_components[component_index] =
-                            ChunkNoiseFunctionComponent::ChunkSpecific(
-                                ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once),
-                            );
-                    }
-                    SampleAction::SkipWrappers => {
-                        let input_index = cache_once.input_index;
-                        self.recursive_fill(input_index, array, mapper, sample_options);
-                    }
+                // Set values and replace in stack
+                cache_once.cache.copy_from_slice(array);
+                cache_once.cache_fill_unique_id = sample_options.cache_fill_unique_id;
+                self.function_components[component_index] =
+                    ChunkNoiseFunctionComponent::ChunkSpecific(
+                        ChunkSpecificNoiseFunctionComponent::CacheOnce(cache_once),
+                    );
+            }
+            ChunkNoiseFunctionComponent::ChunkSpecific(
+                ChunkSpecificNoiseFunctionComponent::DensityInterpolator(density_interpolator),
+            ) => {
+                if sample_options.populating_caches {
+                    array.iter_mut().enumerate().for_each(|(index, value)| {
+                        let pos = mapper.at(index, Some(sample_options));
+                        let result = sample_component_stack(
+                            &mut self.function_components,
+                            component_index,
+                            &pos,
+                            sample_options,
+                        );
+                        *value = result;
+                    });
+                } else {
+                    let input_index = density_interpolator.input_index;
+                    self.recursive_fill(input_index, array, mapper, sample_options);
                 }
             }
             // The default
             _ => {
                 array.iter_mut().enumerate().for_each(|(index, value)| {
-                    let pos = mapper.at(index, sample_options.action.maybe_wrapper_data());
+                    let pos = mapper.at(index, Some(sample_options));
                     let result = sample_component_stack(
                         &mut self.function_components,
                         component_index,

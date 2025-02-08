@@ -208,11 +208,11 @@ impl IndexToNoisePos for InterpolationIndexMapper {
     fn at(
         &self,
         index: usize,
-        wrapper_inputs: Option<&mut WrapperData>,
+        sample_data: Option<&mut ChunkNoiseFunctionSampleOptions>,
     ) -> impl NoisePos + 'static {
-        if let Some(wrapper_data) = wrapper_inputs {
-            wrapper_data.cache_result_unique_index += 1;
-            wrapper_data.fill_index = index;
+        if let Some(sample_data) = sample_data {
+            sample_data.cache_result_unique_id += 1;
+            sample_data.fill_index = index;
         }
 
         let y = (index as i32 + self.minimum_cell_y) * self.vertical_cell_block_count;
@@ -235,7 +235,7 @@ impl IndexToNoisePos for ChunkIndexMapper {
     fn at(
         &self,
         index: usize,
-        wrapper_inputs: Option<&mut WrapperData>,
+        sample_options: Option<&mut ChunkNoiseFunctionSampleOptions>,
     ) -> impl NoisePos + 'static {
         let cell_z_position = floor_mod(index, self.horizontal_cell_block_count);
         let xy_portion = floor_div(index, self.horizontal_cell_block_count);
@@ -244,11 +244,13 @@ impl IndexToNoisePos for ChunkIndexMapper {
             - 1
             - floor_div(xy_portion, self.horizontal_cell_block_count);
 
-        if let Some(wrapper_data) = wrapper_inputs {
-            wrapper_data.cell_x_block_position = cell_x_position;
-            wrapper_data.cell_y_block_position = cell_y_position;
-            wrapper_data.cell_z_block_position = cell_z_position;
-            wrapper_data.fill_index = index;
+        if let Some(sample_options) = sample_options {
+            sample_options.fill_index = index;
+            if let SampleAction::Wrappers(wrapper_data) = &mut sample_options.action {
+                wrapper_data.cell_x_block_position = cell_x_position;
+                wrapper_data.cell_y_block_position = cell_y_position;
+                wrapper_data.cell_z_block_position = cell_z_position;
+            }
         }
 
         // TODO: Change this when Blender is implemented
@@ -269,8 +271,8 @@ pub struct ChunkNoiseGenerator<'a> {
     vertical_cell_count: usize,
     minimum_cell_y: i32,
 
-    cache_fill_unique_index: u64,
-    cache_result_unique_index: u64,
+    cache_fill_unique_id: u64,
+    cache_result_unique_id: u64,
 
     pub(crate) height_estimator: ChunkNoiseHeightEstimator<'a>,
 }
@@ -395,8 +397,8 @@ impl<'a> ChunkNoiseGenerator<'a> {
             vertical_cell_count,
             minimum_cell_y,
 
-            cache_fill_unique_index: 0,
-            cache_result_unique_index: 0,
+            cache_fill_unique_id: 0,
+            cache_result_unique_id: 0,
 
             height_estimator,
         }
@@ -404,7 +406,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
 
     #[inline]
     pub fn sample_start_density(&mut self) {
-        self.cache_result_unique_index = 0;
+        self.cache_result_unique_id = 0;
         self.sample_density(true, self.start_cell_pos.x);
     }
 
@@ -419,7 +421,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
         for cell_z in 0..=self.horizontal_cell_block_count() {
             let current_cell_z_pos = self.start_cell_pos.z + cell_z as i32;
             let z = current_cell_z_pos * self.horizontal_cell_block_count() as i32;
-            self.cache_fill_unique_index += 1;
+            self.cache_fill_unique_id += 1;
 
             let mapper = InterpolationIndexMapper {
                 x,
@@ -436,20 +438,16 @@ impl<'a> ChunkNoiseGenerator<'a> {
                     cell_z_block_position: 0,
                     horizontal_cell_block_count: self.horizontal_cell_block_count() as usize,
                     vertical_cell_block_count: self.vertical_cell_block_count() as usize,
-                    cache_result_unique_index: self.cache_result_unique_index,
-                    cache_fill_unique_index: self.cache_result_unique_index,
-                    fill_index: 0,
                 }),
+                self.cache_result_unique_id,
+                self.cache_fill_unique_id,
+                0,
             );
 
             self.fill_interpolator_buffers(start, cell_z as usize, &mapper, &mut options);
-            self.cache_result_unique_index = options
-                .action
-                .maybe_wrapper_data()
-                .unwrap()
-                .cache_result_unique_index;
+            self.cache_result_unique_id = options.cache_result_unique_id;
         }
-        self.cache_fill_unique_index += 1;
+        self.cache_fill_unique_id += 1;
     }
 
     #[inline]
@@ -476,8 +474,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
 
     #[inline]
     pub fn interpolate_z(&mut self, delta: f64) {
-        self.cache_result_unique_index += 1;
-
+        self.cache_result_unique_id += 1;
         self.state_sampler.interpolate_z(delta);
     }
 
@@ -489,7 +486,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
     pub fn on_sampled_cell_corners(&mut self, cell_x: u8, cell_y: u16, cell_z: u8) {
         self.state_sampler
             .on_sampled_cell_corners(cell_y as usize, cell_z as usize);
-        self.cache_fill_unique_index += 1;
+        self.cache_fill_unique_id += 1;
 
         let start_x =
             (self.start_cell_pos.x + cell_x as i32) * self.horizontal_cell_block_count() as i32;
@@ -514,14 +511,14 @@ impl<'a> ChunkNoiseGenerator<'a> {
                 cell_z_block_position: 0,
                 horizontal_cell_block_count: self.horizontal_cell_block_count() as usize,
                 vertical_cell_block_count: self.vertical_cell_block_count() as usize,
-                cache_result_unique_index: self.cache_result_unique_index,
-                cache_fill_unique_index: self.cache_fill_unique_index,
-                fill_index: 0,
             }),
+            self.cache_result_unique_id,
+            self.cache_fill_unique_id,
+            0,
         );
 
         self.state_sampler.fill_cell_caches(&mapper, &mut options);
-        self.cache_fill_unique_index += 1;
+        self.cache_fill_unique_id += 1;
     }
 
     pub fn sample_block_state(
@@ -547,10 +544,10 @@ impl<'a> ChunkNoiseGenerator<'a> {
                 cell_z_block_position: cell_z,
                 horizontal_cell_block_count: self.horizontal_cell_block_count() as usize,
                 vertical_cell_block_count: self.vertical_cell_block_count() as usize,
-                cache_result_unique_index: self.cache_result_unique_index,
-                cache_fill_unique_index: self.cache_fill_unique_index,
-                fill_index: 0,
             }),
+            self.cache_result_unique_id,
+            self.cache_fill_unique_id,
+            0,
         );
 
         self.state_sampler

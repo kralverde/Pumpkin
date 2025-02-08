@@ -1,12 +1,7 @@
 use std::sync::LazyLock;
 
 use generation::{
-    aquifer_sampler::{FluidLevel, FluidLevelSampler},
-    chunk_noise::{ChunkNoiseGenerator, LAVA_BLOCK, WATER_BLOCK},
-    chunk_noise_router::GlobalProtoNoiseRouter,
-    generation_shapes::GenerationShape,
-    proto_chunk::{ProtoChunk, StandardChunkFluidLevelSampler},
-    GlobalRandomConfig,
+    chunk_noise_router::GlobalProtoNoiseRouter, proto_chunk::ProtoChunk, GlobalRandomConfig,
 };
 use noise_router::NOISE_ROUTER_ASTS;
 use pumpkin_util::math::vector2::Vector2;

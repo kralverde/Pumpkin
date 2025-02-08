@@ -14,8 +14,8 @@ use crate::{
 
 // These are for enum_dispatch
 use super::chunk_density_function::{
-    Cache2D, CacheOnce, CellCache, ChunkSpecificNoiseFunctionComponent, DensityInterpolator,
-    FlatCache, WrapperData,
+    Cache2D, CacheOnce, CellCache, ChunkNoiseFunctionSampleOptions,
+    ChunkSpecificNoiseFunctionComponent, DensityInterpolator, FlatCache,
 };
 
 mod math;
@@ -63,8 +63,11 @@ impl NoisePos for UnblendedNoisePos {
 }
 
 pub trait IndexToNoisePos {
-    fn at(&self, index: usize, wrapper_inputs: Option<&mut WrapperData>)
-        -> impl NoisePos + 'static;
+    fn at(
+        &self,
+        index: usize,
+        sample_options: Option<&mut ChunkNoiseFunctionSampleOptions>,
+    ) -> impl NoisePos + 'static;
 }
 
 struct ProtoChunkNoiseFunctionBuilderData<'a, 'b> {

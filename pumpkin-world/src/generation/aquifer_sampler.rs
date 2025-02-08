@@ -841,7 +841,8 @@ mod test {
             true,
             true,
         );
-        let options = ChunkNoiseFunctionSampleOptions::new(false, SampleAction::SkipWrappers);
+        let options =
+            ChunkNoiseFunctionSampleOptions::new(false, SampleAction::SkipWrappers, 0, 0, 0);
         let sampler = match noise.state_sampler {
             BlockStateSampler::Chained(chained) => chained,
             _ => unreachable!(),
