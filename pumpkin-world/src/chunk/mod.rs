@@ -3,7 +3,6 @@ use dashmap::{
     DashMap,
 };
 use fastnbt::LongArray;
-use log::warn;
 use pumpkin_data::chunk::ChunkStatus;
 use pumpkin_util::math::{ceil_log2, vector2::Vector2};
 use serde::{Deserialize, Serialize};
@@ -11,15 +10,12 @@ use std::{
     collections::HashMap,
     iter::repeat_with,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
 };
 use thiserror::Error;
-use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     block::BlockState,
     coordinates::{ChunkRelativeBlockCoordinates, Height},
-    level::LevelFolder,
     WORLD_HEIGHT,
 };
 
@@ -30,26 +26,6 @@ pub const CHUNK_AREA: usize = 16 * 16;
 pub const SUBCHUNK_VOLUME: usize = CHUNK_AREA * 16;
 pub const SUBCHUNKS_COUNT: usize = WORLD_HEIGHT / 16;
 pub const CHUNK_VOLUME: usize = CHUNK_AREA * WORLD_HEIGHT;
-
-/// File locks manager to prevent multiple threads from writing to the same file at the same time
-/// but allowing multiple threads to read from the same file at the same time.
-static FILE_LOCK_MANAGER: LazyLock<Arc<FileLocksManager>> = LazyLock::new(Arc::default);
-
-pub trait ChunkReader: Sync + Send {
-    fn read_chunks(
-        &self,
-        save_file: &LevelFolder,
-        at: &[Vector2<i32>],
-    ) -> Result<Vec<(Vector2<i32>, Option<ChunkData>)>, ChunkReadingError>;
-}
-
-pub trait ChunkWriter: Send + Sync {
-    fn write_chunks(
-        &self,
-        level_folder: &LevelFolder,
-        chunk: &[(Vector2<i32>, &ChunkData)],
-    ) -> Result<(), ChunkWritingError>;
-}
 
 #[derive(Error, Debug)]
 pub enum ChunkReadingError {
@@ -224,10 +200,6 @@ impl FileLocksManager {
         FileWriteGuard {
             _guard: self.locks.entry(path.to_path_buf()).or_insert(()),
         }
-    }
-
-    pub fn remove_file_lock(path: &Path) {
-        FILE_LOCK_MANAGER.locks.remove(path);
     }
 }
 
