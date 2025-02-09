@@ -14,7 +14,6 @@ pub mod chunks_io;
 pub mod coordinates;
 pub mod cylindrical_chunk_iterator;
 pub mod dimension;
-pub mod entity;
 mod generation;
 pub mod item;
 pub mod level;

@@ -13,7 +13,8 @@ use crate::{
     world::chunker,
 };
 use pumpkin_config::ADVANCED_CONFIG;
-use pumpkin_data::entity::{EntityPose, EntityType};
+use pumpkin_data::entity::{entity_from_egg, EntityPose, EntityType};
+use pumpkin_data::item::Item;
 use pumpkin_data::world::CHAT;
 use pumpkin_inventory::player::PlayerInventory;
 use pumpkin_inventory::InventoryError;
@@ -49,13 +50,8 @@ use pumpkin_util::{
 use pumpkin_world::block::interactive::sign::Sign;
 use pumpkin_world::block::registry::get_block_collision_shapes;
 use pumpkin_world::block::registry::Block;
-use pumpkin_world::item::registry::{get_item_by_id, get_name_by_id};
+use pumpkin_world::block::{registry::get_block_by_item, BlockDirection};
 use pumpkin_world::item::ItemStack;
-use pumpkin_world::{
-    block::{registry::get_block_by_item, BlockDirection},
-    entity::registry::get_entity_id,
-    item::registry::get_spawn_egg,
-};
 
 use pumpkin_world::{WORLD_LOWEST_Y, WORLD_MAX_Y};
 use thiserror::Error;
@@ -159,6 +155,14 @@ impl Player {
         let last_pos = entity.pos.load();
         self.living_entity.set_pos(position);
 
+        let height_difference = position.y - last_pos.y;
+        if entity.on_ground.load(std::sync::atomic::Ordering::Relaxed)
+            && !packet.ground
+            && height_difference > 0.0
+        {
+            self.jump().await;
+        }
+
         entity
             .on_ground
             .store(packet.ground, std::sync::atomic::Ordering::Relaxed);
@@ -195,7 +199,6 @@ impl Player {
             )
             .await;
         if !self.abilities.lock().await.flying {
-            let height_difference = position.y - last_pos.y;
             self.living_entity
                 .update_fall_distance(
                     height_difference,
@@ -205,6 +208,12 @@ impl Player {
                 .await;
         }
         chunker::update_position(self).await;
+        self.progress_motion(Vector3::new(
+            position.x - last_pos.x,
+            position.y - last_pos.y,
+            position.z - last_pos.z,
+        ))
+        .await;
     }
 
     pub async fn handle_position_rotation(self: &Arc<Self>, packet: SPlayerPositionRotation) {
@@ -236,6 +245,13 @@ impl Player {
         let last_pos = entity.pos.load();
         self.living_entity.set_pos(position);
 
+        let height_difference = position.y - last_pos.y;
+        if entity.on_ground.load(std::sync::atomic::Ordering::Relaxed)
+            && !packet.ground
+            && height_difference > 0.0
+        {
+            self.jump().await;
+        }
         entity
             .on_ground
             .store(packet.ground, std::sync::atomic::Ordering::Relaxed);
@@ -287,7 +303,6 @@ impl Player {
             )
             .await;
         if !self.abilities.lock().await.flying {
-            let height_difference = position.y - last_pos.y;
             self.living_entity
                 .update_fall_distance(
                     height_difference,
@@ -297,6 +312,12 @@ impl Player {
                 .await;
         }
         chunker::update_position(self).await;
+        self.progress_motion(Vector3::new(
+            position.x - last_pos.x,
+            position.y - last_pos.y,
+            position.z - last_pos.z,
+        ))
+        .await;
     }
 
     pub async fn handle_rotation(&self, rotation: SPlayerRotation) {
@@ -440,7 +461,7 @@ impl Player {
             }
             None if self.gamemode.load() == GameMode::Creative => {
                 // Case where item is not present, if in creative mode create the item
-                let item_stack = ItemStack::new(1, block.item_id);
+                let item_stack = ItemStack::new(1, Item::from_id(block.item_id).unwrap());
                 let slot_data = Slot::from(&item_stack);
                 self.update_single_slot(&mut inventory, dest_slot as i16 + 36, slot_data)
                     .await;
@@ -795,8 +816,9 @@ impl Player {
                         let world = &entity.world;
                         let block = world.get_block(&location).await;
 
-                        world.break_block(&location, Some(self.clone())).await;
-
+                        world
+                            .break_block(server, &location, Some(self.clone()), false)
+                            .await;
                         if let Ok(block) = block {
                             server
                                 .block_registry
@@ -804,6 +826,9 @@ impl Player {
                                 .await;
                         }
                     }
+                    self.client
+                        .send_packet(&CAcknowledgeBlockChange::new(player_action.sequence))
+                        .await;
                 }
                 Status::CancelledDigging => {
                     if !self.can_interact_with_block_at(&player_action.location, 1.0) {
@@ -816,6 +841,9 @@ impl Player {
                     }
                     self.current_block_destroy_stage
                         .store(0, std::sync::atomic::Ordering::Relaxed);
+                    self.client
+                        .send_packet(&CAcknowledgeBlockChange::new(player_action.sequence))
+                        .await;
                 }
                 Status::FinishedDigging => {
                     // TODO: do validation
@@ -833,7 +861,14 @@ impl Player {
                     let world = &entity.world;
                     let block = world.get_block(&location).await;
 
-                    world.break_block(&location, Some(self.clone())).await;
+                    world
+                        .break_block(
+                            server,
+                            &location,
+                            Some(self.clone()),
+                            self.gamemode.load() != GameMode::Creative,
+                        )
+                        .await;
 
                     if let Ok(block) = block {
                         server
@@ -841,6 +876,9 @@ impl Player {
                             .broken(block, &self, location, server)
                             .await;
                     }
+                    self.client
+                        .send_packet(&CAcknowledgeBlockChange::new(player_action.sequence))
+                        .await;
                 }
                 Status::DropItemStack | Status::DropItem => {
                     self.drop_item(server).await;
@@ -851,10 +889,6 @@ impl Player {
             },
             Err(_) => self.kick(TextComponent::text("Invalid status")).await,
         }
-
-        self.client
-            .send_packet(&CAcknowledgeBlockChange::new(player_action.sequence))
-            .await;
     }
 
     pub async fn handle_keep_alive(&self, keep_alive: SKeepAlive) {
@@ -938,11 +972,6 @@ impl Player {
             }
             return Ok(());
         };
-        let Some(item) = get_item_by_id(stack.item_id) else {
-            // If there is an item stack, there should be an item
-            return Err(BlockPlacingError::InventoryInvalid.into());
-        };
-
         if !self
             .living_entity
             .entity
@@ -951,7 +980,7 @@ impl Player {
         {
             let action_result = server
                 .block_registry
-                .use_with_item(block, self, location, item, server)
+                .use_with_item(block, self, location, &stack.item, server)
                 .await;
             match action_result {
                 BlockActionResult::Continue => {}
@@ -961,16 +990,16 @@ impl Player {
             }
         }
         // check if item is a block, Because Not every item can be placed :D
-        if let Some(block) = get_block_by_item(stack.item_id) {
+        if let Some(block) = get_block_by_item(stack.item.id) {
             should_try_decrement = self
                 .run_is_block_place(block.clone(), server, use_item_on, location, &face)
                 .await?;
         }
         // check if item is a spawn egg
-        if let Some(item_t) = get_spawn_egg(stack.item_id) {
-            should_try_decrement = self
-                .run_is_spawn_egg(item_t, server, location, &face)
-                .await?;
+        if let Some(entity) = entity_from_egg(stack.item.id) {
+            self.spawn_entity_from_egg(entity, server, location, &face)
+                .await;
+            should_try_decrement = true;
         };
 
         if should_try_decrement {
@@ -1025,11 +1054,7 @@ impl Player {
             return;
         }
         if let Some(held) = self.inventory().lock().await.held_item() {
-            // this is so ugly and slow brooo...
-            if let Some(item) = get_item_by_id(held.item_id) {
-                let name = get_name_by_id(item.id).unwrap();
-                server.item_registry.on_use(name, item, self, server).await;
-            }
+            server.item_registry.on_use(&held.item, self, server).await;
         }
     }
 
@@ -1133,48 +1158,40 @@ impl Player {
         );
     }
 
-    async fn run_is_spawn_egg(
+    async fn spawn_entity_from_egg(
         &self,
-        item_t: String,
+        entity_type: EntityType,
         server: &Server,
         location: BlockPos,
         face: &BlockDirection,
-    ) -> Result<bool, Box<dyn PumpkinError>> {
-        // checks if spawn egg has a corresponding entity name
-        if let Some(spawn_item_id) = get_entity_id(&item_t) {
-            let world_pos = BlockPos(location.0 + face.to_offset());
-            // align position like Vanilla does
-            let pos = Vector3::new(
-                f64::from(world_pos.0.x) + 0.5,
-                f64::from(world_pos.0.y),
-                f64::from(world_pos.0.z) + 0.5,
-            );
-            // create rotation like Vanilla
-            let yaw = wrap_degrees(rand::random::<f32>() * 360.0) % 360.0;
+    ) {
+        let world_pos = BlockPos(location.0 + face.to_offset());
+        // align position like Vanilla does
+        let pos = Vector3::new(
+            f64::from(world_pos.0.x) + 0.5,
+            f64::from(world_pos.0.y),
+            f64::from(world_pos.0.z) + 0.5,
+        );
+        // create rotation like Vanilla
+        let yaw = wrap_degrees(rand::random::<f32>() * 360.0) % 360.0;
 
-            let world = self.world();
-            // create new mob and uuid based on spawn egg id
-            let mob = mob::from_type(
-                EntityType::from_raw(*spawn_item_id).unwrap(),
-                server,
-                pos,
-                world,
-            )
-            .await;
+        let world = self.world();
+        // create new mob and uuid based on spawn egg id
+        let mob = mob::from_type(
+            EntityType::from_raw(entity_type.id).unwrap(),
+            server,
+            pos,
+            world,
+        )
+        .await;
 
-            // set the rotation
-            mob.get_entity().set_rotation(yaw, 0.0);
+        // set the rotation
+        mob.get_entity().set_rotation(yaw, 0.0);
 
-            // broadcast new mob to all players
-            world.spawn_entity(mob).await;
+        // broadcast new mob to all players
+        world.spawn_entity(mob).await;
 
-            // TODO: send/configure additional commands/data based on type of entity (horse, slime, etc)
-        } else {
-            // TODO: maybe include additional error types
-            return Ok(false);
-        };
-
-        Ok(true)
+        // TODO: send/configure additional commands/data based on type of entity (horse, slime, etc)
     }
 
     fn get_player_direction(&self) -> Direction {
@@ -1296,15 +1313,17 @@ impl Player {
                 .block_registry
                 .on_placed(&block, self, final_block_pos, server)
                 .await;
+
+            self.client
+                .send_packet(&CAcknowledgeBlockChange::new(use_item_on.sequence))
+                .await;
+
+            self.send_sign_packet(block, final_block_pos, face).await;
+            // Block was placed successfully, decrement inventory
+            return Ok(true);
         }
-        self.client
-            .send_packet(&CAcknowledgeBlockChange::new(use_item_on.sequence))
-            .await;
 
-        self.send_sign_packet(block, final_block_pos, face).await;
-
-        // Block was placed successfully, decrement inventory
-        Ok(true)
+        Ok(false)
     }
 
     /// Checks if block placed was a sign, then opens a dialog
