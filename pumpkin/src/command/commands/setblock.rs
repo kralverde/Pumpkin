@@ -4,8 +4,8 @@ use pumpkin_util::text::TextComponent;
 use crate::command::args::block::BlockArgumentConsumer;
 use crate::command::args::position_block::BlockPosArgumentConsumer;
 use crate::command::args::{ConsumedArgs, FindArg};
+use crate::command::tree::builder::{argument, literal};
 use crate::command::tree::CommandTree;
-use crate::command::tree_builder::{argument, literal};
 use crate::command::{CommandError, CommandExecutor, CommandSender};
 
 const NAMES: [&str; 1] = ["setblock"];
@@ -34,7 +34,7 @@ impl CommandExecutor for SetblockExecutor {
     async fn execute<'a>(
         &self,
         sender: &mut CommandSender<'a>,
-        _server: &crate::server::Server,
+        server: &crate::server::Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError> {
         let block = BlockArgumentConsumer::find_arg(args, ARG_BLOCK)?;
@@ -46,7 +46,7 @@ impl CommandExecutor for SetblockExecutor {
 
         let success = match mode {
             Mode::Destroy => {
-                world.break_block(&pos, None).await;
+                world.clone().break_block(server, &pos, None, false).await;
                 world.set_block_state(&pos, block_state_id).await;
                 true
             }

@@ -26,9 +26,8 @@ pub enum HoverEvent {
         /// The UUID cannot use uuid::Uuid because its serialization parses it into bytes, so its double bytes serialized
         id: Cow<'static, str>,
         /// Resource identifier of the entity
-        #[serde(rename = "type")]
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        kind: Option<Cow<'static, str>>,
+        r#type: Option<Cow<'static, str>>,
         /// Optional custom name for the entity
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<Vec<TextComponentBase>>,
@@ -39,14 +38,13 @@ impl HoverEvent {
     pub fn show_text(text: TextComponent) -> Self {
         Self::ShowText(vec![text.0])
     }
-    pub fn show_entity(
-        id: Cow<'static, str>,
-        kind: Option<Cow<'static, str>>,
-        name: Option<TextComponent>,
-    ) -> Self {
+    pub fn show_entity<P>(id: P, kind: Option<P>, name: Option<TextComponent>) -> Self
+    where
+        P: Into<Cow<'static, str>>,
+    {
         Self::ShowEntity {
-            id,
-            kind,
+            id: id.into(),
+            r#type: kind.map(|kind| kind.into()),
             name: match name {
                 Some(name) => Some(vec![name.0]),
                 None => None,
