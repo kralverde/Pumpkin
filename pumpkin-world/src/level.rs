@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use crate::{
-    chunk::{anvil::AnvilChunkFile, linear::LinearFile, ChunkData, ChunkReadingError},
+    chunk::{anvil::AnvilChunkFile, linear::LinearFile, ChunkData},
     chunks_io::{ChunkFileManager, ChunkIO, LoadedData},
     generation::{get_world_gen, Seed, WorldGenerator},
     lock::{anvil::AnvilLevelLocker, LevelLocker},
@@ -255,22 +255,23 @@ impl Level {
     fn load_chunks_from_save(
         &self,
         chunks_pos: &[Vector2<i32>],
-    ) -> Result<Vec<(Vector2<i32>, Option<Arc<RwLock<ChunkData>>>)>, ChunkReadingError> {
+    ) -> Vec<(Vector2<i32>, Option<ChunkData>)> {
         if chunks_pos.is_empty() {
-            return Ok(vec![]);
+            return vec![];
         }
         info!("Loading chunks from disk {:}", chunks_pos.len());
-        Ok(self
-            .chunk_saver
-            .load_chunks(&self.level_folder, chunks_pos)?
+        self.chunk_saver
+            .load_chunks(&self.level_folder, chunks_pos)
+            .unwrap_or_else(|err| {
+                log::error!("Failed to load chunks from disk: {}", err);
+                vec![]
+            })
             .into_par_iter()
             .map(|chunk_data| match chunk_data {
-                LoadedData::LoadedData(chunk) => {
-                    (chunk.position, Some(Arc::new(RwLock::new(chunk))))
-                }
+                LoadedData::LoadedData(chunk) => (chunk.position, Some(chunk)),
                 LoadedData::MissingData(pos) => (pos, None),
             })
-            .collect())
+            .collect::<Vec<_>>()
     }
 
     /// Reads/Generates many chunks in a world
@@ -309,7 +310,6 @@ impl Level {
         }
 
         self.load_chunks_from_save(&chunks_to_load)
-            .unwrap()
             .into_par_iter()
             .for_each(|(pos, chunk)| {
                 let mut first_load = false;
@@ -319,7 +319,7 @@ impl Level {
                     .or_insert_with(|| {
                         first_load = true;
                         match chunk {
-                            Some(chunk) => chunk,
+                            Some(chunk) => Arc::new(RwLock::new(chunk)),
                             None => Arc::new(RwLock::new(self.world_gen.generate_chunk(pos))),
                         }
                     })
