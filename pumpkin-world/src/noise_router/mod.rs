@@ -16,8 +16,8 @@ macro_rules! fix_final_density {
                 argument2: Box::new(DensityFunctionRepr::Beardifier),
                 data: BinaryData {
                     operation: BinaryOperation::Add,
-                    max_value: HashableF64(f64::MAX),
-                    min_value: HashableF64(f64::MIN),
+                    max_value: HashableF64(f64::INFINITY),
+                    min_value: HashableF64(f64::NEG_INFINITY),
                 },
             }),
             wrapper: WrapperType::CellCache,

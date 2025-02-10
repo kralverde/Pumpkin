@@ -5,16 +5,16 @@ use crate::{generation::biome_coords, noise_router::density_function_ast::Wrappe
 use super::{
     chunk_density_function::{
         Cache2D, CacheOnce, CellCache, ChunkNoiseFunctionBuilderOptions,
-        ChunkNoiseFunctionSampleOptions, ChunkNoiseFunctionWrapperHandler,
-        ChunkSpecificNoiseFunctionComponent, DensityInterpolator, FlatCache, SampleAction,
+        ChunkNoiseFunctionSampleOptions, ChunkSpecificNoiseFunctionComponent, DensityInterpolator,
+        FlatCache, SampleAction,
     },
     density_function::{
         IndexToNoisePos, NoiseFunctionComponentRange, NoisePos, PassThrough,
         StaticIndependentChunkNoiseFunctionComponentImpl, UnblendedNoisePos,
     },
     proto_noise_router::{
-        DependentProtoNoiseFunctionComponent, GlobalProtoNoiseRouter,
-        IndependentProtoNoiseFunctionComponent, ProtoNoiseFunctionComponent,
+        DependentProtoNoiseFunctionComponent, IndependentProtoNoiseFunctionComponent,
+        ProtoChunkNoiseRouter, ProtoNoiseFunctionComponent,
     },
 };
 
@@ -210,12 +210,8 @@ pub struct ChunkNoiseRouter<'a> {
     fluid_level_floodedness_noise: usize,
     fluid_level_spread_noise: usize,
     lava_noise: usize,
-    temperature: usize,
-    vegetation: usize,
-    continents: usize,
     erosion: usize,
     depth: usize,
-    ridges: usize,
     initial_density_without_jaggedness: usize,
     final_density: usize,
     vein_toggle: usize,
@@ -231,12 +227,8 @@ impl ChunkNoiseRouter<'_> {
     sample_function!(fluid_level_floodedness_noise);
     sample_function!(fluid_level_spread_noise);
     sample_function!(lava_noise);
-    sample_function!(temperature);
-    sample_function!(vegetation);
-    sample_function!(continents);
     sample_function!(erosion);
     sample_function!(depth);
-    sample_function!(ridges);
     sample_function!(initial_density_without_jaggedness);
     sample_function!(final_density);
     sample_function!(vein_toggle);
@@ -246,8 +238,7 @@ impl ChunkNoiseRouter<'_> {
 
 impl<'a> ChunkNoiseRouter<'a> {
     pub fn generate(
-        base: &'a GlobalProtoNoiseRouter,
-        wrapper_handler: ChunkNoiseFunctionWrapperHandler,
+        base: &'a ProtoChunkNoiseRouter,
         build_options: &ChunkNoiseFunctionBuilderOptions,
     ) -> Self {
         let mut component_stack =
@@ -278,28 +269,19 @@ impl<'a> ChunkNoiseRouter<'a> {
                     let max_value = component_stack[wrapper.input_index].max();
 
                     match wrapper.wrapper_type {
-                        WrapperType::Interpolated => match wrapper_handler {
-                            ChunkNoiseFunctionWrapperHandler::MultiNoiseConfig => {
-                                ChunkNoiseFunctionComponent::PassThrough(PassThrough {
-                                    input_index: wrapper.input_index,
-                                    min_value,
-                                    max_value,
-                                })
-                            }
-                            _ => {
-                                interpolator_indices.push(component_index);
-                                ChunkNoiseFunctionComponent::Chunk(
-                                    ChunkSpecificNoiseFunctionComponent::DensityInterpolator(
-                                        DensityInterpolator::new(
-                                            wrapper.input_index,
-                                            min_value,
-                                            max_value,
-                                            build_options,
-                                        ),
+                        WrapperType::Interpolated => {
+                            interpolator_indices.push(component_index);
+                            ChunkNoiseFunctionComponent::Chunk(
+                                ChunkSpecificNoiseFunctionComponent::DensityInterpolator(
+                                    DensityInterpolator::new(
+                                        wrapper.input_index,
+                                        min_value,
+                                        max_value,
+                                        build_options,
                                     ),
-                                )
-                            }
-                        },
+                                ),
+                            )
+                        }
                         WrapperType::CellCache => {
                             cell_cache_indices.push(component_index);
                             ChunkNoiseFunctionComponent::Chunk(
@@ -330,7 +312,9 @@ impl<'a> ChunkNoiseRouter<'a> {
                                 wrapper.input_index,
                                 min_value,
                                 max_value,
-                                build_options,
+                                build_options.start_biome_x,
+                                build_options.start_biome_z,
+                                build_options.horizontal_biome_end,
                             );
                             let sample_options = ChunkNoiseFunctionSampleOptions::new(
                                 false,
@@ -387,12 +371,8 @@ impl<'a> ChunkNoiseRouter<'a> {
             fluid_level_floodedness_noise: base.fluid_level_floodedness_noise,
             fluid_level_spread_noise: base.fluid_level_spread_noise,
             lava_noise: base.lava_noise,
-            temperature: base.temperature,
-            vegetation: base.vegetation,
-            continents: base.continents,
             erosion: base.erosion,
             depth: base.depth,
-            ridges: base.ridges,
             initial_density_without_jaggedness: base.initial_density_without_jaggedness,
             final_density: base.final_density,
             vein_toggle: base.vein_toggle,

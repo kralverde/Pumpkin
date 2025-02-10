@@ -665,7 +665,7 @@ mod test {
                 chunk_density_function::{ChunkNoiseFunctionSampleOptions, SampleAction},
                 chunk_noise_router::ChunkNoiseRouter,
                 density_function::UnblendedNoisePos,
-                proto_noise_router::GlobalProtoNoiseRouter,
+                proto_noise_router::ProtoChunkNoiseRouter,
             },
             positions::chunk_pos,
             proto_chunk::StandardChunkFluidLevelSampler,
@@ -679,13 +679,13 @@ mod test {
     const SEED: u64 = 0;
     static RANDOM_CONFIG: LazyLock<GlobalRandomConfig> =
         LazyLock::new(|| GlobalRandomConfig::new(SEED));
-    static PROTO_ROUTER: LazyLock<GlobalProtoNoiseRouter> = LazyLock::new(|| {
+    static PROTO_ROUTER: LazyLock<ProtoChunkNoiseRouter> = LazyLock::new(|| {
         let router_ast = NOISE_ROUTER_ASTS.overworld();
-        GlobalProtoNoiseRouter::generate(router_ast, &RANDOM_CONFIG)
+        ProtoChunkNoiseRouter::generate(router_ast, &RANDOM_CONFIG)
     });
 
     fn create_aquifer(
-        base_router: &GlobalProtoNoiseRouter,
+        base_router: &ProtoChunkNoiseRouter,
     ) -> (
         WorldAquiferSampler,
         ChunkNoiseRouter,

@@ -12,7 +12,7 @@ use crate::generation::noise_router::chunk_noise_router::{
     ChunkNoiseDensityFunction, ChunkNoiseFunctionComponent,
 };
 use crate::generation::noise_router::proto_noise_router::{
-    DoublePerlinNoiseBuilder, GlobalProtoNoiseRouter, ProtoNoiseFunctionComponent,
+    recursive_build_proto_stack, DoublePerlinNoiseBuilder, ProtoNoiseFunctionComponent,
 };
 use crate::generation::GlobalRandomConfig;
 use crate::noise_router::NOISE_ROUTER_ASTS;
@@ -56,7 +56,7 @@ macro_rules! build_proto_stack {
         // Map of AST hash to index in the stack
         let mut map = HashMap::<u64, usize>::new();
         let mut perlin_noise_builder = DoublePerlinNoiseBuilder::new(&RANDOM_CONFIG);
-        GlobalProtoNoiseRouter::recursive_build_stack(
+        recursive_build_proto_stack(
             $repr,
             &RANDOM_CONFIG,
             &mut stack,

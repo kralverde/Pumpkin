@@ -39,13 +39,11 @@ macro_rules! read_data_from_file {
 }
 
 // TODO: is there a way to do in-file benches?
-pub use generation::{
-    noise_router::proto_noise_router::GlobalProtoNoiseRouter, GlobalRandomConfig,
-};
+pub use generation::{noise_router::proto_noise_router::ProtoChunkNoiseRouter, GlobalRandomConfig};
 pub use noise_router::NOISE_ROUTER_ASTS;
 
 pub fn bench_create_and_populate_noise(
-    base_router: &GlobalProtoNoiseRouter,
+    base_router: &ProtoChunkNoiseRouter,
     random_config: &GlobalRandomConfig,
 ) {
     let mut chunk = ProtoChunk::new(Vector2::new(0, 0), base_router, random_config);

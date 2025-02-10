@@ -14,12 +14,12 @@ use super::{
     generation_shapes::GenerationShape,
     noise_router::{
         chunk_density_function::{
-            ChunkNoiseFunctionBuilderOptions, ChunkNoiseFunctionSampleOptions,
-            ChunkNoiseFunctionWrapperHandler, SampleAction, WrapperData,
+            ChunkNoiseFunctionBuilderOptions, ChunkNoiseFunctionSampleOptions, SampleAction,
+            WrapperData,
         },
         chunk_noise_router::ChunkNoiseRouter,
         density_function::{IndexToNoisePos, NoisePos, UnblendedNoisePos},
-        proto_noise_router::GlobalProtoNoiseRouter,
+        proto_noise_router::ProtoChunkNoiseRouter,
     },
     ore_sampler::OreVeinSampler,
     positions::chunk_pos,
@@ -218,7 +218,7 @@ pub struct ChunkNoiseGenerator<'a> {
 impl<'a> ChunkNoiseGenerator<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        noise_router_base: &'a GlobalProtoNoiseRouter,
+        noise_router_base: &'a ProtoChunkNoiseRouter,
         random_config: &GlobalRandomConfig,
         horizontal_cell_count: u8,
         start_block_x: i32,
@@ -297,11 +297,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
             vertical_cell_block_count: vertical_cell_block_count as usize,
         };
 
-        let router = ChunkNoiseRouter::generate(
-            noise_router_base,
-            ChunkNoiseFunctionWrapperHandler::PopulateNoise,
-            &builder_options,
-        );
+        let router = ChunkNoiseRouter::generate(noise_router_base, &builder_options);
 
         Self {
             state_sampler,

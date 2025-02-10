@@ -345,19 +345,17 @@ impl FlatCache {
         input_index: usize,
         min_value: f64,
         max_value: f64,
-        builder_options: &ChunkNoiseFunctionBuilderOptions,
+        start_biome_x: i32,
+        start_biome_z: i32,
+        horizontal_biome_end: usize,
     ) -> Self {
         Self {
             input_index,
-            cache: vec![
-                0.0;
-                (builder_options.horizontal_biome_end + 1)
-                    * (builder_options.horizontal_biome_end + 1)
-            ]
-            .into_boxed_slice(),
-            start_biome_x: builder_options.start_biome_x,
-            start_biome_z: builder_options.start_biome_z,
-            horizontal_biome_end: builder_options.horizontal_biome_end,
+            cache: vec![0.0; (horizontal_biome_end + 1) * (horizontal_biome_end + 1)]
+                .into_boxed_slice(),
+            start_biome_x,
+            start_biome_z,
+            horizontal_biome_end,
             min_value,
             max_value,
         }
@@ -619,11 +617,6 @@ impl CellCache {
             max_value: self.max_value,
         }
     }
-}
-
-pub enum ChunkNoiseFunctionWrapperHandler {
-    PopulateNoise,
-    MultiNoiseConfig,
 }
 
 #[enum_dispatch(MutableChunkNoiseFunctionComponentImpl, NoiseFunctionComponentRange)]
