@@ -9,7 +9,7 @@ use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
 
 use super::anvil::{AnvilChunkFormat, CHUNK_COUNT, SUBREGION_BITS};
-use super::{ChunkData, ChunkReadingError, ChunkSerializingError};
+use super::{ChunkData, ChunkReadingError, ChunkWritingError};
 
 /// The signature of the linear file format
 /// used as a header and footer described in https://gist.github.com/Aaron2550/5701519671253d4c6190bde6706f9f98
@@ -283,10 +283,11 @@ impl ChunkSerializer for LinearFile {
         })
     }
 
-    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkSerializingError> {
+    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkWritingError> {
         let chunk_index: usize = LinearFile::get_chunk_index(chunk_data.position);
         let chunk_raw = AnvilChunkFormat {} //We use Anvil format to serialize the chunk
-            .to_bytes(chunk_data)?;
+            .to_bytes(chunk_data)
+            .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
         let new_chunk_size = chunk_raw.len();
         let old_chunk_size = self.chunks_headers[chunk_index].size as usize;

@@ -13,7 +13,7 @@ use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterato
 use tokio::sync::RwLock;
 
 use crate::{
-    chunk::{ChunkReadingError, ChunkSerializingError, ChunkWritingError},
+    chunk::{ChunkReadingError, ChunkWritingError},
     level::LevelFolder,
 };
 
@@ -66,7 +66,7 @@ pub trait ChunkSerializer: Send + Sync + Sized + Default {
     fn to_bytes(&self) -> Vec<u8>;
     fn from_bytes(bytes: &[u8]) -> Result<Self, ChunkReadingError>;
 
-    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkSerializingError>;
+    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkWritingError>;
     fn get_chunk_data(
         &self,
         chunk: Vector2<i32>,
@@ -289,8 +289,7 @@ where
                     let mut chunk_guard = chunk_serializer.blocking_write();
                     chunks
                         .iter()
-                        .try_for_each(|&chunk| chunk_guard.add_chunk_data(chunk))
-                        .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
+                        .try_for_each(|&chunk| chunk_guard.add_chunk_data(chunk))?;
 
                     // With the modification done, we can drop the write lock but keep the read lock
                     // to avoid other threads to write/modify the data, but allow other threads to read it

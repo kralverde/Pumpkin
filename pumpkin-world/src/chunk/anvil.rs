@@ -16,7 +16,7 @@ use crate::chunks_io::{ChunkSerializer, LoadedData};
 
 use super::{
     ChunkData, ChunkNbt, ChunkReadingError, ChunkSection, ChunkSectionBlockStates,
-    ChunkSerializingError, CompressionError, PaletteEntry,
+    ChunkSerializingError, ChunkWritingError, CompressionError, PaletteEntry,
 };
 
 /// The side size of a region in chunks (one region is 32x32 chunks)
@@ -37,16 +37,13 @@ const WORLD_DATA_VERSION: i32 = 4189;
 #[derive(Clone, Default)]
 pub struct AnvilChunkFormat;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Compression {
     /// GZip Compression
     GZip = 1,
     /// ZLib Compression
     ZLib = 2,
-    /// Uncompressed (since a version before 1.15.1)
-    #[default]
-    Uncompressed = 3,
     /// LZ4 Compression (since 24w04a)
     LZ4 = 4,
     /// Custom compression algorithm (since 24w05a)
@@ -68,14 +65,14 @@ impl From<pumpkin_config::chunk::Compression> for Compression {
 impl Compression {
     /// Returns Ok when a compression is found otherwise an Err
     #[allow(clippy::result_unit_err)]
-    pub fn from_byte(byte: u8) -> Result<Self, ()> {
+    pub fn from_byte(byte: u8) -> Result<Option<Self>, ()> {
         match byte {
-            1 => Ok(Self::GZip),
-            2 => Ok(Self::ZLib),
+            1 => Ok(Some(Self::GZip)),
+            2 => Ok(Some(Self::ZLib)),
             // Uncompressed (since a version before 1.15.1)
-            3 => Ok(Self::Uncompressed),
-            4 => Ok(Self::LZ4),
-            127 => Ok(Self::Custom),
+            3 => Ok(None),
+            4 => Ok(Some(Self::LZ4)),
+            127 => Ok(Some(Self::Custom)),
             // Unknown format
             _ => Err(()),
         }
@@ -83,7 +80,6 @@ impl Compression {
 
     fn decompress_data(&self, compressed_data: &[u8]) -> Result<Vec<u8>, CompressionError> {
         match self {
-            Compression::Uncompressed => Ok(compressed_data.to_vec()),
             Compression::GZip => {
                 let mut decoder = GzDecoder::new(compressed_data);
                 let mut chunk_data = Vec::new();
@@ -118,7 +114,6 @@ impl Compression {
         compression_level: u32,
     ) -> Result<Vec<u8>, CompressionError> {
         match self {
-            Compression::Uncompressed => Ok(uncompressed_data.to_vec()),
             Compression::GZip => {
                 let mut encoder = GzEncoder::new(
                     uncompressed_data,
@@ -249,7 +244,7 @@ impl AnvilChunkFormat {
 #[derive(Default)]
 pub struct AnvilChunkData {
     length: u32,
-    compression: Compression,
+    compression: Option<Compression>,
     compressed_data: Vec<u8>,
 }
 
@@ -278,7 +273,7 @@ impl AnvilChunkData {
         let mut bytes = Vec::with_capacity(padded_size);
 
         bytes.put_u32(self.length);
-        bytes.put_u8(self.compression as u8);
+        bytes.put_u8(self.compression.map_or(3, |c| c as u8));
         bytes.extend_from_slice(&self.compressed_data);
 
         bytes.resize(padded_size, 0);
@@ -286,24 +281,33 @@ impl AnvilChunkData {
     }
 
     fn to_chunk(&self, pos: Vector2<i32>) -> Result<ChunkData, ChunkReadingError> {
-        let decompressed_data = self
-            .compression
-            .decompress_data(&self.compressed_data[..self.length as usize - 1])
-            .expect("Failed to decompress chunk data");
-        ChunkData::from_bytes(&decompressed_data, pos).map_err(ChunkReadingError::ParsingError)
+        let bytes = &self.compressed_data[..self.length as usize - 1];
+
+        if let Some(compression) = self.compression {
+            let decompressed_data = compression
+                .decompress_data(bytes)
+                .expect("Failed to decompress chunk data");
+
+            ChunkData::from_bytes(&decompressed_data, pos)
+        } else {
+            ChunkData::from_bytes(bytes, pos)
+        }
+        .map_err(ChunkReadingError::ParsingError)
     }
 
-    fn from_chunk(chunk: &ChunkData) -> Result<Self, ChunkSerializingError> {
-        let raw_bytes = AnvilChunkFormat {}.to_bytes(chunk)?;
+    fn from_chunk(chunk: &ChunkData) -> Result<Self, ChunkWritingError> {
+        let raw_bytes = AnvilChunkFormat {}
+            .to_bytes(chunk)
+            .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
         let compression: Compression = ADVANCED_CONFIG.chunk.compression.algorithm.clone().into();
         let compressed_data = compression
             .compress_data(&raw_bytes, ADVANCED_CONFIG.chunk.compression.level)
-            .expect("Failed to compress chunk data");
+            .map_err(ChunkWritingError::Compression)?;
 
         Ok(AnvilChunkData {
             length: compressed_data.len() as u32 + 1,
-            compression,
+            compression: Some(compression),
             compressed_data,
         })
     }
@@ -408,7 +412,7 @@ impl ChunkSerializer for AnvilChunkFile {
         Ok(chunk_file)
     }
 
-    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkSerializingError> {
+    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkWritingError> {
         let chunk_index = Self::get_chunk_index(chunk_data.position);
         self.chunks_data[chunk_index] = Some(AnvilChunkData::from_chunk(chunk_data)?);
 
