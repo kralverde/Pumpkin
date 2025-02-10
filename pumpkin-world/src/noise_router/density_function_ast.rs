@@ -1,22 +1,59 @@
-use derive_getters::Getters;
+use std::hash::{Hash, Hasher};
+
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+pub struct HashableF32(pub f32);
+
+// Normally this is bad, but we just care about checking if components are the same
+impl Hash for HashableF32 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_le_bytes().hash(state);
+    }
+}
+
+impl<'de> Deserialize<'de> for HashableF32 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        f32::deserialize(deserializer).map(Self)
+    }
+}
+
+pub struct HashableF64(pub f64);
+
+// Normally this is bad, but we just care about checking if components are the same
+impl Hash for HashableF64 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_le_bytes().hash(state);
+    }
+}
+
+impl<'de> Deserialize<'de> for HashableF64 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        f64::deserialize(deserializer).map(Self)
+    }
+}
+
+#[derive(Deserialize, Hash)]
 #[serde(tag = "_type", content = "value")]
 pub enum SplineRepr {
     #[serde(rename(deserialize = "standard"))]
     Standard {
         #[serde(rename(deserialize = "locationFunction"))]
         location_function: Box<DensityFunctionRepr>,
-        locations: Box<[f32]>,
+        locations: Box<[HashableF32]>,
         values: Box<[SplineRepr]>,
-        derivatives: Box<[f32]>,
+        derivatives: Box<[HashableF32]>,
     },
     #[serde(rename(deserialize = "fixed"))]
-    Fixed { value: f32 },
+    Fixed { value: HashableF32 },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Hash, Copy, Clone)]
 pub enum BinaryOperation {
     #[serde(rename(deserialize = "ADD"))]
     Add,
@@ -28,7 +65,7 @@ pub enum BinaryOperation {
     Max,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Hash, Copy, Clone)]
 pub enum LinearOperation {
     #[serde(rename(deserialize = "ADD"))]
     Add,
@@ -36,7 +73,7 @@ pub enum LinearOperation {
     Mul,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Hash, Copy, Clone)]
 pub enum UnaryOperation {
     #[serde(rename(deserialize = "ABS"))]
     Abs,
@@ -52,7 +89,7 @@ pub enum UnaryOperation {
     Squeeze,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Hash, Copy, Clone)]
 pub enum WierdScaledMapper {
     #[serde(rename(deserialize = "TYPE2"))]
     Caves,
@@ -64,8 +101,8 @@ impl WierdScaledMapper {
     #[inline]
     pub fn max_multiplier(&self) -> f64 {
         match self {
-            Self::Tunnels => 2f64,
-            Self::Caves => 3f64,
+            Self::Tunnels => 2.0,
+            Self::Caves => 3.0,
         }
     }
 
@@ -73,34 +110,34 @@ impl WierdScaledMapper {
     pub fn scale(&self, value: f64) -> f64 {
         match self {
             Self::Tunnels => {
-                if value < -0.5f64 {
-                    0.75f64
-                } else if value < 0f64 {
-                    1f64
-                } else if value < 0.5f64 {
-                    1.5f64
+                if value < -0.5 {
+                    0.75
+                } else if value < 0.0 {
+                    1.0
+                } else if value < 0.5 {
+                    1.5
                 } else {
-                    2f64
+                    2.0
                 }
             }
             Self::Caves => {
-                if value < -0.75f64 {
-                    0.5f64
-                } else if value < -0.5f64 {
-                    0.75f64
-                } else if value < 0.5f64 {
-                    1f64
-                } else if value < 0.75f64 {
-                    2f64
+                if value < -0.75 {
+                    0.5
+                } else if value < -0.5 {
+                    0.75
+                } else if value < 0.5 {
+                    1.0
+                } else if value < 0.75 {
+                    2.0
                 } else {
-                    3f64
+                    3.0
                 }
             }
         }
     }
 }
 
-#[derive(Copy, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Copy, Clone, Deserialize, PartialEq, Eq, Hash)]
 pub enum WrapperType {
     Interpolated,
     #[serde(rename(deserialize = "FlatCache"))]
@@ -110,106 +147,106 @@ pub enum WrapperType {
     CellCache,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct NoiseData {
     #[serde(rename(deserialize = "noise"))]
-    noise_id: String,
+    pub noise_id: String,
     #[serde(rename(deserialize = "xzScale"))]
-    xz_scale: f64,
+    pub xz_scale: HashableF64,
     #[serde(rename(deserialize = "yScale"))]
-    y_scale: f64,
+    pub y_scale: HashableF64,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct ShiftedNoiseData {
     #[serde(rename(deserialize = "xzScale"))]
-    xz_scale: f64,
+    pub xz_scale: HashableF64,
     #[serde(rename(deserialize = "yScale"))]
-    y_scale: f64,
+    pub y_scale: HashableF64,
     #[serde(rename(deserialize = "noise"))]
-    noise_id: String,
+    pub noise_id: String,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct WeirdScaledData {
     #[serde(rename(deserialize = "noise"))]
-    noise_id: String,
+    pub noise_id: String,
     #[serde(rename(deserialize = "rarityValueMapper"))]
-    mapper: WierdScaledMapper,
+    pub mapper: WierdScaledMapper,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct InterpolatedNoiseSamplerData {
     #[serde(rename(deserialize = "scaledXzScale"))]
-    scaled_xz_scale: f64,
+    pub scaled_xz_scale: HashableF64,
     #[serde(rename(deserialize = "scaledYScale"))]
-    scaled_y_scale: f64,
+    pub scaled_y_scale: HashableF64,
     #[serde(rename(deserialize = "xzFactor"))]
-    xz_factor: f64,
+    pub xz_factor: HashableF64,
     #[serde(rename(deserialize = "yFactor"))]
-    y_factor: f64,
+    pub y_factor: HashableF64,
     #[serde(rename(deserialize = "smearScaleMultiplier"))]
-    smear_scale_multiplier: f64,
+    pub smear_scale_multiplier: HashableF64,
     #[serde(rename(deserialize = "maxValue"))]
-    max_value: f64,
+    pub max_value: HashableF64,
     // These are unused currently
     //#[serde(rename(deserialize = "xzScale"))]
-    //xz_scale: f64,
+    //xz_scale: HashableF64,
     //#[serde(rename(deserialize = "yScale"))]
-    //y_scale: f64,
+    //y_scale: HashableF64,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct ClampedYGradientData {
     #[serde(rename(deserialize = "fromY"))]
-    from_y: i32,
+    pub from_y: i32,
     #[serde(rename(deserialize = "toY"))]
-    to_y: i32,
+    pub to_y: i32,
     #[serde(rename(deserialize = "fromValue"))]
-    from_value: f64,
+    pub from_value: HashableF64,
     #[serde(rename(deserialize = "toValue"))]
-    to_value: f64,
+    pub to_value: HashableF64,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct BinaryData {
     #[serde(rename(deserialize = "type"))]
-    pub(crate) operation: BinaryOperation,
+    pub operation: BinaryOperation,
     #[serde(rename(deserialize = "minValue"))]
-    pub(crate) min_value: f64,
+    pub min_value: HashableF64,
     #[serde(rename(deserialize = "maxValue"))]
-    pub(crate) max_value: f64,
+    pub max_value: HashableF64,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct LinearData {
     #[serde(rename(deserialize = "specificType"))]
-    operation: LinearOperation,
-    argument: f64,
+    pub operation: LinearOperation,
+    pub argument: HashableF64,
     #[serde(rename(deserialize = "minValue"))]
-    min_value: f64,
+    pub min_value: HashableF64,
     #[serde(rename(deserialize = "maxValue"))]
-    max_value: f64,
+    pub max_value: HashableF64,
 }
 
 impl LinearData {
     #[inline]
     pub fn apply_density(&self, density: f64) -> f64 {
         match self.operation {
-            LinearOperation::Add => density + self.argument,
-            LinearOperation::Mul => density * self.argument,
+            LinearOperation::Add => density + self.argument.0,
+            LinearOperation::Mul => density * self.argument.0,
         }
     }
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct UnaryData {
     #[serde(rename(deserialize = "type"))]
-    operation: UnaryOperation,
+    pub operation: UnaryOperation,
     #[serde(rename(deserialize = "minValue"))]
-    min_value: f64,
+    pub min_value: HashableF64,
     #[serde(rename(deserialize = "maxValue"))]
-    max_value: f64,
+    pub max_value: HashableF64,
 }
 
 impl UnaryData {
@@ -241,38 +278,38 @@ impl UnaryData {
     }
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct ClampData {
     #[serde(rename(deserialize = "minValue"))]
-    min_value: f64,
+    pub min_value: HashableF64,
     #[serde(rename(deserialize = "maxValue"))]
-    max_value: f64,
+    pub max_value: HashableF64,
 }
 
 impl ClampData {
     #[inline]
     pub fn apply_density(&self, density: f64) -> f64 {
-        density.clamp(self.min_value, self.max_value)
+        density.clamp(self.min_value.0, self.max_value.0)
     }
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct RangeChoiceData {
     #[serde(rename(deserialize = "minInclusive"))]
-    min_inclusive: f64,
+    pub min_inclusive: HashableF64,
     #[serde(rename(deserialize = "maxExclusive"))]
-    max_exclusive: f64,
+    pub max_exclusive: HashableF64,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Deserialize, Hash)]
 pub struct SplineData {
     #[serde(rename(deserialize = "minValue"))]
-    min_value: f64,
+    pub min_value: HashableF64,
     #[serde(rename(deserialize = "maxValue"))]
-    max_value: f64,
+    pub max_value: HashableF64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Hash)]
 #[serde(tag = "_class", content = "value")]
 pub enum DensityFunctionRepr {
     // This is a placeholder for leaving space for world structures
@@ -326,7 +363,7 @@ pub enum DensityFunctionRepr {
     },
     // These functions are unchanged except possibly for internal functions
     Constant {
-        value: f64,
+        value: HashableF64,
     },
     #[serde(rename(deserialize = "YClampedGradient"))]
     ClampedYGradient {

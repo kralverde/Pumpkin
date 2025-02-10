@@ -9,13 +9,12 @@ use crate::block::BlockState;
 
 use super::{
     chunk_noise::{ChunkNoiseHeightEstimator, LAVA_BLOCK, WATER_BLOCK},
-    chunk_noise_router::{
-        chunk_density_function::{
-            ChunkDensityFunctionOwner, ChunkNoiseFunction, ChunkNoiseFunctionSampleOptions,
-        },
-        density_function::{IndexToNoisePos, NoisePos, UnblendedNoisePos},
-    },
     noise::{clamped_map, map},
+    noise_router::{
+        chunk_density_function::ChunkNoiseFunctionSampleOptions,
+        chunk_noise_router::ChunkNoiseRouter,
+        density_function::{NoisePos, UnblendedNoisePos},
+    },
     positions::{block_pos, chunk_pos, MIN_HEIGHT_CELL},
     proto_chunk::StandardChunkFluidLevelSampler,
     section_coords,
@@ -73,20 +72,13 @@ pub trait FluidLevelSamplerImpl {
     fn get_fluid_level(&self, x: i32, y: i32, z: i32) -> FluidLevel;
 }
 
-#[enum_dispatch(AquiferSamplerImpl, ChunkDensityFunctionOwner)]
-pub enum AquiferSampler<'a> {
-    SeaLevel(SeaLevelAquiferSampler<'a>),
-    Aquifier(WorldAquiferSampler<'a>),
+#[enum_dispatch(AquiferSamplerImpl)]
+pub enum AquiferSampler {
+    SeaLevel(SeaLevelAquiferSampler),
+    Aquifier(WorldAquiferSampler),
 }
 
-pub struct WorldAquiferSampler<'a> {
-    barrier_noise: ChunkNoiseFunction<'a>,
-    fluid_level_floodedness: ChunkNoiseFunction<'a>,
-    fluid_level_spread: ChunkNoiseFunction<'a>,
-    fluid_type: ChunkNoiseFunction<'a>,
-    erosion: ChunkNoiseFunction<'a>,
-    depth: ChunkNoiseFunction<'a>,
-    pub(crate) function: ChunkNoiseFunction<'a>,
+pub struct WorldAquiferSampler {
     random_deriver: RandomDeriver,
     fluid_level: FluidLevelSampler,
     start_x: i32,
@@ -98,7 +90,7 @@ pub struct WorldAquiferSampler<'a> {
     packed_positions: Box<[i64]>,
 }
 
-impl<'a> WorldAquiferSampler<'a> {
+impl<'a> WorldAquiferSampler {
     const CHUNK_POS_OFFSETS: [Vector2<i8>; 13] = [
         Vector2::new(0, 0),
         Vector2::new(-2, -1),
@@ -118,13 +110,6 @@ impl<'a> WorldAquiferSampler<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chunk_pos: Vector2<i32>,
-        barrier_noise: ChunkNoiseFunction<'a>,
-        fluid_level_floodedness: ChunkNoiseFunction<'a>,
-        fluid_level_spread: ChunkNoiseFunction<'a>,
-        fluid_type: ChunkNoiseFunction<'a>,
-        erosion: ChunkNoiseFunction<'a>,
-        depth: ChunkNoiseFunction<'a>,
-        function: ChunkNoiseFunction<'a>,
         random_deriver: RandomDeriver,
         minimum_y: i8,
         height: u16,
@@ -166,13 +151,6 @@ impl<'a> WorldAquiferSampler<'a> {
         }
 
         Self {
-            barrier_noise,
-            fluid_level_floodedness,
-            fluid_level_spread,
-            fluid_type,
-            erosion,
-            depth,
-            function,
             random_deriver,
             fluid_level,
             start_x,
@@ -255,6 +233,7 @@ impl<'a> WorldAquiferSampler<'a> {
     fn get_water_level(
         &mut self,
         packed: i64,
+        router: &mut ChunkNoiseRouter,
         height_estimator: &mut ChunkNoiseHeightEstimator,
         sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> FluidLevel {
@@ -270,7 +249,8 @@ impl<'a> WorldAquiferSampler<'a> {
         if let Some(level) = &self.levels[index] {
             level.clone()
         } else {
-            let fluid_level = self.get_fluid_level(x, y, z, height_estimator, sample_options);
+            let fluid_level =
+                self.get_fluid_level(x, y, z, router, height_estimator, sample_options);
             self.levels[index] = Some(fluid_level.clone());
             fluid_level
         }
@@ -281,6 +261,7 @@ impl<'a> WorldAquiferSampler<'a> {
         block_x: i32,
         block_y: i32,
         block_z: i32,
+        router: &mut ChunkNoiseRouter,
         height_estimator: &mut ChunkNoiseHeightEstimator,
         sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> FluidLevel {
@@ -294,7 +275,7 @@ impl<'a> WorldAquiferSampler<'a> {
             let x = block_x + section_coords::section_to_block(offset.x as i32);
             let z = block_z + section_coords::section_to_block(offset.z as i32);
 
-            let n = height_estimator.estimate_surface_height(sample_options, x, z);
+            let n = height_estimator.estimate_surface_height(router, sample_options, x, z);
             let o = n + 8;
             let bl2 = offset.x == 0 && offset.z == 0;
 
@@ -326,11 +307,20 @@ impl<'a> WorldAquiferSampler<'a> {
             fluid_level.clone(),
             min_surface_estimate,
             bl,
+            router,
             sample_options,
         );
         FluidLevel::new(
             p,
-            self.get_fluid_block_state(block_x, block_y, block_z, fluid_level, p, sample_options),
+            self.get_fluid_block_state(
+                block_x,
+                block_y,
+                block_z,
+                fluid_level,
+                p,
+                router,
+                sample_options,
+            ),
         )
     }
 
@@ -343,12 +333,15 @@ impl<'a> WorldAquiferSampler<'a> {
         default_level: FluidLevel,
         surface_height_estimate: i32,
         map_y: bool,
+        router: &mut ChunkNoiseRouter,
         sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> i32 {
         let pos = UnblendedNoisePos::new(block_x, block_y, block_z);
 
-        let is_deep_dark = self.erosion.sample(&pos, sample_options) < -0.225f32 as f64
-            && self.depth.sample(&pos, sample_options) > 0.9f32 as f64;
+        let erosion_sample = router.erosion(&pos, sample_options);
+        let depth_sample = router.depth(&pos, sample_options);
+
+        let is_deep_dark = erosion_sample < -0.225f32 as f64 && depth_sample > 0.9f32 as f64;
 
         let (d, e) = if is_deep_dark {
             (-1f64, -1f64)
@@ -360,10 +353,9 @@ impl<'a> WorldAquiferSampler<'a> {
                 0f64
             };
 
-            let g = self
-                .fluid_level_floodedness
-                .sample(&pos, sample_options)
-                .clamp(-1f64, 1f64);
+            let fluid_level_floodedness =
+                router.fluid_level_floodedness_noise(&pos, sample_options);
+            let g = fluid_level_floodedness.clamp(-1f64, 1f64);
             let h = map(f, 1f64, 0f64, -0.3f64, 0.8f64);
             let k = map(f, 1f64, 0f64, -0.8f64, 0.4f64);
 
@@ -378,6 +370,7 @@ impl<'a> WorldAquiferSampler<'a> {
                 block_y,
                 block_z,
                 surface_height_estimate,
+                router,
                 sample_options,
             )
         } else {
@@ -391,6 +384,7 @@ impl<'a> WorldAquiferSampler<'a> {
         block_y: i32,
         block_z: i32,
         surface_height_estimate: i32,
+        router: &mut ChunkNoiseRouter,
         sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> i32 {
         let x = floor_div(block_x, 16);
@@ -398,9 +392,9 @@ impl<'a> WorldAquiferSampler<'a> {
         let z = floor_div(block_z, 16);
 
         let local_y = y * 40 + 20;
-        let sample = self
-            .fluid_level_spread
-            .sample(&UnblendedNoisePos::new(x, y, z), sample_options)
+
+        let sample = router
+            .fluid_level_spread_noise(&UnblendedNoisePos::new(x, y, z), sample_options)
             * 10f64;
         let to_nearest_multiple_of_three = (sample / 3f64).floor() as i32 * 3;
         let local_height = to_nearest_multiple_of_three + local_y;
@@ -415,6 +409,7 @@ impl<'a> WorldAquiferSampler<'a> {
         block_z: i32,
         default_level: FluidLevel,
         level: i32,
+        router: &mut ChunkNoiseRouter,
         sample_options: &ChunkNoiseFunctionSampleOptions,
     ) -> BlockState {
         if level <= -10
@@ -425,9 +420,7 @@ impl<'a> WorldAquiferSampler<'a> {
             let y = floor_div(block_y, 40);
             let z = floor_div(block_z, 64);
 
-            let sample = self
-                .fluid_type
-                .sample(&UnblendedNoisePos::new(x, y, z), sample_options);
+            let sample = router.lava_noise(&UnblendedNoisePos::new(x, y, z), sample_options);
 
             if sample.abs() > 0.3f64 {
                 return LAVA_BLOCK;
@@ -463,6 +456,7 @@ impl<'a> WorldAquiferSampler<'a> {
 
     fn apply_internal(
         &mut self,
+        router: &mut ChunkNoiseRouter,
         pos: &impl NoisePos,
         sample_options: &ChunkNoiseFunctionSampleOptions,
         height_estimator: &mut ChunkNoiseHeightEstimator,
@@ -519,8 +513,12 @@ impl<'a> WorldAquiferSampler<'a> {
                     }
                 }
 
-                let fluid_level2 =
-                    self.get_water_level(hypot_packed_block[0].0, height_estimator, sample_options);
+                let fluid_level2 = self.get_water_level(
+                    hypot_packed_block[0].0,
+                    router,
+                    height_estimator,
+                    sample_options,
+                );
                 let d = Self::max_distance(hypot_packed_block[0].1, hypot_packed_block[1].1);
                 let block_state = fluid_level2.get_block_state(j);
 
@@ -537,9 +535,10 @@ impl<'a> WorldAquiferSampler<'a> {
                 {
                     Some(block_state)
                 } else {
-                    let barrier_sample = self.barrier_noise.sample(pos, sample_options);
+                    let barrier_sample = router.barrier_noise(pos, sample_options);
                     let fluid_level3 = self.get_water_level(
                         hypot_packed_block[1].0,
+                        router,
                         height_estimator,
                         sample_options,
                     );
@@ -555,6 +554,7 @@ impl<'a> WorldAquiferSampler<'a> {
                     } else {
                         let fluid_level4 = self.get_water_level(
                             hypot_packed_block[2].0,
+                            router,
                             height_estimator,
                             sample_options,
                         );
@@ -598,166 +598,41 @@ impl<'a> WorldAquiferSampler<'a> {
             }
         }
     }
-
-    #[inline]
-    fn density_functions(&mut self) -> [&mut ChunkNoiseFunction<'a>; 7] {
-        [
-            &mut self.barrier_noise,
-            &mut self.fluid_level_floodedness,
-            &mut self.fluid_level_spread,
-            &mut self.fluid_type,
-            &mut self.erosion,
-            &mut self.depth,
-            &mut self.function,
-        ]
-    }
 }
 
-impl ChunkDensityFunctionOwner for WorldAquiferSampler<'_> {
-    #[inline]
-    fn fill_cell_caches(
-        &mut self,
-        mapper: &impl IndexToNoisePos,
-        options: &mut ChunkNoiseFunctionSampleOptions,
-    ) {
-        self.density_functions()
-            .into_iter()
-            .for_each(|function| function.fill_cell_caches(mapper, options));
-    }
-
-    #[inline]
-    fn fill_interpolator_buffers(
-        &mut self,
-        start: bool,
-        cell_z: usize,
-        mapper: &impl IndexToNoisePos,
-        options: &mut ChunkNoiseFunctionSampleOptions,
-    ) {
-        self.density_functions().into_iter().for_each(|function| {
-            function.fill_interpolator_buffers(start, cell_z, mapper, options)
-        });
-    }
-
-    #[inline]
-    fn interpolate_x(&mut self, delta: f64) {
-        self.density_functions()
-            .into_iter()
-            .for_each(|function| function.interpolate_x(delta));
-    }
-
-    #[inline]
-    fn interpolate_y(&mut self, delta: f64) {
-        self.density_functions()
-            .into_iter()
-            .for_each(|function| function.interpolate_y(delta));
-    }
-
-    #[inline]
-    fn interpolate_z(&mut self, delta: f64) {
-        self.density_functions()
-            .into_iter()
-            .for_each(|function| function.interpolate_z(delta));
-    }
-
-    #[inline]
-    fn swap_buffers(&mut self) {
-        self.density_functions()
-            .into_iter()
-            .for_each(|function| function.swap_buffers());
-    }
-
-    #[inline]
-    fn on_sampled_cell_corners(&mut self, cell_y_position: usize, cell_z_position: usize) {
-        self.density_functions().into_iter().for_each(|function| {
-            function.on_sampled_cell_corners(cell_y_position, cell_z_position)
-        });
-    }
-}
-
-impl AquiferSamplerImpl for WorldAquiferSampler<'_> {
+impl AquiferSamplerImpl for WorldAquiferSampler {
     #[inline]
     fn apply(
         &mut self,
+        router: &mut ChunkNoiseRouter,
         pos: &impl NoisePos,
         sample_options: &ChunkNoiseFunctionSampleOptions,
         height_estimator: &mut ChunkNoiseHeightEstimator,
     ) -> Option<BlockState> {
-        let density = self.function.sample(pos, sample_options);
-        self.apply_internal(pos, sample_options, height_estimator, density)
+        let density = router.final_density(pos, sample_options);
+        self.apply_internal(router, pos, sample_options, height_estimator, density)
     }
 }
 
-pub struct SeaLevelAquiferSampler<'a> {
+pub struct SeaLevelAquiferSampler {
     level_sampler: FluidLevelSampler,
-    function: ChunkNoiseFunction<'a>,
 }
 
-impl<'a> SeaLevelAquiferSampler<'a> {
-    pub fn new(level_sampler: FluidLevelSampler, function: ChunkNoiseFunction<'a>) -> Self {
-        Self {
-            level_sampler,
-            function,
-        }
+impl SeaLevelAquiferSampler {
+    pub fn new(level_sampler: FluidLevelSampler) -> Self {
+        Self { level_sampler }
     }
 }
 
-impl ChunkDensityFunctionOwner for SeaLevelAquiferSampler<'_> {
-    #[inline]
-    fn fill_cell_caches(
-        &mut self,
-        mapper: &impl IndexToNoisePos,
-        options: &mut ChunkNoiseFunctionSampleOptions,
-    ) {
-        self.function.fill_cell_caches(mapper, options);
-    }
-
-    #[inline]
-    fn fill_interpolator_buffers(
-        &mut self,
-        start: bool,
-        cell_z: usize,
-        mapper: &impl IndexToNoisePos,
-        options: &mut ChunkNoiseFunctionSampleOptions,
-    ) {
-        self.function
-            .fill_interpolator_buffers(start, cell_z, mapper, options);
-    }
-
-    #[inline]
-    fn interpolate_x(&mut self, delta: f64) {
-        self.function.interpolate_x(delta);
-    }
-
-    #[inline]
-    fn interpolate_y(&mut self, delta: f64) {
-        self.function.interpolate_y(delta);
-    }
-
-    #[inline]
-    fn interpolate_z(&mut self, delta: f64) {
-        self.function.interpolate_z(delta);
-    }
-
-    #[inline]
-    fn swap_buffers(&mut self) {
-        self.function.swap_buffers();
-    }
-
-    #[inline]
-    fn on_sampled_cell_corners(&mut self, cell_y_position: usize, cell_z_position: usize) {
-        self.function
-            .on_sampled_cell_corners(cell_y_position, cell_z_position);
-    }
-}
-
-impl AquiferSamplerImpl for SeaLevelAquiferSampler<'_> {
+impl AquiferSamplerImpl for SeaLevelAquiferSampler {
     fn apply(
         &mut self,
+        router: &mut ChunkNoiseRouter,
         pos: &impl NoisePos,
         sample_options: &ChunkNoiseFunctionSampleOptions,
         _height_estimator: &mut ChunkNoiseHeightEstimator,
     ) -> Option<BlockState> {
-        let sample = self.function.sample(pos, sample_options);
+        let sample = router.final_density(pos, sample_options);
         //log::debug!("Aquifer sample {:?}: {}", &pos, sample);
         if sample > 0f64 {
             None
@@ -775,6 +650,7 @@ impl AquiferSamplerImpl for SeaLevelAquiferSampler<'_> {
 pub trait AquiferSamplerImpl {
     fn apply(
         &mut self,
+        router: &mut ChunkNoiseRouter,
         pos: &impl NoisePos,
         sample_options: &ChunkNoiseFunctionSampleOptions,
         height_estimator: &mut ChunkNoiseHeightEstimator,
@@ -794,12 +670,13 @@ mod test {
                 BlockStateSampler, ChainedBlockStateSampler, ChunkNoiseGenerator,
                 ChunkNoiseHeightEstimator, LAVA_BLOCK, WATER_BLOCK,
             },
-            chunk_noise_router::{
-                chunk_density_function::{ChunkNoiseFunctionSampleOptions, SampleAction},
-                density_function::UnblendedNoisePos,
-                GlobalProtoNoiseRouter,
-            },
             generation_shapes::GenerationShape,
+            noise_router::{
+                chunk_density_function::{ChunkNoiseFunctionSampleOptions, SampleAction},
+                chunk_noise_router::ChunkNoiseRouter,
+                density_function::UnblendedNoisePos,
+                proto_noise_router::GlobalProtoNoiseRouter,
+            },
             positions::chunk_pos,
             proto_chunk::StandardChunkFluidLevelSampler,
             GlobalRandomConfig,
@@ -812,16 +689,17 @@ mod test {
     const SEED: u64 = 0;
     static RANDOM_CONFIG: LazyLock<GlobalRandomConfig> =
         LazyLock::new(|| GlobalRandomConfig::new(SEED));
-    static PROTO_ROUTER: LazyLock<GlobalProtoNoiseRouter<'static>> = LazyLock::new(|| {
+    static PROTO_ROUTER: LazyLock<GlobalProtoNoiseRouter> = LazyLock::new(|| {
         let router_ast = NOISE_ROUTER_ASTS.overworld();
         GlobalProtoNoiseRouter::generate(router_ast, &RANDOM_CONFIG)
     });
 
-    fn create_aquifer<'a>(
-        base_router: &'a GlobalProtoNoiseRouter<'a>,
+    fn create_aquifer(
+        base_router: &GlobalProtoNoiseRouter,
     ) -> (
-        WorldAquiferSampler<'a>,
-        ChunkNoiseHeightEstimator<'a>,
+        WorldAquiferSampler,
+        ChunkNoiseRouter,
+        ChunkNoiseHeightEstimator,
         ChunkNoiseFunctionSampleOptions,
     ) {
         let shape = GenerationShape::SURFACE;
@@ -862,12 +740,12 @@ mod test {
             _ => unreachable!(),
         };
 
-        (aquifer, noise.height_estimator, options)
+        (aquifer, noise.router, noise.height_estimator, options)
     }
 
     #[test]
     fn test_get_fluid_block_state() {
-        let (mut aquifer, _, options) = create_aquifer(&PROTO_ROUTER);
+        let (mut aquifer, mut router, _, options) = create_aquifer(&PROTO_ROUTER);
         let level = FluidLevel::new(0, WATER_BLOCK);
 
         let values = [
@@ -1000,7 +878,7 @@ mod test {
 
         for ((x, y, z), result) in values {
             assert_eq!(
-                aquifer.get_fluid_block_state(x, y, z, level.clone(), -10, &options),
+                aquifer.get_fluid_block_state(x, y, z, level.clone(), -10, &mut router, &options),
                 result
             );
         }
@@ -1008,7 +886,7 @@ mod test {
 
     #[test]
     fn test_get_noise_based_fluid_level() {
-        let (mut aquifer, _, options) = create_aquifer(&PROTO_ROUTER);
+        let (mut aquifer, mut router, _, options) = create_aquifer(&PROTO_ROUTER);
 
         let values = [
             ((-100, -100, -100), -103),
@@ -1140,7 +1018,7 @@ mod test {
 
         for ((x, y, z), result) in values {
             assert_eq!(
-                aquifer.get_noise_based_fluid_level(x, y, z, 200, &options),
+                aquifer.get_noise_based_fluid_level(x, y, z, 200, &mut router, &options),
                 result
             );
         }
@@ -1148,7 +1026,7 @@ mod test {
 
     #[test]
     fn test_get_fluid_block_y() {
-        let (mut aquifer, _, env) = create_aquifer(&PROTO_ROUTER);
+        let (mut aquifer, mut router, _, env) = create_aquifer(&PROTO_ROUTER);
         let level = FluidLevel::new(0, WATER_BLOCK);
         let values = [
             ((-100, -100, -100), -32512),
@@ -1280,7 +1158,7 @@ mod test {
 
         for ((x, y, z), result) in values {
             assert_eq!(
-                aquifer.get_fluid_block_y(x, y, z, level.clone(), 80, true, &env),
+                aquifer.get_fluid_block_y(x, y, z, level.clone(), 80, true, &mut router, &env),
                 result
             );
         }
@@ -1415,7 +1293,7 @@ mod test {
 
         for ((x, y, z), result) in values {
             assert_eq!(
-                aquifer.get_fluid_block_y(x, y, z, level.clone(), 80, false, &env),
+                aquifer.get_fluid_block_y(x, y, z, level.clone(), 80, false, &mut router, &env),
                 result
             );
         }
@@ -1423,7 +1301,7 @@ mod test {
 
     #[test]
     fn test_get_fluid_level() {
-        let (mut aquifer, mut funcs, env) = create_aquifer(&PROTO_ROUTER);
+        let (mut aquifer, mut router, mut height_estimator, env) = create_aquifer(&PROTO_ROUTER);
         let values = [
             ((-100, -100, -100), (-32512, LAVA_BLOCK)),
             ((-100, -100, -50), (-32512, LAVA_BLOCK)),
@@ -1553,7 +1431,7 @@ mod test {
         ];
 
         for ((x, y, z), (y1, state)) in values {
-            let level = aquifer.get_fluid_level(x, y, z, &mut funcs, &env);
+            let level = aquifer.get_fluid_level(x, y, z, &mut router, &mut height_estimator, &env);
             assert_eq!(level.max_y, y1);
             assert_eq!(level.state, state);
         }
@@ -1561,7 +1439,7 @@ mod test {
 
     #[test]
     fn test_calculate_density() {
-        let (mut aquifer, _, env) = create_aquifer(&PROTO_ROUTER);
+        let (mut aquifer, mut router, _, env) = create_aquifer(&PROTO_ROUTER);
 
         let values = [
             ((-100, -100, -100, 0, 0), 0.0),
@@ -1695,7 +1573,7 @@ mod test {
             let level1 = FluidLevel::new(h1, WATER_BLOCK);
             let level2 = FluidLevel::new(h2, WATER_BLOCK);
             let pos = UnblendedNoisePos::new(x, y, z);
-            let sample = aquifer.barrier_noise.sample(&pos, &env);
+            let sample = router.barrier_noise(&pos, &env);
             assert_eq!(
                 aquifer.calculate_density(&pos, sample, level1, level2),
                 result
@@ -1705,7 +1583,7 @@ mod test {
 
     #[test]
     fn test_apply() {
-        let (mut aquifer, mut funcs, env) = create_aquifer(&PROTO_ROUTER);
+        let (mut aquifer, mut router, mut height_estimator, env) = create_aquifer(&PROTO_ROUTER);
         let values = [
             ((112, -100, 64, 0.037482421875), None),
             ((112, -100, 66, 0.037482421875), None),
@@ -2240,7 +2118,7 @@ mod test {
         for ((x, y, z, sample), result) in values {
             let pos = UnblendedNoisePos::new(x, y, z);
             assert_eq!(
-                aquifer.apply_internal(&pos, &env, &mut funcs, sample),
+                aquifer.apply_internal(&mut router, &pos, &env, &mut height_estimator, sample),
                 result
             );
         }

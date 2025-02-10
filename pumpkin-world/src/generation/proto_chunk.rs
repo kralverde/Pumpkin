@@ -10,7 +10,7 @@ use crate::{
 use super::{
     aquifer_sampler::{FluidLevel, FluidLevelSampler, FluidLevelSamplerImpl},
     chunk_noise::{ChunkNoiseGenerator, LAVA_BLOCK, STONE_BLOCK, WATER_BLOCK},
-    chunk_noise_router::GlobalProtoNoiseRouter,
+    noise_router::proto_noise_router::GlobalProtoNoiseRouter,
     positions::chunk_pos::{start_block_x, start_block_z},
     GlobalRandomConfig,
 };
@@ -239,13 +239,9 @@ mod test {
 
     use crate::{
         generation::{
-            chunk_noise_router::{
-                density_function::{
-                    ChunkNoiseFunctionRange, PassThrough,
-                    StaticDependentChunkNoiseFunctionComponent,
-                    UniversalChunkNoiseFunctionComponent,
-                },
-                GlobalProtoNoiseRouter,
+            noise_router::{
+                density_function::{NoiseFunctionComponentRange, PassThrough},
+                proto_noise_router::{GlobalProtoNoiseRouter, ProtoNoiseFunctionComponent},
             },
             GlobalRandomConfig,
         },
@@ -269,29 +265,23 @@ mod test {
             read_data_from_file!("../../assets/no_blend_no_beard_only_cell_cache_0_0.chunk");
 
         let mut base_router = BASE_NOISE_ROUTER.clone();
-        base_router.iter_functions().for_each(|function| {
-            function
-                .function_components
-                .iter_mut()
-                .for_each(|component| {
-                    if let UniversalChunkNoiseFunctionComponent::Wrapped(wrapper) = component {
-                        match wrapper.wrapper_type() {
-                            WrapperType::CellCache => (),
-                            _ => {
-                                *component = UniversalChunkNoiseFunctionComponent::StaticDependent(
-                                    StaticDependentChunkNoiseFunctionComponent::PassThrough(
-                                        PassThrough {
-                                            input_index: wrapper.input_index(),
-                                            min_value: wrapper.min(),
-                                            max_value: wrapper.max(),
-                                        },
-                                    ),
-                                );
-                            }
+        base_router
+            .component_stack
+            .iter_mut()
+            .for_each(|component| {
+                if let ProtoNoiseFunctionComponent::Wrapper(wrapper) = component {
+                    match wrapper.wrapper_type() {
+                        WrapperType::CellCache => (),
+                        _ => {
+                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
+                                input_index: wrapper.input_index(),
+                                min_value: wrapper.min(),
+                                max_value: wrapper.max(),
+                            });
                         }
                     }
-                });
-        });
+                }
+            });
 
         let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &base_router, &RANDOM_CONFIG);
         chunk.populate_noise();
@@ -315,30 +305,24 @@ mod test {
             read_data_from_file!("../../assets/no_blend_no_beard_only_cell_cache_0_0.chunk");
 
         let mut base_router = BASE_NOISE_ROUTER.clone();
-        base_router.iter_functions().for_each(|function| {
-            function
-                .function_components
-                .iter_mut()
-                .for_each(|component| {
-                    if let UniversalChunkNoiseFunctionComponent::Wrapped(wrapper) = component {
-                        match wrapper.wrapper_type() {
-                            WrapperType::CellCache => (),
-                            WrapperType::Cache2D => (),
-                            _ => {
-                                *component = UniversalChunkNoiseFunctionComponent::StaticDependent(
-                                    StaticDependentChunkNoiseFunctionComponent::PassThrough(
-                                        PassThrough {
-                                            input_index: wrapper.input_index(),
-                                            min_value: wrapper.min(),
-                                            max_value: wrapper.max(),
-                                        },
-                                    ),
-                                );
-                            }
+        base_router
+            .component_stack
+            .iter_mut()
+            .for_each(|component| {
+                if let ProtoNoiseFunctionComponent::Wrapper(wrapper) = component {
+                    match wrapper.wrapper_type() {
+                        WrapperType::CellCache => (),
+                        WrapperType::Cache2D => (),
+                        _ => {
+                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
+                                input_index: wrapper.input_index(),
+                                min_value: wrapper.min(),
+                                max_value: wrapper.max(),
+                            });
                         }
                     }
-                });
-        });
+                }
+            });
 
         let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &base_router, &RANDOM_CONFIG);
         chunk.populate_noise();
@@ -362,30 +346,24 @@ mod test {
         );
 
         let mut base_router = BASE_NOISE_ROUTER.clone();
-        base_router.iter_functions().for_each(|function| {
-            function
-                .function_components
-                .iter_mut()
-                .for_each(|component| {
-                    if let UniversalChunkNoiseFunctionComponent::Wrapped(wrapper) = component {
-                        match wrapper.wrapper_type() {
-                            WrapperType::CellCache => (),
-                            WrapperType::CacheFlat => (),
-                            _ => {
-                                *component = UniversalChunkNoiseFunctionComponent::StaticDependent(
-                                    StaticDependentChunkNoiseFunctionComponent::PassThrough(
-                                        PassThrough {
-                                            input_index: wrapper.input_index(),
-                                            min_value: wrapper.min(),
-                                            max_value: wrapper.max(),
-                                        },
-                                    ),
-                                );
-                            }
+        base_router
+            .component_stack
+            .iter_mut()
+            .for_each(|component| {
+                if let ProtoNoiseFunctionComponent::Wrapper(wrapper) = component {
+                    match wrapper.wrapper_type() {
+                        WrapperType::CellCache => (),
+                        WrapperType::CacheFlat => (),
+                        _ => {
+                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
+                                input_index: wrapper.input_index(),
+                                min_value: wrapper.min(),
+                                max_value: wrapper.max(),
+                            });
                         }
                     }
-                });
-        });
+                }
+            });
 
         let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &base_router, &RANDOM_CONFIG);
         chunk.populate_noise();
@@ -409,30 +387,24 @@ mod test {
         );
 
         let mut base_router = BASE_NOISE_ROUTER.clone();
-        base_router.iter_functions().for_each(|function| {
-            function
-                .function_components
-                .iter_mut()
-                .for_each(|component| {
-                    if let UniversalChunkNoiseFunctionComponent::Wrapped(wrapper) = component {
-                        match wrapper.wrapper_type() {
-                            WrapperType::CellCache => (),
-                            WrapperType::CacheOnce => (),
-                            _ => {
-                                *component = UniversalChunkNoiseFunctionComponent::StaticDependent(
-                                    StaticDependentChunkNoiseFunctionComponent::PassThrough(
-                                        PassThrough {
-                                            input_index: wrapper.input_index(),
-                                            min_value: wrapper.min(),
-                                            max_value: wrapper.max(),
-                                        },
-                                    ),
-                                );
-                            }
+        base_router
+            .component_stack
+            .iter_mut()
+            .for_each(|component| {
+                if let ProtoNoiseFunctionComponent::Wrapper(wrapper) = component {
+                    match wrapper.wrapper_type() {
+                        WrapperType::CellCache => (),
+                        WrapperType::CacheOnce => (),
+                        _ => {
+                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
+                                input_index: wrapper.input_index(),
+                                min_value: wrapper.min(),
+                                max_value: wrapper.max(),
+                            });
                         }
                     }
-                });
-        });
+                }
+            });
 
         let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &base_router, &RANDOM_CONFIG);
         chunk.populate_noise();
@@ -456,30 +428,24 @@ mod test {
         );
 
         let mut base_router = BASE_NOISE_ROUTER.clone();
-        base_router.iter_functions().for_each(|function| {
-            function
-                .function_components
-                .iter_mut()
-                .for_each(|component| {
-                    if let UniversalChunkNoiseFunctionComponent::Wrapped(wrapper) = component {
-                        match wrapper.wrapper_type() {
-                            WrapperType::CellCache => (),
-                            WrapperType::Interpolated => (),
-                            _ => {
-                                *component = UniversalChunkNoiseFunctionComponent::StaticDependent(
-                                    StaticDependentChunkNoiseFunctionComponent::PassThrough(
-                                        PassThrough {
-                                            input_index: wrapper.input_index(),
-                                            min_value: wrapper.min(),
-                                            max_value: wrapper.max(),
-                                        },
-                                    ),
-                                );
-                            }
+        base_router
+            .component_stack
+            .iter_mut()
+            .for_each(|component| {
+                if let ProtoNoiseFunctionComponent::Wrapper(wrapper) = component {
+                    match wrapper.wrapper_type() {
+                        WrapperType::CellCache => (),
+                        WrapperType::Interpolated => (),
+                        _ => {
+                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
+                                input_index: wrapper.input_index(),
+                                min_value: wrapper.min(),
+                                max_value: wrapper.max(),
+                            });
                         }
                     }
-                });
-        });
+                }
+            });
 
         let mut chunk = ProtoChunk::new(Vector2::new(0, 0), &base_router, &RANDOM_CONFIG);
         chunk.populate_noise();

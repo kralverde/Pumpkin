@@ -3,13 +3,13 @@
 pub mod aquifer_sampler;
 mod blender;
 pub mod chunk_noise;
-pub mod chunk_noise_router;
 pub mod generation_shapes;
 mod generator;
 mod generic_generator;
 pub mod height_limit;
 mod implementation;
 pub mod noise;
+pub mod noise_router;
 pub mod ore_sampler;
 mod positions;
 pub mod proto_chunk;

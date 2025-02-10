@@ -3,30 +3,45 @@ use std::sync::Arc;
 use pumpkin_util::random::RandomGenerator;
 
 use crate::{
-    generation::noise::{
-        clamped_lerp,
-        perlin::{DoublePerlinNoiseSampler, OctavePerlinNoiseSampler},
+    generation::{
+        noise::{
+            clamped_lerp,
+            perlin::{DoublePerlinNoiseSampler, OctavePerlinNoiseSampler},
+        },
+        noise_router::{
+            chunk_density_function::ChunkNoiseFunctionSampleOptions,
+            chunk_noise_router::{
+                ChunkNoiseFunctionComponent, StaticChunkNoiseFunctionComponentImpl,
+            },
+        },
     },
     noise_router::density_function_ast::{
         InterpolatedNoiseSamplerData, NoiseData, ShiftedNoiseData,
     },
 };
 
-use super::{ChunkNoiseFunctionRange, NoisePos, StaticIndependentChunkNoiseFunctionComponentImpl};
+use super::{
+    NoiseFunctionComponentRange, NoisePos, StaticIndependentChunkNoiseFunctionComponentImpl,
+};
 
 #[derive(Clone)]
-pub struct Noise<'a> {
-    sampler: Arc<DoublePerlinNoiseSampler>,
-    data: &'a NoiseData,
+pub struct Noise {
+    pub sampler: Arc<DoublePerlinNoiseSampler>,
+    pub xz_scale: f64,
+    pub y_scale: f64,
 }
 
-impl<'a> Noise<'a> {
-    pub fn new(sampler: Arc<DoublePerlinNoiseSampler>, data: &'a NoiseData) -> Self {
-        Self { sampler, data }
+impl Noise {
+    pub fn new(sampler: Arc<DoublePerlinNoiseSampler>, data: &NoiseData) -> Self {
+        Self {
+            sampler,
+            xz_scale: data.xz_scale.0,
+            y_scale: data.y_scale.0,
+        }
     }
 }
 
-impl ChunkNoiseFunctionRange for Noise<'_> {
+impl NoiseFunctionComponentRange for Noise {
     #[inline]
     fn min(&self) -> f64 {
         -self.max()
@@ -38,12 +53,12 @@ impl ChunkNoiseFunctionRange for Noise<'_> {
     }
 }
 
-impl StaticIndependentChunkNoiseFunctionComponentImpl for Noise<'_> {
+impl StaticIndependentChunkNoiseFunctionComponentImpl for Noise {
     fn sample(&self, pos: &impl NoisePos) -> f64 {
         self.sampler.sample(
-            pos.x() as f64 * self.data.xz_scale(),
-            pos.y() as f64 * self.data.y_scale(),
-            pos.z() as f64 * self.data.xz_scale(),
+            pos.x() as f64 * self.xz_scale,
+            pos.y() as f64 * self.y_scale,
+            pos.z() as f64 * self.xz_scale,
         )
     }
 }
@@ -64,7 +79,7 @@ impl ShiftA {
     }
 }
 
-impl ChunkNoiseFunctionRange for ShiftA {
+impl NoiseFunctionComponentRange for ShiftA {
     #[inline]
     fn min(&self) -> f64 {
         -self.max()
@@ -93,7 +108,7 @@ impl ShiftB {
     }
 }
 
-impl ChunkNoiseFunctionRange for ShiftB {
+impl NoiseFunctionComponentRange for ShiftB {
     #[inline]
     fn min(&self) -> f64 {
         -self.max()
@@ -112,15 +127,16 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for ShiftB {
 }
 
 #[derive(Clone)]
-pub struct ShiftedNoise<'a> {
-    pub(crate) x_index: usize,
-    pub(crate) y_index: usize,
-    pub(crate) z_index: usize,
-    pub(crate) sampler: Arc<DoublePerlinNoiseSampler>,
-    pub(crate) data: &'a ShiftedNoiseData,
+pub struct ShiftedNoise {
+    pub input_x_index: usize,
+    pub input_y_index: usize,
+    pub input_z_index: usize,
+    pub sampler: Arc<DoublePerlinNoiseSampler>,
+    pub xz_scale: f64,
+    pub y_scale: f64,
 }
 
-impl ChunkNoiseFunctionRange for ShiftedNoise<'_> {
+impl NoiseFunctionComponentRange for ShiftedNoise {
     #[inline]
     fn min(&self) -> f64 {
         -self.max()
@@ -132,34 +148,71 @@ impl ChunkNoiseFunctionRange for ShiftedNoise<'_> {
     }
 }
 
-impl<'a> ShiftedNoise<'a> {
+impl StaticChunkNoiseFunctionComponentImpl for ShiftedNoise {
+    fn sample(
+        &self,
+        component_stack: &mut [ChunkNoiseFunctionComponent],
+        pos: &impl NoisePos,
+        sample_options: &ChunkNoiseFunctionSampleOptions,
+    ) -> f64 {
+        let translated_x = pos.x() as f64 * self.xz_scale
+            + ChunkNoiseFunctionComponent::sample_from_stack(
+                &mut component_stack[..=self.input_x_index],
+                pos,
+                sample_options,
+            );
+        let translated_y = pos.y() as f64 * self.y_scale
+            + ChunkNoiseFunctionComponent::sample_from_stack(
+                &mut component_stack[..=self.input_y_index],
+                pos,
+                sample_options,
+            );
+        let translated_z = pos.z() as f64 * self.xz_scale
+            + ChunkNoiseFunctionComponent::sample_from_stack(
+                &mut component_stack[..=self.input_z_index],
+                pos,
+                sample_options,
+            );
+
+        self.sampler
+            .sample(translated_x, translated_y, translated_z)
+    }
+}
+
+impl ShiftedNoise {
     pub fn new(
-        x_index: usize,
-        y_index: usize,
-        z_index: usize,
+        input_x_index: usize,
+        input_y_index: usize,
+        input_z_index: usize,
         sampler: Arc<DoublePerlinNoiseSampler>,
-        data: &'a ShiftedNoiseData,
+        data: &ShiftedNoiseData,
     ) -> Self {
         Self {
-            x_index,
-            y_index,
-            z_index,
+            input_x_index,
+            input_y_index,
+            input_z_index,
             sampler,
-            data,
+            xz_scale: data.xz_scale.0,
+            y_scale: data.y_scale.0,
         }
     }
 }
 
 #[derive(Clone)]
-pub struct InterpolatedNoiseSampler<'a> {
-    lower_noise: Box<OctavePerlinNoiseSampler>,
-    upper_noise: Box<OctavePerlinNoiseSampler>,
-    noise: Box<OctavePerlinNoiseSampler>,
-    data: &'a InterpolatedNoiseSamplerData,
+pub struct InterpolatedNoiseSampler {
+    pub lower_noise: Box<OctavePerlinNoiseSampler>,
+    pub upper_noise: Box<OctavePerlinNoiseSampler>,
+    pub noise: Box<OctavePerlinNoiseSampler>,
+    pub scaled_xz_scale: f64,
+    pub scaled_y_scale: f64,
+    pub xz_factor: f64,
+    pub y_factor: f64,
+    pub smear_scale_multiplier: f64,
+    pub max_value: f64,
 }
 
-impl<'a> InterpolatedNoiseSampler<'a> {
-    pub fn new(data: &'a InterpolatedNoiseSamplerData, random: &mut RandomGenerator) -> Self {
+impl InterpolatedNoiseSampler {
+    pub fn new(data: &InterpolatedNoiseSamplerData, random: &mut RandomGenerator) -> Self {
         let big_start = -15;
         let big_amplitudes = [1.0; 16];
 
@@ -189,12 +242,17 @@ impl<'a> InterpolatedNoiseSampler<'a> {
             lower_noise,
             upper_noise,
             noise,
-            data,
+            scaled_xz_scale: data.scaled_xz_scale.0,
+            scaled_y_scale: data.scaled_y_scale.0,
+            xz_factor: data.xz_factor.0,
+            y_factor: data.y_factor.0,
+            smear_scale_multiplier: data.smear_scale_multiplier.0,
+            max_value: data.max_value.0,
         }
     }
 }
 
-impl ChunkNoiseFunctionRange for InterpolatedNoiseSampler<'_> {
+impl NoiseFunctionComponentRange for InterpolatedNoiseSampler {
     #[inline]
     fn min(&self) -> f64 {
         -self.max()
@@ -202,22 +260,22 @@ impl ChunkNoiseFunctionRange for InterpolatedNoiseSampler<'_> {
 
     #[inline]
     fn max(&self) -> f64 {
-        *self.data.max_value()
+        self.max_value
     }
 }
 
-impl StaticIndependentChunkNoiseFunctionComponentImpl for InterpolatedNoiseSampler<'_> {
+impl StaticIndependentChunkNoiseFunctionComponentImpl for InterpolatedNoiseSampler {
     fn sample(&self, pos: &impl NoisePos) -> f64 {
-        let d = pos.x() as f64 * self.data.scaled_xz_scale();
-        let e = pos.y() as f64 * self.data.scaled_y_scale();
-        let f = pos.z() as f64 * self.data.scaled_xz_scale();
+        let d = pos.x() as f64 * self.scaled_xz_scale;
+        let e = pos.y() as f64 * self.scaled_y_scale;
+        let f = pos.z() as f64 * self.scaled_xz_scale;
 
-        let g = d / self.data.xz_factor();
-        let h = e / self.data.y_factor();
-        let i = f / self.data.xz_factor();
+        let g = d / self.xz_factor;
+        let h = e / self.y_factor;
+        let i = f / self.xz_factor;
 
-        let j = self.data.scaled_y_scale() * self.data.smear_scale_multiplier();
-        let k = j / self.data.y_factor();
+        let j = self.scaled_y_scale * self.smear_scale_multiplier;
+        let k = j / self.y_factor;
 
         let mut n = 0f64;
         let mut o = 1f64;

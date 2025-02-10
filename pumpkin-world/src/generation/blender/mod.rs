@@ -1,6 +1,6 @@
 use enum_dispatch::enum_dispatch;
 
-use super::chunk_noise_router::density_function::NoisePos;
+use super::noise_router::density_function::NoisePos;
 
 pub struct BlendResult {
     alpha: f64,
