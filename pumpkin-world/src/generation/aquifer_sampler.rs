@@ -276,7 +276,6 @@ impl WorldAquiferSampler {
             let z = block_z + section_coords::section_to_block(offset.z as i32);
 
             let n = height_estimator.estimate_surface_height(router, sample_options, x, z);
-            println!("{} {}", x, z);
             let o = n + 8;
             let bl2 = offset.x == 0 && offset.z == 0;
 

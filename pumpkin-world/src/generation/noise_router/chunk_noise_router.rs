@@ -332,14 +332,21 @@ impl<'a> ChunkNoiseRouter<'a> {
                                 max_value,
                                 build_options,
                             );
+                            let sample_options = ChunkNoiseFunctionSampleOptions::new(
+                                false,
+                                SampleAction::SkipWrappers,
+                                0,
+                                0,
+                                0,
+                            );
 
-                            for biome_x_position in 0..build_options.horizontal_biome_end {
+                            for biome_x_position in 0..=build_options.horizontal_biome_end {
                                 let absolute_biome_x_position =
                                     build_options.start_biome_x + biome_x_position as i32;
                                 let block_x_position =
                                     biome_coords::to_block(absolute_biome_x_position);
 
-                                for biome_z_position in 0..build_options.horizontal_biome_end {
+                                for biome_z_position in 0..=build_options.horizontal_biome_end {
                                     let absolute_biome_z_position =
                                         build_options.start_biome_z + biome_z_position as i32;
                                     let block_z_position =
@@ -349,13 +356,6 @@ impl<'a> ChunkNoiseRouter<'a> {
                                         block_x_position,
                                         0,
                                         block_z_position,
-                                    );
-                                    let sample_options = ChunkNoiseFunctionSampleOptions::new(
-                                        false,
-                                        SampleAction::SkipWrappers,
-                                        0,
-                                        0,
-                                        0,
                                     );
 
                                     // Due to our stack invariant, what is on the stack is a
@@ -437,7 +437,7 @@ impl<'a> ChunkNoiseRouter<'a> {
         mapper: &impl IndexToNoisePos,
         sample_options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
-        let indices = &self.cell_indices;
+        let indices = &self.interpolator_indices;
         let components = &mut self.component_stack;
         for interpolator_index in indices {
             let (component_stack, component) = components.split_at_mut(*interpolator_index);
@@ -467,7 +467,7 @@ impl<'a> ChunkNoiseRouter<'a> {
     }
 
     pub fn interpolate_x(&mut self, delta: f64) {
-        let indices = &self.cell_indices;
+        let indices = &self.interpolator_indices;
         let components = &mut self.component_stack;
         for interpolator_index in indices {
             let density_interpolator = match &mut components[*interpolator_index] {
@@ -482,7 +482,7 @@ impl<'a> ChunkNoiseRouter<'a> {
     }
 
     pub fn interpolate_y(&mut self, delta: f64) {
-        let indices = &self.cell_indices;
+        let indices = &self.interpolator_indices;
         let components = &mut self.component_stack;
         for interpolator_index in indices {
             let density_interpolator = match &mut components[*interpolator_index] {
@@ -497,7 +497,7 @@ impl<'a> ChunkNoiseRouter<'a> {
     }
 
     pub fn interpolate_z(&mut self, delta: f64) {
-        let indices = &self.cell_indices;
+        let indices = &self.interpolator_indices;
         let components = &mut self.component_stack;
         for interpolator_index in indices {
             let density_interpolator = match &mut components[*interpolator_index] {
@@ -512,7 +512,7 @@ impl<'a> ChunkNoiseRouter<'a> {
     }
 
     pub fn on_sampled_cell_corners(&mut self, cell_y_position: usize, cell_z_position: usize) {
-        let indices = &self.cell_indices;
+        let indices = &self.interpolator_indices;
         let components = &mut self.component_stack;
         for interpolator_index in indices {
             let density_interpolator = match &mut components[*interpolator_index] {
@@ -527,7 +527,7 @@ impl<'a> ChunkNoiseRouter<'a> {
     }
 
     pub fn swap_buffers(&mut self) {
-        let indices = &self.cell_indices;
+        let indices = &self.interpolator_indices;
         let components = &mut self.component_stack;
         for interpolator_index in indices {
             let density_interpolator = match &mut components[*interpolator_index] {
