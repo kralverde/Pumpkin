@@ -21,21 +21,32 @@ pub enum LoadedData<R>
 where
     R: Send,
 {
-    LoadedData(R),
-    MissingData(Vector2<i32>),
+    /// The chunk data was loaded successfully
+    Loaded(R),
+    /// The chunk data was not found
+    Missing(Vector2<i32>),
 }
 
+/// Trait to handle the IO of chunks
+/// for loading and saving chunks data
+/// can be implemented for different types of IO
+/// or with different optimizations
+///
+/// The `R` type is the type of the data that will be loaded/saved
+/// like ChunkData or EntityData
 pub trait ChunkIO<R>
 where
     Self: Send + Sync,
     R: Send + Sized,
 {
+    /// Load the chunks data
     fn load_chunks(
         &self,
         folder: &LevelFolder,
         chunk_coords: &[Vector2<i32>],
     ) -> Result<Vec<LoadedData<R>>, ChunkReadingError>;
 
+    /// Persist the chunks data
     fn save_chunks(
         &self,
         folder: &LevelFolder,
@@ -43,6 +54,10 @@ where
     ) -> Result<(), ChunkWritingError>;
 }
 
+/// Trait to serialize and deserialize the chunk data to and from bytes.
+///
+/// The `Data` type is the type of the data that will be updated or serialized/deserialized
+/// like ChunkData or EntityData
 pub trait ChunkSerializer: Send + Sync + Sized + Default {
     type Data: Send;
 
@@ -58,6 +73,12 @@ pub trait ChunkSerializer: Send + Sync + Sized + Default {
     ) -> Result<LoadedData<Self::Data>, ChunkReadingError>;
 }
 
+/// A simple implementation of the ChunkSerializer trait
+/// that load and save the data from a file in the disk
+/// using parallelism and a cache for the files with ongoing IO operations.
+///
+/// It also avoid IO operations that could produce dataraces thanks to the
+/// DashMap that manages the locks for the files.
 pub struct ChunkFileManager<S: ChunkSerializer> {
     file_locks: Arc<DashMap<PathBuf, Arc<RwLock<S>>>>,
     _serializer: std::marker::PhantomData<S>,
@@ -74,6 +95,8 @@ impl<S: ChunkSerializer> Default for ChunkFileManager<S> {
 
 impl<S: ChunkSerializer> ChunkFileManager<S> {
     pub fn read_file(&self, path: &Path) -> Result<Arc<RwLock<S>>, ChunkReadingError> {
+        // We get the entry from the DashMap and try to insert a new lock if it doesn't exist
+        // using dead-lock save methods like `or_try_insert_with`
         let serializer = self
             .file_locks
             .entry(path.to_path_buf())
@@ -199,6 +222,7 @@ where
                         Err(err) => Err(err),
                     }?;
 
+                    // We need to block the read to avoid other threads to write/modify the data
                     let chunk_guard = chunk_serializer.blocking_read();
                     let mut chunks_data = Vec::with_capacity(chunks.len());
 
@@ -261,12 +285,15 @@ where
                         }
                     }?;
 
+                    // We need to block the read to avoid other threads to write/modify/read the data
                     let mut chunk_guard = chunk_serializer.blocking_write();
                     chunks
                         .iter()
                         .try_for_each(|&chunk| chunk_guard.add_chunk_data(chunk))
                         .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
+                    // With the modification done, we can drop the write lock but keep the read lock
+                    // to avoid other threads to write/modify the data, but allow other threads to read it
                     let chunk_guard = chunk_guard.downgrade();
                     self.write_file(&path, &chunk_guard)
                 })?;

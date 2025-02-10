@@ -1,16 +1,8 @@
-use dashmap::{
-    mapref::one::{Ref, RefMut},
-    DashMap,
-};
 use fastnbt::LongArray;
 use pumpkin_data::chunk::ChunkStatus;
 use pumpkin_util::math::{ceil_log2, vector2::Vector2};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    iter::repeat_with,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, iter::repeat_with};
 use thiserror::Error;
 
 use crate::{
@@ -78,7 +70,7 @@ pub struct ChunkData {
 
 /// # Subchunks
 /// Subchunks - its an areas in chunk, what are 16 blocks in height.
-/// Current amouth is 24.
+/// Current amount is 24.
 ///
 /// Subchunks can be single and multi.
 ///

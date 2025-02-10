@@ -336,7 +336,7 @@ impl ChunkSerializer for LinearFile {
 
         let chunk_size = self.chunks_headers[chunk_index].size as usize;
         if chunk_size == 0 {
-            return Ok(LoadedData::MissingData(chunk));
+            return Ok(LoadedData::Missing(chunk));
         }
 
         // We iterate over the headers to sum the size of the chunks until the desired one
@@ -345,7 +345,7 @@ impl ChunkSerializer for LinearFile {
             offset += self.chunks_headers[i].size as usize;
         }
 
-        Ok(LoadedData::LoadedData(
+        Ok(LoadedData::Loaded(
             ChunkData::from_bytes(&self.chunks_data[offset..offset + chunk_size], chunk)
                 .map_err(ChunkReadingError::ParsingError)?,
         ))
@@ -375,7 +375,7 @@ mod tests {
             &[Vector2::new(0, 0)],
         );
         assert!(
-            matches!(result, Ok(chunks) if chunks.len() == 1 && matches!(chunks[0], LoadedData::MissingData(_)))
+            matches!(result, Ok(chunks) if chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)))
         );
     }
 
@@ -422,8 +422,8 @@ mod tests {
                 .expect("Could not read chunk")
                 .into_iter()
                 .filter_map(|chunk| match chunk {
-                    LoadedData::LoadedData(chunk) => Some(chunk),
-                    LoadedData::MissingData(_) => None,
+                    LoadedData::Loaded(chunk) => Some(chunk),
+                    LoadedData::Missing(_) => None,
                 })
                 .collect::<Vec<_>>();
 

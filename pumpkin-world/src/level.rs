@@ -268,8 +268,8 @@ impl Level {
             })
             .into_par_iter()
             .map(|chunk_data| match chunk_data {
-                LoadedData::LoadedData(chunk) => (chunk.position, Some(chunk)),
-                LoadedData::MissingData(pos) => (pos, None),
+                LoadedData::Loaded(chunk) => (chunk.position, Some(chunk)),
+                LoadedData::Missing(pos) => (pos, None),
             })
             .collect::<Vec<_>>()
     }

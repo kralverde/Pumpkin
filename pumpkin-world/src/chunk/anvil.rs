@@ -424,8 +424,8 @@ impl ChunkSerializer for AnvilChunkFile {
         let chunk_data = &self.chunks_data[chunk_index];
 
         match chunk_data {
-            Some(chunk_data) => Ok(LoadedData::LoadedData(chunk_data.to_chunk(chunk)?)),
-            None => Ok(LoadedData::MissingData(chunk)),
+            Some(chunk_data) => Ok(LoadedData::Loaded(chunk_data.to_chunk(chunk)?)),
+            None => Ok(LoadedData::Missing(chunk)),
         }
     }
 }
@@ -453,7 +453,7 @@ mod tests {
             &[Vector2::new(0, 0)],
         );
         assert!(
-            matches!(result, Ok(chunks) if chunks.len() == 1 && matches!(chunks[0], LoadedData::MissingData(_)))
+            matches!(result, Ok(chunks) if chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)))
         );
     }
 
@@ -500,8 +500,8 @@ mod tests {
                 .expect("Could not read chunk")
                 .into_iter()
                 .filter_map(|chunk| match chunk {
-                    LoadedData::LoadedData(chunk) => Some(chunk),
-                    LoadedData::MissingData(_) => None,
+                    LoadedData::Loaded(chunk) => Some(chunk),
+                    LoadedData::Missing(_) => None,
                 })
                 .collect::<Vec<_>>();
 
