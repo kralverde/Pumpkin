@@ -2,16 +2,18 @@ use std::{
     collections::BTreeMap,
     fs::OpenOptions,
     io::{ErrorKind, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
-use log::error;
+use dashmap::DashMap;
+use log::{error, trace};
 use pumpkin_util::math::vector2::Vector2;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use tokio::sync::RwLock;
 
 use crate::{
-    chunk::{ChunkReadingError, ChunkSerializingError, ChunkWritingError, FileLocksManager},
+    chunk::{ChunkReadingError, ChunkSerializingError, ChunkWritingError},
     level::LevelFolder,
 };
 
@@ -57,7 +59,7 @@ pub trait ChunkSerializer: Send + Sync + Sized + Default {
 }
 
 pub struct ChunkFileManager<S: ChunkSerializer> {
-    file_locks: Arc<FileLocksManager>,
+    file_locks: Arc<DashMap<PathBuf, Arc<RwLock<S>>>>,
     _serializer: std::marker::PhantomData<S>,
 }
 
@@ -71,27 +73,47 @@ impl<S: ChunkSerializer> Default for ChunkFileManager<S> {
 }
 
 impl<S: ChunkSerializer> ChunkFileManager<S> {
-    pub fn read_file(&self, path: &Path) -> Result<Vec<u8>, ChunkReadingError> {
-        let file = OpenOptions::new()
-            .write(false)
-            .read(true)
-            .create(false)
-            .truncate(false)
-            .open(path)
-            .map_err(|err| match err.kind() {
-                ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
-                kind => ChunkReadingError::IoError(kind),
-            })?;
+    pub fn read_file(&self, path: &Path) -> Result<Arc<RwLock<S>>, ChunkReadingError> {
+        let serializer = self
+            .file_locks
+            .entry(path.to_path_buf())
+            .or_try_insert_with(|| {
+                let file = OpenOptions::new()
+                    .write(false)
+                    .read(true)
+                    .create(false)
+                    .truncate(false)
+                    .open(path)
+                    .map_err(|err| match err.kind() {
+                        ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                        kind => ChunkReadingError::IoError(kind),
+                    });
 
-        let file_bytes = file
-            .bytes()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+                match file {
+                    Ok(file) => {
+                        let file_bytes = file
+                            .bytes()
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
-        Ok(file_bytes)
+                        Ok(Arc::new(RwLock::new(S::from_bytes(&file_bytes)?)))
+                    }
+                    Err(ChunkReadingError::ChunkNotExist) => {
+                        Ok(Arc::new(RwLock::new(S::default())))
+                    }
+                    Err(err) => Err(err),
+                }
+            })?
+            .downgrade()
+            .clone();
+
+        Ok(serializer)
     }
 
-    pub fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<(), ChunkWritingError> {
+    pub fn write_file(&self, path: &Path, serializer: &S) -> Result<(), ChunkWritingError> {
+        // We need to lock the dashmap entry to avoid removing the lock while writing
+        // and also to avoid other threads to write/read the file at the same time
+        let _guard = self.file_locks.entry(path.to_path_buf());
         let mut file = OpenOptions::new()
             .write(true)
             .read(false)
@@ -100,13 +122,43 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
             .open(path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
-        file.write_all(bytes)
+        file.write_all(serializer.to_bytes().as_slice())
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
         file.flush()
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
         Ok(())
+    }
+
+    fn clean_cache(&self) {
+        // We need to collect the paths to check, because we can't remove from the DashMap while iterating
+        let to_check = self
+            .file_locks
+            .iter()
+            .filter_map(|entry| {
+                let path = entry.key();
+                let lock = entry.value();
+
+                if Arc::strong_count(lock) <= 1 {
+                    Some(path.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Remove the locks that are not being used,
+        // there will be always at least one strong reference, the one in the DashMap
+        to_check.par_iter().for_each(|path| {
+            self.file_locks
+                .remove_if(path, |_, lock| Arc::strong_count(lock) <= 1);
+        });
+
+        trace!(
+            "ChunkFile Cache cleaning-cycle, remaining: {}",
+            self.file_locks.len()
+        );
     }
 }
 
@@ -135,23 +187,30 @@ where
         let chunks_by_region: Vec<Result<Vec<LoadedData<R>>, _>> = regions_chunks
             .into_par_iter()
             .map(|(file_name, chunks)| {
-                tokio::task::block_in_place(|| {
-                    let path = folder.region_folder.join(file_name);
-                    let _reader_guard = self.file_locks.get_read_guard(&path);
+                let path = folder.region_folder.join(file_name);
 
+                let chunks_data = tokio::task::block_in_place(|| {
                     let chunk_serializer = match self.read_file(&path) {
-                        Ok(file) => Ok(S::from_bytes(&file)?),
-                        Err(ChunkReadingError::ChunkNotExist) => Ok(S::default()),
+                        Ok(chunk_serializer) => Ok(chunk_serializer),
+                        Err(ChunkReadingError::ChunkNotExist) => {
+                            unreachable!("Must be managed by the cache")
+                        }
+
                         Err(err) => Err(err),
                     }?;
 
-                    let chunks_data = chunks
-                        .iter()
-                        .map(|&at| chunk_serializer.get_chunk_data(at).unwrap())
-                        .collect();
+                    let chunk_guard = chunk_serializer.blocking_read();
+                    let mut chunks_data = Vec::with_capacity(chunks.len());
+
+                    chunks.into_iter().try_for_each(|at| {
+                        chunks_data.push(chunk_guard.get_chunk_data(at)?);
+                        Ok(())
+                    })?;
 
                     Ok(chunks_data)
-                })
+                })?;
+
+                Ok(chunks_data)
             })
             .collect();
 
@@ -159,6 +218,8 @@ where
         for chunks in chunks_by_region {
             final_chunks.extend(chunks?)
         }
+
+        self.clean_cache();
 
         Ok(final_chunks)
     }
@@ -182,37 +243,38 @@ where
         regions_chunks
             .into_par_iter()
             .try_for_each(|(file_name, chunks)| {
-                tokio::task::block_in_place(|| {
-                    let path = folder.region_folder.join(file_name);
-                    let _write_guard = self.file_locks.get_write_guard(&path);
+                let path = folder.region_folder.join(file_name);
 
-                    let mut chunk_serializer = match self.read_file(&path) {
-                        Ok(file) => Ok(S::from_bytes(&file).map_err(|err| {
-                            error!("Error parsign the data before write: {:?}", err);
-                            ChunkWritingError::IoError(std::io::ErrorKind::Other)
-                        })?),
-                        Err(ChunkReadingError::ChunkNotExist) => Ok(S::default()),
+                tokio::task::block_in_place(|| {
+                    let chunk_serializer = match self.read_file(&path) {
+                        Ok(file) => Ok(file),
+                        Err(ChunkReadingError::ChunkNotExist) => {
+                            unreachable!("Must be managed by the cache")
+                        }
                         Err(ChunkReadingError::IoError(err)) => {
                             error!("Error reading the data before write: {}", err);
-                            return Err(ChunkWritingError::IoError(err));
+                            Err(ChunkWritingError::IoError(err))
                         }
                         Err(err) => {
                             error!("Error reading the data before write: {:?}", err);
-                            return Err(ChunkWritingError::IoError(std::io::ErrorKind::Other));
+                            Err(ChunkWritingError::IoError(std::io::ErrorKind::Other))
                         }
                     }?;
 
+                    let mut chunk_guard = chunk_serializer.blocking_write();
                     chunks
                         .iter()
-                        .for_each(|&chunk| chunk_serializer.add_chunk_data(chunk).unwrap());
+                        .try_for_each(|&chunk| chunk_guard.add_chunk_data(chunk))
+                        .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
-                    self.write_file(&path, chunk_serializer.to_bytes().as_slice())?;
-
-                    Ok(())
+                    let chunk_guard = chunk_guard.downgrade();
+                    self.write_file(&path, &chunk_guard)
                 })?;
 
                 Ok(())
             })?;
+
+        self.clean_cache();
 
         Ok(())
     }

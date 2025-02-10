@@ -67,31 +67,6 @@ pub enum CompressionError {
     ZstdError(std::io::Error),
 }
 
-/// A guard that allows reading from a file while preventing writing to it
-/// This is used to prevent writes while a read is in progress.
-/// (dont suffer for "write starvation" problem)
-///
-/// When the guard is dropped, the file is unlocked.
-pub struct FileReadGuard<'a> {
-    _guard: Ref<'a, PathBuf, ()>,
-}
-
-/// A guard that allows writing to a file while preventing reading from it
-/// This is used to prevent multiple threads from writing to the same file at the same time.
-/// (dont suffer for "write starvation" problem)
-///
-/// When the guard is dropped, the file is unlocked.
-pub struct FileWriteGuard<'a> {
-    _guard: RefMut<'a, PathBuf, ()>,
-}
-
-/// Central File Lock Manager for chunk files
-/// This is used to prevent multiple threads from writing to the same file at the same time
-#[derive(Clone, Default)]
-pub struct FileLocksManager {
-    locks: DashMap<PathBuf, ()>,
-}
-
 #[derive(Clone)]
 pub struct ChunkData {
     /// See description in `Subchunks`
@@ -179,28 +154,6 @@ struct ChunkNbt {
     #[serde(rename = "sections")]
     sections: Vec<ChunkSection>,
     heightmaps: ChunkHeightmaps,
-}
-
-impl FileLocksManager {
-    pub fn get_read_guard(&self, path: &Path) -> FileReadGuard {
-        if let Some(lock) = self.locks.get(path) {
-            FileReadGuard { _guard: lock }
-        } else {
-            FileReadGuard {
-                _guard: self
-                    .locks
-                    .entry(path.to_path_buf())
-                    .or_insert(())
-                    .downgrade(),
-            }
-        }
-    }
-
-    pub fn get_write_guard(&self, path: &Path) -> FileWriteGuard {
-        FileWriteGuard {
-            _guard: self.locks.entry(path.to_path_buf()).or_insert(()),
-        }
-    }
 }
 
 /// The Heightmap for a completely empty chunk
