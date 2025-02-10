@@ -991,6 +991,9 @@ impl World {
         let level = self.level.clone();
         let rt = Handle::current();
         rayon::spawn(move || {
+            // Split the chunks into 64 chunks per request
+            // this way simulate an in order request 
+            // which improbes login experience
             chunks.chunks(64).for_each(|chunks| {
                 level.fetch_chunks(chunks, sender.clone(), &rt);
             });

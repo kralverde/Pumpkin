@@ -173,15 +173,22 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
 
         // Remove the locks that are not being used,
         // there will be always at least one strong reference, the one in the DashMap
-        to_check.par_iter().for_each(|path| {
-            self.file_locks
-                .remove_if(path, |_, lock| Arc::strong_count(lock) <= 1);
-        });
+        let removes = to_check
+            .par_iter()
+            .filter_map(|path| {
+                self.file_locks
+                    .remove_if(path, |_, lock| Arc::strong_count(lock) <= 1)
+            })
+            .count();
 
-        trace!(
-            "ChunkFile Cache cleaning-cycle, remaining: {}",
-            self.file_locks.len()
-        );
+        if removes > 0 {
+            trace!(
+                "ChunkFile Cache cleaning-cycle, Removed: {} | Remaining: {}",
+                removes,
+                self.file_locks.len()
+            );
+            self.file_locks.shrink_to_fit();
+        }
     }
 }
 
