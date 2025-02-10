@@ -260,7 +260,7 @@ impl GlobalProtoNoiseRouter {
         let ast_hash = hasher.finish();
 
         map.get(&ast_hash).copied().unwrap_or_else(|| {
-            match ast {
+            let component = match ast {
                 DensityFunctionRepr::Spline { spline, data } => {
                     let spline = match Self::recursive_build_spline(
                         spline,
@@ -273,36 +273,34 @@ impl GlobalProtoNoiseRouter {
                         _ => unreachable!(),
                     };
 
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::Spline(SplineFunction::new(
                             spline, data,
                         )),
-                    ));
+                    )
                 }
-                DensityFunctionRepr::EndIslands => {
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
-                        IndependentProtoNoiseFunctionComponent::EndIsland(EndIsland::new(
-                            random_config.seed,
-                        )),
-                    ));
-                }
+                DensityFunctionRepr::EndIslands => ProtoNoiseFunctionComponent::Independent(
+                    IndependentProtoNoiseFunctionComponent::EndIsland(EndIsland::new(
+                        random_config.seed,
+                    )),
+                ),
                 DensityFunctionRepr::Noise { data } => {
                     let sampler = perlin_noise_builder.get_noise_sampler_for_id(&data.noise_id);
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::Noise(Noise::new(sampler, data)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::ShiftA { noise_id } => {
                     let sampler = perlin_noise_builder.get_noise_sampler_for_id(noise_id);
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::ShiftA(ShiftA::new(sampler)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::ShiftB { noise_id } => {
                     let sampler = perlin_noise_builder.get_noise_sampler_for_id(noise_id);
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::ShiftB(ShiftB::new(sampler)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::BlendDensity { input } => {
                     // TODO: Replace this when the blender is implemented
@@ -316,21 +314,21 @@ impl GlobalProtoNoiseRouter {
                 }
                 DensityFunctionRepr::BlendAlpha => {
                     // TODO: Replace this with the cache when the blender is implemented
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::Constant(Constant::new(1.0)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::BlendOffset => {
                     // TODO: Replace this with the cache when the blender is implemented
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::Constant(Constant::new(0.0)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::Beardifier => {
                     // TODO: Replace this when world structures are implemented
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::Constant(Constant::new(0.0)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::ShiftedNoise {
                     shift_x,
@@ -363,7 +361,7 @@ impl GlobalProtoNoiseRouter {
                     );
 
                     let sampler = perlin_noise_builder.get_noise_sampler_for_id(&data.noise_id);
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::ShiftedNoise(ShiftedNoise::new(
                             input_x_index,
                             input_y_index,
@@ -371,7 +369,7 @@ impl GlobalProtoNoiseRouter {
                             sampler,
                             data,
                         )),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::RangeChoice {
                     input,
@@ -410,7 +408,7 @@ impl GlobalProtoNoiseRouter {
                         .max()
                         .max(stack[out_range_index].max());
 
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::RangeChoice(RangeChoice::new(
                             input_index,
                             in_range_index,
@@ -419,7 +417,7 @@ impl GlobalProtoNoiseRouter {
                             max_value,
                             data,
                         )),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::Binary {
                     argument1,
@@ -442,25 +440,25 @@ impl GlobalProtoNoiseRouter {
                         perlin_noise_builder,
                     );
 
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::Binary(Binary::new(
                             input1_index,
                             input2_index,
                             data,
                         )),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::ClampedYGradient { data } => {
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::ClampedYGradient(
                             ClampedYGradient::new(data),
                         ),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::Constant { value } => {
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::Constant(Constant::new(value.0)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::Wrapper { input, wrapper } => {
                     let input_index = Self::recursive_build_stack(
@@ -473,12 +471,12 @@ impl GlobalProtoNoiseRouter {
                     let min_value = stack[input_index].min();
                     let max_value = stack[input_index].max();
 
-                    stack.push(ProtoNoiseFunctionComponent::Wrapper(Wrapper::new(
+                    ProtoNoiseFunctionComponent::Wrapper(Wrapper::new(
                         input_index,
                         *wrapper,
                         min_value,
                         max_value,
-                    )));
+                    ))
                 }
                 DensityFunctionRepr::Linear { input, data } => {
                     let input_index = Self::recursive_build_stack(
@@ -489,12 +487,12 @@ impl GlobalProtoNoiseRouter {
                         perlin_noise_builder,
                     );
 
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::Linear(Linear::new(
                             input_index,
                             data,
                         )),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::Clamp { input, data } => {
                     let input_index = Self::recursive_build_stack(
@@ -505,9 +503,9 @@ impl GlobalProtoNoiseRouter {
                         perlin_noise_builder,
                     );
 
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::Clamp(Clamp::new(input_index, data)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::Unary { input, data } => {
                     let input_index = Self::recursive_build_stack(
@@ -518,9 +516,9 @@ impl GlobalProtoNoiseRouter {
                         perlin_noise_builder,
                     );
 
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::Unary(Unary::new(input_index, data)),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::WeirdScaled { input, data } => {
                     let input_index = Self::recursive_build_stack(
@@ -532,29 +530,30 @@ impl GlobalProtoNoiseRouter {
                     );
 
                     let sampler = perlin_noise_builder.get_noise_sampler_for_id(&data.noise_id);
-                    stack.push(ProtoNoiseFunctionComponent::Dependent(
+                    ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::WeirdScaled(WeirdScaled::new(
                             input_index,
                             sampler,
                             data,
                         )),
-                    ));
+                    )
                 }
                 DensityFunctionRepr::InterpolatedNoiseSampler { data } => {
                     let mut random_generator = random_config
                         .base_random_deriver
                         .split_string("minecraft:terrain");
 
-                    stack.push(ProtoNoiseFunctionComponent::Independent(
+                    ProtoNoiseFunctionComponent::Independent(
                         IndependentProtoNoiseFunctionComponent::InterpolatedNoise(
                             InterpolatedNoiseSampler::new(data, &mut random_generator),
                         ),
-                    ));
+                    )
                 }
-            }
+            };
 
             // Invariant: the current component is at the top of the stack
-            let component_index = stack.len() - 1;
+            let component_index = stack.len();
+            stack.push(component);
             //map.insert(ast_hash, component_index);
             component_index
         })

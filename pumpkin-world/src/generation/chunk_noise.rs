@@ -372,34 +372,36 @@ impl<'a> ChunkNoiseGenerator<'a> {
         start: bool,
         cell_z: usize,
         mapper: &impl IndexToNoisePos,
-        options: &mut ChunkNoiseFunctionSampleOptions,
+        sample_options: &mut ChunkNoiseFunctionSampleOptions,
     ) {
-        todo!()
+        self.router
+            .fill_interpolator_buffers(start, cell_z, mapper, sample_options);
     }
 
     #[inline]
     pub fn interpolate_x(&mut self, delta: f64) {
-        todo!()
+        self.router.interpolate_x(delta);
     }
 
     #[inline]
     pub fn interpolate_y(&mut self, delta: f64) {
-        todo!()
+        self.router.interpolate_y(delta);
     }
 
     #[inline]
     pub fn interpolate_z(&mut self, delta: f64) {
         self.cache_result_unique_id += 1;
-        todo!()
+        self.router.interpolate_z(delta);
     }
 
     #[inline]
     pub fn swap_buffers(&mut self) {
-        todo!()
+        self.router.swap_buffers();
     }
 
     pub fn on_sampled_cell_corners(&mut self, cell_x: u8, cell_y: u16, cell_z: u8) {
-        todo!();
+        self.router
+            .on_sampled_cell_corners(cell_y as usize, cell_z as usize);
         self.cache_fill_unique_id += 1;
 
         let start_x =
@@ -417,7 +419,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
             vertical_cell_block_count: self.vertical_cell_block_count() as usize,
         };
 
-        let mut options = ChunkNoiseFunctionSampleOptions::new(
+        let mut sample_options = ChunkNoiseFunctionSampleOptions::new(
             true,
             SampleAction::Wrappers(WrapperData {
                 cell_x_block_position: 0,
@@ -431,6 +433,7 @@ impl<'a> ChunkNoiseGenerator<'a> {
             0,
         );
 
+        self.router.fill_cell_caches(&mapper, &mut sample_options);
         self.cache_fill_unique_id += 1;
     }
 

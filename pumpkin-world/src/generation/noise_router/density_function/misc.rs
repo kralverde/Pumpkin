@@ -158,7 +158,7 @@ impl StaticChunkNoiseFunctionComponentImpl for WeirdScaled {
                         pos.y() as f64 / scaled_density,
                         pos.z() as f64 / scaled_density,
                     )
-                    .abs()
+                    .abs();
         });
     }
 }

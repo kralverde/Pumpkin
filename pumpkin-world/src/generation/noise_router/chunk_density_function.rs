@@ -69,11 +69,11 @@ pub struct ChunkNoiseFunctionBuilderOptions {
     horizontal_cell_count: usize,
 
     // The biome coords of this chunk
-    start_biome_x: i32,
-    start_biome_z: i32,
+    pub start_biome_x: i32,
+    pub start_biome_z: i32,
 
     // Number of biome regions per chunk per axis
-    horizontal_biome_end: usize,
+    pub horizontal_biome_end: usize,
 }
 
 impl ChunkNoiseFunctionBuilderOptions {
@@ -101,19 +101,19 @@ impl ChunkNoiseFunctionBuilderOptions {
 // These are chunk specific function components that are picked based on the wrapper type
 pub struct DensityInterpolator {
     // What we are interpolating
-    input_index: usize,
+    pub(crate) input_index: usize,
 
     // y-z plane buffers to be interpolated together, each of these values is that of the cell, not
     // the block
-    start_buffer: Box<[f64]>,
-    end_buffer: Box<[f64]>,
+    pub(crate) start_buffer: Box<[f64]>,
+    pub(crate) end_buffer: Box<[f64]>,
 
     first_pass: [f64; 8],
     second_pass: [f64; 4],
     third_pass: [f64; 2],
     result: f64,
 
-    vertical_cell_count: usize,
+    pub(crate) vertical_cell_count: usize,
     min_value: f64,
     max_value: f64,
 }
@@ -163,11 +163,15 @@ impl DensityInterpolator {
     }
 
     #[inline]
-    fn yz_to_buf_index(&self, cell_y_position: usize, cell_z_position: usize) -> usize {
+    pub(crate) fn yz_to_buf_index(&self, cell_y_position: usize, cell_z_position: usize) -> usize {
         cell_z_position * (self.vertical_cell_count + 1) + cell_y_position
     }
 
-    fn on_sampled_cell_corners(&mut self, cell_y_position: usize, cell_z_position: usize) {
+    pub(crate) fn on_sampled_cell_corners(
+        &mut self,
+        cell_y_position: usize,
+        cell_z_position: usize,
+    ) {
         self.first_pass[0] =
             self.start_buffer[self.yz_to_buf_index(cell_y_position, cell_z_position)];
         self.first_pass[1] =
@@ -186,7 +190,7 @@ impl DensityInterpolator {
             self.end_buffer[self.yz_to_buf_index(cell_y_position + 1, cell_z_position + 1)];
     }
 
-    fn interpolate_y(&mut self, delta: f64) {
+    pub(crate) fn interpolate_y(&mut self, delta: f64) {
         self.second_pass[0] = lerp(delta, self.first_pass[0], self.first_pass[2]);
         self.second_pass[2] = lerp(delta, self.first_pass[4], self.first_pass[6]);
         self.second_pass[1] = lerp(delta, self.first_pass[1], self.first_pass[3]);
@@ -194,18 +198,18 @@ impl DensityInterpolator {
     }
 
     #[inline]
-    fn interpolate_x(&mut self, delta: f64) {
+    pub(crate) fn interpolate_x(&mut self, delta: f64) {
         self.third_pass[0] = lerp(delta, self.second_pass[0], self.second_pass[2]);
         self.third_pass[1] = lerp(delta, self.second_pass[1], self.second_pass[3]);
     }
 
     #[inline]
-    fn interpolate_z(&mut self, delta: f64) {
+    pub(crate) fn interpolate_z(&mut self, delta: f64) {
         self.result = lerp(delta, self.third_pass[0], self.third_pass[1]);
     }
 
     #[inline]
-    fn swap_buffers(&mut self) {
+    pub(crate) fn swap_buffers(&mut self) {
         #[cfg(debug_assertions)]
         let test = self.start_buffer[0];
         mem::swap(&mut self.start_buffer, &mut self.end_buffer);
@@ -282,7 +286,7 @@ impl MutableChunkNoiseFunctionComponentImpl for DensityInterpolator {
 pub struct FlatCache {
     input_index: usize,
 
-    cache: Box<[f64]>,
+    pub(crate) cache: Box<[f64]>,
     start_biome_x: i32,
     start_biome_z: i32,
     horizontal_biome_end: usize,
@@ -360,7 +364,7 @@ impl FlatCache {
     }
 
     #[inline]
-    fn xz_to_index_const(&self, biome_x_position: usize, biome_z_position: usize) -> usize {
+    pub fn xz_to_index_const(&self, biome_x_position: usize, biome_z_position: usize) -> usize {
         biome_x_position * (self.horizontal_biome_end + 1) + biome_z_position
     }
 }
@@ -531,7 +535,7 @@ impl CacheOnce {
 }
 
 pub struct CellCache {
-    input_index: usize,
+    pub(crate) input_index: usize,
     pub(crate) cache: Box<[f64]>,
 
     min_value: f64,

@@ -90,7 +90,7 @@ pub struct WorldAquiferSampler {
     packed_positions: Box<[i64]>,
 }
 
-impl<'a> WorldAquiferSampler {
+impl WorldAquiferSampler {
     const CHUNK_POS_OFFSETS: [Vector2<i8>; 13] = [
         Vector2::new(0, 0),
         Vector2::new(-2, -1),
@@ -276,6 +276,7 @@ impl<'a> WorldAquiferSampler {
             let z = block_z + section_coords::section_to_block(offset.z as i32);
 
             let n = height_estimator.estimate_surface_height(router, sample_options, x, z);
+            println!("{} {}", x, z);
             let o = n + 8;
             let bl2 = offset.x == 0 && offset.z == 0;
 
@@ -338,10 +339,8 @@ impl<'a> WorldAquiferSampler {
     ) -> i32 {
         let pos = UnblendedNoisePos::new(block_x, block_y, block_z);
 
-        let erosion_sample = router.erosion(&pos, sample_options);
-        let depth_sample = router.depth(&pos, sample_options);
-
-        let is_deep_dark = erosion_sample < -0.225f32 as f64 && depth_sample > 0.9f32 as f64;
+        let is_deep_dark = router.erosion(&pos, sample_options) < -0.225f32 as f64
+            && router.depth(&pos, sample_options) > 0.9f32 as f64;
 
         let (d, e) = if is_deep_dark {
             (-1f64, -1f64)
@@ -353,9 +352,9 @@ impl<'a> WorldAquiferSampler {
                 0f64
             };
 
-            let fluid_level_floodedness =
-                router.fluid_level_floodedness_noise(&pos, sample_options);
-            let g = fluid_level_floodedness.clamp(-1f64, 1f64);
+            let g = router
+                .fluid_level_floodedness_noise(&pos, sample_options)
+                .clamp(-1f64, 1f64);
             let h = map(f, 1f64, 0f64, -0.3f64, 0.8f64);
             let k = map(f, 1f64, 0f64, -0.8f64, 0.4f64);
 
@@ -402,6 +401,7 @@ impl<'a> WorldAquiferSampler {
         surface_height_estimate.min(local_height)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn get_fluid_block_state(
         &mut self,
         block_x: i32,
