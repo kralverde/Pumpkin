@@ -554,7 +554,7 @@ impl GlobalProtoNoiseRouter {
             // Invariant: the current component is at the top of the stack
             let component_index = stack.len();
             stack.push(component);
-            //map.insert(ast_hash, component_index);
+            map.insert(ast_hash, component_index);
             component_index
         })
     }
