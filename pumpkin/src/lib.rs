@@ -50,12 +50,12 @@ pub static LOGGER_IMPL: LazyLock<Option<(Box<dyn Log>, LevelFilter)>> = LazyLock
         Some((
             Box::new(
                 logger
-                    .with_level(LevelFilter::Info)
+                    .with_level(LevelFilter::Debug)
                     .with_colors(ADVANCED_CONFIG.logging.color)
                     .with_threads(ADVANCED_CONFIG.logging.threads)
                     .env(),
             ),
-            LevelFilter::Info,
+            LevelFilter::Debug,
         ))
     } else {
         None

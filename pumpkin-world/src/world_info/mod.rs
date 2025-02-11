@@ -21,10 +21,7 @@ pub(crate) trait WorldInfoWriter: Sync + Send {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
-#[serde(default)]
 pub struct LevelData {
-    // true if cheats are enabled.
-    pub allow_commands: bool,
     // An integer displaying the data version.
     pub data_version: i32,
     // The current difficulty setting.
@@ -58,7 +55,7 @@ pub struct WorldGenSettings {
 }
 
 fn get_or_create_seed() -> Seed {
-    // TODO: if there is a seed in the config (!= 0) use it. Otherwise make a random one
+    // TODO: if there is a seed in the config (!= "") use it. Otherwise make a random one
     Seed::from(BASIC_CONFIG.seed.as_str())
 }
 
@@ -78,7 +75,9 @@ pub struct WorldVersion {
     // An integer displaying the data version.
     pub id: i32,
     // Whether the version is a snapshot or not.
-    pub snapshot: bool,
+    // TODO: fast_nbt doesnt support bools
+    // pub snapshot: bool,
+
     // Developing series. In 1.18 experimental snapshots, it was set to "ccpreview". In others, set to "main".
     pub series: String,
 }
@@ -88,7 +87,6 @@ impl Default for WorldVersion {
         Self {
             name: "1.24.4".to_string(),
             id: -1,
-            snapshot: false,
             series: "main".to_string(),
         }
     }
@@ -97,7 +95,6 @@ impl Default for WorldVersion {
 impl Default for LevelData {
     fn default() -> Self {
         Self {
-            allow_commands: true,
             // TODO
             data_version: -1,
             difficulty: Difficulty::Normal as u8,
