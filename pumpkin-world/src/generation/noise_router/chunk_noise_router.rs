@@ -13,8 +13,8 @@ use super::{
         StaticIndependentChunkNoiseFunctionComponentImpl, UnblendedNoisePos,
     },
     proto_noise_router::{
-        DependentProtoNoiseFunctionComponent, IndependentProtoNoiseFunctionComponent,
-        ProtoChunkNoiseRouter, ProtoNoiseFunctionComponent,
+        DependentProtoNoiseFunctionComponent, GlobalProtoNoiseRouter,
+        IndependentProtoNoiseFunctionComponent, ProtoNoiseFunctionComponent,
     },
 };
 
@@ -238,14 +238,36 @@ impl ChunkNoiseRouter<'_> {
 
 impl<'a> ChunkNoiseRouter<'a> {
     pub fn generate(
-        base: &'a ProtoChunkNoiseRouter,
+        base: &'a GlobalProtoNoiseRouter,
         build_options: &ChunkNoiseFunctionBuilderOptions,
     ) -> Self {
         let mut component_stack =
             Vec::<ChunkNoiseFunctionComponent>::with_capacity(base.component_stack.len());
         let mut cell_cache_indices = Vec::new();
         let mut interpolator_indices = Vec::new();
-        for (component_index, base_component) in base.component_stack.iter().enumerate() {
+
+        // NOTE: Only iter what we need; we dont care about the MultiNoiseSampler functions that are
+        // pushed after due to our invariant
+        let max_index = [
+            base.barrier_noise,
+            base.fluid_level_floodedness_noise,
+            base.fluid_level_spread_noise,
+            base.lava_noise,
+            base.erosion,
+            base.depth,
+            base.initial_density_without_jaggedness,
+            base.final_density,
+            base.vein_toggle,
+            base.vein_gap,
+            base.vein_ridged,
+        ]
+        .into_iter()
+        .max()
+        .unwrap();
+
+        for (component_index, base_component) in
+            base.component_stack[..=max_index].iter().enumerate()
+        {
             let chunk_component = match base_component {
                 ProtoNoiseFunctionComponent::Dependent(dependent) => {
                     ChunkNoiseFunctionComponent::Dependent(dependent)
@@ -263,7 +285,7 @@ impl<'a> ChunkNoiseRouter<'a> {
                     })
                 }
                 ProtoNoiseFunctionComponent::Wrapper(wrapper) => {
-                    // Due to our previous invariant with the proto-function, it is guaranteed
+                    //NOTE: Due to our previous invariant with the proto-function, it is guaranteed
                     // that the wrapped function is already on the stack
                     let min_value = component_stack[wrapper.input_index].min();
                     let max_value = component_stack[wrapper.input_index].max();
@@ -318,7 +340,7 @@ impl<'a> ChunkNoiseRouter<'a> {
                             );
                             let sample_options = ChunkNoiseFunctionSampleOptions::new(
                                 false,
-                                SampleAction::SkipWrappers,
+                                SampleAction::SkipCellCaches,
                                 0,
                                 0,
                                 0,
@@ -342,7 +364,7 @@ impl<'a> ChunkNoiseRouter<'a> {
                                         block_z_position,
                                     );
 
-                                    // Due to our stack invariant, what is on the stack is a
+                                    //NOTE: Due to our stack invariant, what is on the stack is a
                                     // valid density function
                                     let sample = ChunkNoiseFunctionComponent::sample_from_stack(
                                         &mut component_stack[..=wrapper.input_index],
