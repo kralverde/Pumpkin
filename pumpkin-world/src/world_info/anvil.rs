@@ -7,7 +7,10 @@ use std::{
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
 
-use crate::level::LevelFolder;
+use crate::{
+    level::LevelFolder,
+    world_info::{MAXIMUM_SUPPORTED_WORLD_DATA_VERSION, MINIMUM_SUPPORTED_WORLD_DATA_VERSION},
+};
 
 use super::{LevelData, WorldInfoError, WorldInfoReader, WorldInfoWriter};
 
@@ -15,6 +18,35 @@ pub const LEVEL_DAT_FILE_NAME: &str = "level.dat";
 pub const LEVEL_DAT_BACKUP_FILE_NAME: &str = "level.dat_old";
 
 pub struct AnvilLevelInfo;
+
+fn check_file_data_version(raw_nbt: &[u8]) -> Result<(), WorldInfoError> {
+    // Define a struct that only has the data version
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct LevelData {
+        data_version: u32,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct LevelDat {
+        data: LevelData,
+    }
+
+    let info: LevelDat = fastnbt::from_bytes(raw_nbt)
+        .map_err(|e|{
+            log::error!("The world.dat file does not have a data version! This means it is either corrupt or very old (read unsupported)");
+            WorldInfoError::DeserializationError(e.to_string())})?;
+
+    let data_version = info.data.data_version;
+
+    if !(MINIMUM_SUPPORTED_WORLD_DATA_VERSION..=MAXIMUM_SUPPORTED_WORLD_DATA_VERSION)
+        .contains(&data_version)
+    {
+        Err(WorldInfoError::UnsupportedVersion(data_version))
+    } else {
+        Ok(())
+    }
+}
 
 impl WorldInfoReader for AnvilLevelInfo {
     fn read_world_info(&self, level_folder: &LevelFolder) -> Result<LevelData, WorldInfoError> {
@@ -25,6 +57,8 @@ impl WorldInfoReader for AnvilLevelInfo {
         let mut decoder = GzDecoder::new(world_info_file);
         let mut decompressed_data = Vec::new();
         decoder.read_to_end(&mut decompressed_data)?;
+
+        check_file_data_version(&decompressed_data)?;
 
         let info = fastnbt::from_bytes::<LevelDat>(&decompressed_data)
             .map_err(|e| WorldInfoError::DeserializationError(e.to_string()))?;
@@ -81,7 +115,7 @@ pub struct LevelDat {
 
 #[cfg(test)]
 mod test {
-    use std::{fs, path::PathBuf};
+    use temp_dir::TempDir;
 
     use crate::{level::LevelFolder, world_info::LevelData};
 
@@ -94,21 +128,16 @@ mod test {
         let mut data = LevelData::default();
         data.world_gen_settings.seed = seed;
 
+        let temp_dir = TempDir::new().unwrap();
         let level_folder = LevelFolder {
-            root_folder: PathBuf::from("./tmp_Info"),
-            region_folder: PathBuf::from("./tmp_Info/region"),
+            root_folder: temp_dir.path().to_path_buf(),
+            region_folder: temp_dir.path().join("region"),
         };
-        if fs::exists(&level_folder.root_folder).unwrap() {
-            fs::remove_dir_all(&level_folder.root_folder).expect("Could not delete directory");
-        }
-        fs::create_dir_all(&level_folder.region_folder).expect("Could not create directory");
 
         AnvilLevelInfo
             .write_world_info(data, &level_folder)
             .unwrap();
         let data = AnvilLevelInfo.read_world_info(&level_folder).unwrap();
-
-        fs::remove_dir_all(&level_folder.root_folder).expect("Could not delete directory");
 
         assert_eq!(data.world_gen_settings.seed, seed);
     }

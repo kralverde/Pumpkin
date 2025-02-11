@@ -23,7 +23,7 @@ use crate::{
     lock::{anvil::AnvilLevelLocker, LevelLocker},
     world_info::{
         anvil::{AnvilLevelInfo, LEVEL_DAT_BACKUP_FILE_NAME, LEVEL_DAT_FILE_NAME},
-        LevelData, WorldInfoReader, WorldInfoWriter,
+        LevelData, WorldInfoError, WorldInfoReader, WorldInfoWriter,
     },
 };
 
@@ -76,9 +76,15 @@ impl Level {
         // TODO: Load info correctly based on world format type
         let level_info = AnvilLevelInfo.read_world_info(&level_folder);
         if let Err(error) = &level_info {
-            log::warn!("Failed to load world info!");
-            log::warn!("{:?}", error);
-            log::warn!("Using default world options!");
+            match error {
+                // If it doesn't exist, just make a new one
+                WorldInfoError::InfoNotFound => (),
+                _ => {
+                    log::error!("Failed to load world info!");
+                    log::error!("{}", error);
+                    panic!("Unsupported world data! See the logs for more info.");
+                }
+            }
         } else {
             let dat_path = level_folder.root_folder.join(LEVEL_DAT_FILE_NAME);
             if dat_path.exists() {
