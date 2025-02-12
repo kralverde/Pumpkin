@@ -126,13 +126,13 @@ impl<'a> MultiNoiseSampler<'a> {
                     let max_value = component_stack[wrapper.input_index].max();
 
                     match wrapper.wrapper_type {
-                        WrapperType::Cache2D => ChunkNoiseFunctionComponent::Chunk(
+                        WrapperType::Cache2D => ChunkNoiseFunctionComponent::Chunk(Box::new(
                             ChunkSpecificNoiseFunctionComponent::Cache2D(Cache2D::new(
                                 wrapper.input_index,
                                 min_value,
                                 max_value,
                             )),
-                        ),
+                        )),
                         WrapperType::CacheFlat => {
                             let mut flat_cache = FlatCache::new(
                                 wrapper.input_index,
@@ -182,9 +182,9 @@ impl<'a> MultiNoiseSampler<'a> {
                                 }
                             }
 
-                            ChunkNoiseFunctionComponent::Chunk(
+                            ChunkNoiseFunctionComponent::Chunk(Box::new(
                                 ChunkSpecificNoiseFunctionComponent::FlatCache(flat_cache),
-                            )
+                            ))
                         }
                         _ => {
                             panic!("These density functions should not be a part of the MultiNoiseSampler! We probably need to re-write code");
