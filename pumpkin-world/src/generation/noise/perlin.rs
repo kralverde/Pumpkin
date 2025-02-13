@@ -170,7 +170,7 @@ impl OctavePerlinNoiseSampler {
 
     #[inline]
     pub fn maintain_precision(value: f64) -> f64 {
-        value - (value / 3.3554432E7f64 + 0.5f64).floor() * 3.3554432E7f64
+        multiply_add(-(value / 3.3554432E7 + 0.5).floor(), 3.3554432E7, value)
     }
 
     pub fn calculate_amplitudes(octaves: &[i32]) -> (i32, Vec<f64>) {
@@ -273,22 +273,26 @@ impl OctavePerlinNoiseSampler {
     pub fn sample(&self, x: f64, y: f64, z: f64) -> f64 {
         let mut d = 0f64;
 
-        let num_octaves = self.octave_samplers.len();
-        for i in 0..num_octaves {
-            if let Some(sampler) = &self.octave_samplers[i] {
-                let lacunarity = self.lacunarities[i];
-                let amplitude = self.amplitudes[i];
-                let persistence = self.persistences[i];
-
+        for (((octave_sampler, lacunarity), amplitude), persistence) in self
+            .octave_samplers
+            .iter()
+            .zip(self.lacunarities.iter())
+            .zip(self.amplitudes.iter())
+            .zip(self.persistences.iter())
+        {
+            if let Some(sampler) = octave_sampler {
+                let scaled_x = x * lacunarity;
+                let scaled_y = y * lacunarity;
+                let scaled_z = z * lacunarity;
                 let g = sampler.sample_no_fade(
-                    Self::maintain_precision(x * lacunarity),
-                    Self::maintain_precision(y * lacunarity),
-                    Self::maintain_precision(z * lacunarity),
+                    Self::maintain_precision(scaled_x),
+                    Self::maintain_precision(scaled_y),
+                    Self::maintain_precision(scaled_z),
                     0f64,
                     0f64,
                 );
 
-                d = multiply_add(amplitude * g, persistence, d);
+                d = multiply_add(amplitude * g, *persistence, d);
             }
         }
 

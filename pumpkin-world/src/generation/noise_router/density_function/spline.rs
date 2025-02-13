@@ -1,5 +1,6 @@
 use crate::{
     generation::{
+        multiply_add,
         noise::lerp,
         noise_router::{
             chunk_density_function::ChunkNoiseFunctionSampleOptions,
@@ -54,7 +55,11 @@ impl SplinePoint {
         if self.derivative == 0f32 {
             last_known_sample
         } else {
-            self.derivative * (sample_location - self.location) + last_known_sample
+            multiply_add(
+                self.derivative,
+                sample_location - self.location,
+                last_known_sample,
+            )
         }
     }
 }
@@ -141,16 +146,22 @@ impl Spline {
                     // Use linear interpolation (-ish cuz of derivatives) to derivate a point between two points
                     let x_scale = (location - lower_point.location)
                         / (upper_point.location - lower_point.location);
-                    let extrapolated_lower_value = lower_point.derivative
-                        * (upper_point.location - lower_point.location)
-                        - (upper_value - lower_value);
-                    let extrapolated_upper_value = -upper_point.derivative
-                        * (upper_point.location - lower_point.location)
-                        + (upper_value - lower_value);
+                    let extrapolated_lower_value = multiply_add(
+                        lower_point.derivative,
+                        upper_point.location - lower_point.location,
+                        -(upper_value - lower_value),
+                    );
+                    let extrapolated_upper_value = multiply_add(
+                        -upper_point.derivative,
+                        upper_point.location - lower_point.location,
+                        upper_value - lower_value,
+                    );
 
-                    (x_scale * (1f32 - x_scale))
-                        * lerp(x_scale, extrapolated_lower_value, extrapolated_upper_value)
-                        + lerp(x_scale, lower_value, upper_value)
+                    multiply_add(
+                        x_scale * (1f32 - x_scale),
+                        lerp(x_scale, extrapolated_lower_value, extrapolated_upper_value),
+                        lerp(x_scale, lower_value, upper_value),
+                    )
                 }
             }
             Range::Below => {
