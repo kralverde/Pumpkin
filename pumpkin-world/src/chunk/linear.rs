@@ -10,7 +10,7 @@ use pumpkin_util::math::vector2::Vector2;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
 
-use super::anvil::{AnvilChunkFormat, CHUNK_COUNT, SUBREGION_BITS};
+use super::anvil::{chunk_to_bytes, CHUNK_COUNT, SUBREGION_BITS};
 use super::{ChunkData, ChunkReadingError, ChunkWritingError};
 
 /// The signature of the linear file format
@@ -313,8 +313,7 @@ impl ChunkSerializer for LinearFile {
         chunks.par_sort_unstable_by_key(|(index, _)| *index);
 
         for (chunk_index, chunk_data) in chunks {
-            let chunk_raw = AnvilChunkFormat {} //We use Anvil format to serialize the chunk
-                .to_bytes(chunk_data)
+            let chunk_raw = chunk_to_bytes(chunk_data)
                 .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
             let header = &mut self.chunks_headers[chunk_index];
@@ -343,13 +342,13 @@ impl ChunkSerializer for LinearFile {
 
         let mut fetched_chunks = Vec::with_capacity(chunks.len());
         for (chunk_index, at) in chunks {
-            let chunk = self.chunks_data[chunk_index].as_ref().map_or_else(
-                || LoadedData::Missing(at),
-                |chunk_bytes| match ChunkData::from_bytes(chunk_bytes.as_slice(), at) {
+            let chunk = match &self.chunks_data[chunk_index] {
+                None => LoadedData::Missing(at),
+                Some(chunk_bytes) => match ChunkData::from_bytes(chunk_bytes.as_slice(), at) {
                     Ok(chunk) => LoadedData::Loaded(chunk),
                     Err(err) => LoadedData::Error((at, ChunkReadingError::ParsingError(err))),
                 },
-            );
+            };
 
             fetched_chunks.push(chunk);
         }

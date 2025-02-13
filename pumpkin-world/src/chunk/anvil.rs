@@ -54,34 +54,19 @@ pub enum Compression {
     Custom = 127,
 }
 
-impl From<pumpkin_config::chunk::Compression> for Compression {
-    fn from(value: pumpkin_config::chunk::Compression) -> Self {
-        // :c
-        match value {
-            pumpkin_config::chunk::Compression::GZip => Self::GZip,
-            pumpkin_config::chunk::Compression::ZLib => Self::ZLib,
-            pumpkin_config::chunk::Compression::LZ4 => Self::LZ4,
-            pumpkin_config::chunk::Compression::Custom => Self::Custom,
-        }
-    }
+#[derive(Default)]
+pub struct AnvilChunkData {
+    length: u32,
+    compression: Option<Compression>,
+    compressed_data: Vec<u8>,
+}
+
+pub struct AnvilChunkFile {
+    timestamp_table: [u32; CHUNK_COUNT],
+    chunks_data: [Option<AnvilChunkData>; CHUNK_COUNT],
 }
 
 impl Compression {
-    /// Returns Ok when a compression is found otherwise an Err
-    #[allow(clippy::result_unit_err)]
-    pub fn from_byte(byte: u8) -> Result<Option<Self>, ()> {
-        match byte {
-            1 => Ok(Some(Self::GZip)),
-            2 => Ok(Some(Self::ZLib)),
-            // Uncompressed (since a version before 1.15.1)
-            3 => Ok(None),
-            4 => Ok(Some(Self::LZ4)),
-            127 => Ok(Some(Self::Custom)),
-            // Unknown format
-            _ => Err(()),
-        }
-    }
-
     fn decompress_data(&self, compressed_data: &[u8]) -> Result<Vec<u8>, CompressionError> {
         match self {
             Compression::GZip => {
@@ -112,6 +97,7 @@ impl Compression {
             Compression::Custom => todo!(),
         }
     }
+
     fn compress_data(
         &self,
         uncompressed_data: &[u8],
@@ -158,98 +144,33 @@ impl Compression {
             Compression::Custom => todo!(),
         }
     }
-}
 
-impl AnvilChunkFormat {
-    pub fn to_bytes(&self, chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializingError> {
-        let mut sections = Vec::new();
-
-        for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
-            // get unique blocks
-            let unique_blocks: HashSet<_> = blocks.iter().collect();
-
-            let palette: IndexMap<_, _> = unique_blocks
-                .into_iter()
-                .enumerate()
-                .map(|(i, block)| {
-                    let name = BLOCK_ID_TO_REGISTRY_ID.get(block).unwrap().as_str();
-                    (block, (name, i))
-                })
-                .collect();
-
-            // Determine the number of bits needed to represent the largest index in the palette
-            let block_bit_size = if palette.len() < 16 {
-                4
-            } else {
-                ceil_log2(palette.len() as u32).max(4)
-            };
-
-            let mut section_longs = Vec::new();
-            let mut current_pack_long: i64 = 0;
-            let mut bits_used_in_pack: u32 = 0;
-
-            // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
-            // if palette.len() > 1 {}
-            // TODO: Update to write empty data. Rn or read does not handle this elegantly
-            for block in blocks.iter() {
-                // Push if next bit does not fit
-                if bits_used_in_pack + block_bit_size as u32 > 64 {
-                    section_longs.push(current_pack_long);
-                    current_pack_long = 0;
-                    bits_used_in_pack = 0;
-                }
-                let index = palette.get(block).expect("Just added all unique").1;
-                current_pack_long |= (index as i64) << bits_used_in_pack;
-                bits_used_in_pack += block_bit_size as u32;
-
-                assert!(bits_used_in_pack <= 64);
-
-                // If the current 64-bit integer is full, push it to the section_longs and start a new one
-                if bits_used_in_pack >= 64 {
-                    section_longs.push(current_pack_long);
-                    current_pack_long = 0;
-                    bits_used_in_pack = 0;
-                }
-            }
-
-            // Push the last 64-bit integer if it contains any data
-            if bits_used_in_pack > 0 {
-                section_longs.push(current_pack_long);
-            }
-
-            sections.push(ChunkSection {
-                y: i as i8 - 4,
-                block_states: Some(ChunkSectionBlockStates {
-                    data: Some(LongArray::new(section_longs)),
-                    palette: palette
-                        .into_iter()
-                        .map(|entry| PaletteEntry {
-                            name: entry.1 .0.to_owned(),
-                            properties: None,
-                        })
-                        .collect(),
-                }),
-            });
+    /// Returns Ok when a compression is found otherwise an Err
+    #[allow(clippy::result_unit_err)]
+    pub fn from_byte(byte: u8) -> Result<Option<Self>, ()> {
+        match byte {
+            1 => Ok(Some(Self::GZip)),
+            2 => Ok(Some(Self::ZLib)),
+            // Uncompressed (since a version before 1.15.1)
+            3 => Ok(None),
+            4 => Ok(Some(Self::LZ4)),
+            127 => Ok(Some(Self::Custom)),
+            // Unknown format
+            _ => Err(()),
         }
-
-        let nbt = ChunkNbt {
-            data_version: WORLD_DATA_VERSION,
-            x_pos: chunk_data.position.x,
-            z_pos: chunk_data.position.z,
-            status: super::ChunkStatus::Full,
-            heightmaps: chunk_data.heightmap.clone(),
-            sections,
-        };
-
-        fastnbt::to_bytes(&nbt).map_err(ChunkSerializingError::ErrorSerializingChunk)
     }
 }
 
-#[derive(Default)]
-pub struct AnvilChunkData {
-    length: u32,
-    compression: Option<Compression>,
-    compressed_data: Vec<u8>,
+impl From<pumpkin_config::chunk::Compression> for Compression {
+    fn from(value: pumpkin_config::chunk::Compression) -> Self {
+        // :c
+        match value {
+            pumpkin_config::chunk::Compression::GZip => Self::GZip,
+            pumpkin_config::chunk::Compression::ZLib => Self::ZLib,
+            pumpkin_config::chunk::Compression::LZ4 => Self::LZ4,
+            pumpkin_config::chunk::Compression::Custom => Self::Custom,
+        }
+    }
 }
 
 impl AnvilChunkData {
@@ -300,8 +221,7 @@ impl AnvilChunkData {
     }
 
     fn from_chunk(chunk: &ChunkData) -> Result<Self, ChunkWritingError> {
-        let raw_bytes = AnvilChunkFormat {}
-            .to_bytes(chunk)
+        let raw_bytes = chunk_to_bytes(chunk)
             .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
         let compression: Compression = ADVANCED_CONFIG.chunk.compression.algorithm.clone().into();
@@ -316,19 +236,6 @@ impl AnvilChunkData {
         })
     }
 }
-pub struct AnvilChunkFile {
-    timestamp_table: [u32; CHUNK_COUNT],
-    chunks_data: [Option<AnvilChunkData>; CHUNK_COUNT],
-}
-
-impl Default for AnvilChunkFile {
-    fn default() -> Self {
-        Self {
-            timestamp_table: [0; CHUNK_COUNT],
-            chunks_data: [const { None }; CHUNK_COUNT],
-        }
-    }
-}
 
 impl AnvilChunkFile {
     pub const fn get_region_coords(at: Vector2<i32>) -> (i32, i32) {
@@ -339,6 +246,15 @@ impl AnvilChunkFile {
         let local_x = (pos.x & 31) as usize;
         let local_z = (pos.z & 31) as usize;
         (local_z << 5) + local_x
+    }
+}
+
+impl Default for AnvilChunkFile {
+    fn default() -> Self {
+        Self {
+            timestamp_table: [0; CHUNK_COUNT],
+            chunks_data: [const { None }; CHUNK_COUNT],
+        }
     }
 }
 
@@ -460,6 +376,89 @@ impl ChunkSerializer for AnvilChunkFile {
 
         fetched_chunks
     }
+}
+
+pub fn chunk_to_bytes(chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializingError> {
+    let mut sections = Vec::new();
+
+    for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
+        // get unique blocks
+        let unique_blocks: HashSet<_> = blocks.iter().collect();
+
+        let palette: IndexMap<_, _> = unique_blocks
+            .into_iter()
+            .enumerate()
+            .map(|(i, block)| {
+                let name = BLOCK_ID_TO_REGISTRY_ID.get(block).unwrap().as_str();
+                (block, (name, i))
+            })
+            .collect();
+
+        // Determine the number of bits needed to represent the largest index in the palette
+        let block_bit_size = if palette.len() < 16 {
+            4
+        } else {
+            ceil_log2(palette.len() as u32).max(4)
+        };
+
+        let mut section_longs = Vec::new();
+        let mut current_pack_long: i64 = 0;
+        let mut bits_used_in_pack: u32 = 0;
+
+        // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
+        // if palette.len() > 1 {}
+        // TODO: Update to write empty data. Rn or read does not handle this elegantly
+        for block in blocks.iter() {
+            // Push if next bit does not fit
+            if bits_used_in_pack + block_bit_size as u32 > 64 {
+                section_longs.push(current_pack_long);
+                current_pack_long = 0;
+                bits_used_in_pack = 0;
+            }
+            let index = palette.get(block).expect("Just added all unique").1;
+            current_pack_long |= (index as i64) << bits_used_in_pack;
+            bits_used_in_pack += block_bit_size as u32;
+
+            assert!(bits_used_in_pack <= 64);
+
+            // If the current 64-bit integer is full, push it to the section_longs and start a new one
+            if bits_used_in_pack >= 64 {
+                section_longs.push(current_pack_long);
+                current_pack_long = 0;
+                bits_used_in_pack = 0;
+            }
+        }
+
+        // Push the last 64-bit integer if it contains any data
+        if bits_used_in_pack > 0 {
+            section_longs.push(current_pack_long);
+        }
+
+        sections.push(ChunkSection {
+            y: i as i8 - 4,
+            block_states: Some(ChunkSectionBlockStates {
+                data: Some(LongArray::new(section_longs)),
+                palette: palette
+                    .into_iter()
+                    .map(|entry| PaletteEntry {
+                        name: entry.1 .0.to_owned(),
+                        properties: None,
+                    })
+                    .collect(),
+            }),
+        });
+    }
+
+    let nbt = ChunkNbt {
+        data_version: WORLD_DATA_VERSION,
+        x_pos: chunk_data.position.x,
+        z_pos: chunk_data.position.z,
+        status: super::ChunkStatus::Full,
+        heightmaps: chunk_data.heightmap.clone(),
+        sections,
+    };
+
+    fastnbt::to_bytes(&nbt).map_err(ChunkSerializingError::ErrorSerializingChunk)
 }
 
 #[cfg(test)]
