@@ -23,7 +23,7 @@ impl NbtCompound {
     {
         let mut compound = NbtCompound::new();
 
-        while reader.is_eof()? {
+        while !reader.is_eof()? {
             let tag_id = reader.get_u8_be()?;
             if tag_id == END_ID {
                 break;

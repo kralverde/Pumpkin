@@ -154,7 +154,10 @@ where
 impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     type Error = Error;
 
-    forward_to_deserialize_any!(i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 seq char str string bytes byte_buf tuple tuple_struct enum ignored_any unit unit_struct option newtype_struct);
+    forward_to_deserialize_any! {
+        u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 char str string unit unit_struct seq tuple tuple_struct
+        ignored_any bytes enum newtype_struct byte_buf option
+    }
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
     where
@@ -169,6 +172,8 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
             BYTE_ARRAY_ID => Some(BYTE_ID),
             _ => None,
         };
+
+        println!("{:?}", list_type);
 
         if let Some(list_type) = list_type {
             let remaining_values = self.input.get_u32_be()?;
@@ -244,7 +249,8 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: Visitor<'de>,
     {
-        let str = get_nbt_string(&mut self.input).map_err(|_| Error::Cesu8DecodingError)?;
+        let str = get_nbt_string(&mut self.input)?;
+        println!("{}", str);
         visitor.visit_string(str)
     }
 
