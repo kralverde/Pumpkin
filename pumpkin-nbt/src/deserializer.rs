@@ -1,5 +1,5 @@
 use crate::*;
-use io::{ErrorKind, Read};
+use io::Read;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize};
 
@@ -11,17 +11,12 @@ pub struct ReadAdaptor<R: Read> {
 }
 
 impl<R: Read> ReadAdaptor<R> {
-    pub fn is_eof(&mut self) -> Result<bool> {
-        let mut buf = [];
-        match self.reader.read_exact(&mut buf) {
-            Ok(()) => Ok(false),
-            Err(e) => match e.kind() {
-                ErrorKind::UnexpectedEof => Ok(true),
-                _ => Err(Error::Incomplete(e)),
-            },
-        }
+    pub fn new(r: R) -> Self {
+        Self { reader: r }
     }
+}
 
+impl<R: Read> ReadAdaptor<R> {
     //TODO: Macroize this
     pub fn get_u8_be(&mut self) -> Result<u8> {
         let mut buf = [0u8];
@@ -132,20 +127,18 @@ impl<R: Read> Deserializer<R> {
 }
 
 /// Deserializes struct using Serde Deserializer from normal NBT
-pub fn from_bytes<'a, T, R>(r: R) -> Result<T>
+pub fn from_bytes<'a, T>(r: impl Read) -> Result<T>
 where
     T: Deserialize<'a>,
-    R: Read,
 {
     let mut deserializer = Deserializer::new(r, true);
     T::deserialize(&mut deserializer)
 }
 
 /// Deserializes struct using Serde Deserializer from normal NBT
-pub fn from_bytes_unnamed<'a, T, R>(r: R) -> Result<T>
+pub fn from_bytes_unnamed<'a, T>(r: impl Read) -> Result<T>
 where
     T: Deserialize<'a>,
-    R: Read,
 {
     let mut deserializer = Deserializer::new(r, false);
     T::deserialize(&mut deserializer)
@@ -173,8 +166,6 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
             _ => None,
         };
 
-        println!("{:?}", list_type);
-
         if let Some(list_type) = list_type {
             let remaining_values = self.input.get_u32_be()?;
             return visitor.visit_seq(ListAccess {
@@ -184,6 +175,8 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
             });
         }
 
+        // TODO: Just skip values for the ignored values so we dont do the work of
+        // parsing/allocating space for the NBT representations
         let result: Result<V::Value> = Ok(
             match NbtTag::deserialize_data(&mut self.input, tag_to_deserialize)? {
                 NbtTag::Byte(value) => visitor.visit_i8::<Error>(value)?,
@@ -193,7 +186,9 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
                 NbtTag::Float(value) => visitor.visit_f32::<Error>(value)?,
                 NbtTag::Double(value) => visitor.visit_f64::<Error>(value)?,
                 NbtTag::String(value) => visitor.visit_string::<Error>(value)?,
-                _ => unreachable!(),
+                // If we get to this point, we dont actually need the data (its omitted from the
+                // struct we're deserializing). Just return None.
+                _ => visitor.visit_none::<Error>()?,
             },
         );
         self.tag_to_deserialize = None;
@@ -207,10 +202,13 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         if self.tag_to_deserialize.unwrap() == BYTE_ID {
             let value = self.input.get_u8_be()?;
             if value != 0 {
-                return visitor.visit_bool(true);
+                visitor.visit_bool(true)
+            } else {
+                visitor.visit_bool(false)
             }
+        } else {
+            Err(Error::UnsupportedType("Non-byte bool".to_string()))
         }
-        visitor.visit_bool(false)
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
@@ -225,7 +223,7 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
 
             if self.is_named {
                 // Consume struct name
-                NbtTag::deserialize(&mut self.input)?;
+                let _ = get_nbt_string(&mut self.input)?;
             }
         }
 
@@ -250,7 +248,6 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         V: Visitor<'de>,
     {
         let str = get_nbt_string(&mut self.input)?;
-        println!("{}", str);
         visitor.visit_string(str)
     }
 

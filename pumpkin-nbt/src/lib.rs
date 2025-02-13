@@ -204,11 +204,14 @@ impl_array!(BytesArray, "byte");
 
 #[cfg(test)]
 mod test {
+    use std::sync::LazyLock;
+
     use flate2::read::GzDecoder;
     use serde::{Deserialize, Serialize};
 
-    use pumpkin_world::world_info::LevelData;
+    use pumpkin_world::world_info::{DataPacks, LevelData, WorldGenSettings, WorldVersion};
 
+    use crate::deserializer::from_bytes;
     use crate::BytesArray;
     use crate::IntArray;
     use crate::LongArray;
@@ -263,20 +266,63 @@ mod test {
         assert_eq!(test, recreated_struct);
     }
 
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct LevelDat {
+        // This tag contains all the level data.
+        #[serde(rename = "Data")]
+        data: LevelData,
+    }
+
+    static LEVEL_DAT: LazyLock<LevelDat> = LazyLock::new(|| LevelDat {
+        data: LevelData {
+            allow_commands: true,
+            border_center_x: 0.0,
+            border_center_z: 0.0,
+            border_damage_per_block: 0.2,
+            border_size: 59_999_968.0,
+            border_safe_zone: 5.0,
+            border_size_lerp_target: 59_999_968.0,
+            border_size_lerp_time: 0,
+            border_warning_blocks: 5.0,
+            border_warning_time: 15.0,
+            clear_weather_time: 0,
+            data_packs: DataPacks {
+                disabled: vec![
+                    "minecart_improvements".to_string(),
+                    "redstone_experiments".to_string(),
+                    "trade_rebalance".to_string(),
+                ],
+                enabled: vec!["vanilla".to_string()],
+            },
+            data_version: 4189,
+            day_time: 1727,
+            difficulty: 2,
+            difficulty_locked: false,
+            world_gen_settings: WorldGenSettings { seed: 1 },
+            last_played: 1733847709327,
+            level_name: "New World".to_string(),
+            spawn_x: 160,
+            spawn_y: 70,
+            spawn_z: 160,
+            spawn_angle: 0.0,
+            nbt_version: 19133,
+            version: WorldVersion {
+                name: "1.21.4".to_string(),
+                id: 4189,
+                snapshot: false,
+                series: "main".to_string(),
+            },
+        },
+    });
+
     #[test]
-    fn test_serialize_deserialize() {
-        #[derive(Serialize, Deserialize)]
-        struct LevelDat {
-            // This tag contains all the level data.
-            #[serde(rename = "Data")]
-            data: LevelData,
-        }
-
+    fn test_serialize_deserialize_level_dat() {
         let raw_compressed_nbt = include_bytes!("../assets/level.dat");
+        assert!(!raw_compressed_nbt.is_empty());
 
-        let mut decoder = GzDecoder::new(&raw_compressed_nbt[..]);
-        let level_dat: LevelDat = from_bytes_unnamed(&mut decoder).unwrap();
+        let decoder = GzDecoder::new(&raw_compressed_nbt[..]);
+        let level_dat: LevelDat = from_bytes(decoder).unwrap();
 
-        assert_eq!(level_dat.data.world_gen_settings.seed, 1);
+        assert_eq!(level_dat, *LEVEL_DAT);
     }
 }

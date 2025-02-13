@@ -2,7 +2,7 @@ use crate::deserializer::ReadAdaptor;
 use crate::tag::NbtTag;
 use crate::{get_nbt_string, Error, Nbt, END_ID};
 use bytes::{BufMut, Bytes, BytesMut};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::vec::IntoIter;
 
 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
@@ -23,8 +23,23 @@ impl NbtCompound {
     {
         let mut compound = NbtCompound::new();
 
-        while !reader.is_eof()? {
-            let tag_id = reader.get_u8_be()?;
+        loop {
+            let tag_id = match reader.get_u8_be() {
+                Ok(id) => id,
+                Err(err) => match err {
+                    Error::Incomplete(err) => match err.kind() {
+                        ErrorKind::UnexpectedEof => {
+                            break;
+                        }
+                        _ => {
+                            return Err(Error::Incomplete(err));
+                        }
+                    },
+                    _ => {
+                        return Err(err);
+                    }
+                },
+            };
             if tag_id == END_ID {
                 break;
             }

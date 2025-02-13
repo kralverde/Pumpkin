@@ -19,10 +19,11 @@ pub(crate) trait WorldInfoWriter: Sync + Send {
     ) -> Result<(), WorldInfoError>;
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "PascalCase")]
 pub struct LevelData {
     // true if cheats are enabled.
+    #[serde(rename = "allowCommands")]
     pub allow_commands: bool,
     // Center of the world border on the X coordinate. Defaults to 0.
     pub border_center_x: f64,
@@ -43,6 +44,7 @@ pub struct LevelData {
     // Defaults to 15.
     pub border_warning_time: f64,
     // The number of ticks until "clear weather" has ended.
+    #[serde(rename = "clearWeatherTime")]
     pub clear_weather_time: i32,
     // TODO: Custom Boss Events
 
@@ -80,13 +82,13 @@ pub struct LevelData {
     // TODO: Implement the rest of the fields
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct WorldGenSettings {
     // the numerical seed of the world
     pub seed: i64,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "PascalCase")]
 pub struct DataPacks {
     // List of disabled data packs.
@@ -108,7 +110,7 @@ impl Default for WorldGenSettings {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "PascalCase")]
 pub struct WorldVersion {
     // The version name as a string, e.g. "15w32b".
