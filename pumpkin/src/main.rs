@@ -104,6 +104,9 @@ async fn main() {
     log::info!("Report Issues on https://github.com/Pumpkin-MC/Pumpkin/issues");
     log::info!("Join our Discord for community support https://discord.com/invite/wT8XjrjKkf");
 
+    #[cfg(target_feature = "fma")]
+    log::info!("Pumpkin is running with fused multiply-add instructions!");
+
     tokio::spawn(async {
         setup_sighandler()
             .await

@@ -1,4 +1,6 @@
 use num_traits::Float;
+
+use super::multiply_add;
 pub mod perlin;
 pub mod simplex;
 
@@ -7,7 +9,7 @@ pub fn lerp<T>(delta: T, start: T, end: T) -> T
 where
     T: Float,
 {
-    start + delta * (end - start)
+    multiply_add(end - start, delta, start)
 }
 
 #[inline]
@@ -162,6 +164,6 @@ const GRADIENTS: [Gradient; 16] = [
 impl Gradient {
     #[inline]
     fn dot(&self, x: f64, y: f64, z: f64) -> f64 {
-        self.x * x + self.y * y + self.z * z
+        multiply_add(self.x, x, multiply_add(self.y, y, self.z * z))
     }
 }

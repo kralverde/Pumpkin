@@ -21,6 +21,7 @@ use implementation::{
     //overworld::biome::plains::PlainsGenerator,
     test::TestGenerator,
 };
+use num_traits::Float;
 use pumpkin_util::random::{xoroshiro128::Xoroshiro, RandomDeriver, RandomImpl};
 pub use seed::Seed;
 
@@ -30,6 +31,21 @@ pub fn get_world_gen(seed: Seed) -> Box<dyn WorldGenerator> {
     // TODO decide which WorldGenerator to pick based on config.
     //Box::new(PlainsGenerator::new(seed))
     Box::new(TestGenerator::new(seed))
+}
+
+// FMA's mul-add has a speed up over seperate multiply and adds, and has more precision.
+// We don't want to `mul_add` on non-FMA cpus because it is a lot slower due to the need for the
+// increased accuracy. We don't care about the acurracy, just the speed up.
+#[inline]
+pub fn multiply_add<T: Float>(base: T, mul: T, add: T) -> T {
+    #[cfg(target_feature = "fma")]
+    {
+        base.mul_add(mul, add)
+    }
+    #[cfg(not(target_feature = "fma"))]
+    {
+        base * mul + add
+    }
 }
 
 #[derive(Getters)]

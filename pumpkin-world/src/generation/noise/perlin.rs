@@ -2,6 +2,8 @@ use num_traits::Pow;
 use pumpkin_data::chunk::DoublePerlinNoiseParameters;
 use pumpkin_util::random::RandomGenerator;
 
+use crate::generation::multiply_add;
+
 use super::{lerp3, GRADIENTS};
 
 #[derive(Clone)]
@@ -85,7 +87,7 @@ impl PerlinNoiseSampler {
 
     #[inline]
     fn perlin_fade(value: f64) -> f64 {
-        value * value * value * (value * (value * 6f64 - 15f64) + 10f64)
+        value * value * value * multiply_add(value, value * 6.0 - 15.0, 10.0)
     }
 
     #[inline]
@@ -286,7 +288,7 @@ impl OctavePerlinNoiseSampler {
                     0f64,
                 );
 
-                d += amplitude * g * persistence;
+                d = multiply_add(amplitude * g, persistence, d);
             }
         }
 
