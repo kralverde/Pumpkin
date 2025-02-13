@@ -5,6 +5,10 @@ use indexmap::IndexMap;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::ceil_log2;
 use pumpkin_util::math::vector2::Vector2;
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 
 use std::{
     collections::HashSet,
@@ -412,25 +416,49 @@ impl ChunkSerializer for AnvilChunkFile {
         Ok(chunk_file)
     }
 
-    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkWritingError> {
-        let chunk_index = Self::get_chunk_index(chunk_data.position);
-        self.chunks_data[chunk_index] = Some(AnvilChunkData::from_chunk(chunk_data)?);
+    fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
+        let mut chunks = chunks_data
+            .par_iter()
+            .map(|chunk| {
+                let chunk_index = Self::get_chunk_index(chunk.position);
+                (chunk_index, chunk)
+            })
+            .collect::<Vec<_>>();
+
+        chunks.par_sort_unstable_by_key(|(index, _)| *index);
+
+        for (chunk_index, chunk_data) in chunks {
+            self.chunks_data[chunk_index] = Some(AnvilChunkData::from_chunk(chunk_data)?);
+        }
 
         Ok(())
     }
 
-    fn get_chunk_data(
+    fn get_chunks_data(
         &self,
-        chunk: Vector2<i32>,
-    ) -> Result<crate::chunks_io::LoadedData<Self::Data>, ChunkReadingError> {
-        let chunk_index = Self::get_chunk_index(chunk);
+        chunks: &[Vector2<i32>],
+    ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
+        let mut chunks = chunks
+            .par_iter()
+            .map(|chunk| (Self::get_chunk_index(*chunk), *chunk))
+            .collect::<Vec<_>>();
 
-        let chunk_data = &self.chunks_data[chunk_index];
+        chunks.par_sort_unstable_by_key(|(index, _)| *index);
 
-        match chunk_data {
-            Some(chunk_data) => Ok(LoadedData::Loaded(chunk_data.to_chunk(chunk)?)),
-            None => Ok(LoadedData::Missing(chunk)),
+        let mut fetched_chunks = Vec::with_capacity(chunks.len());
+        for (chunk_index, at) in chunks {
+            let chunk = self.chunks_data[chunk_index].as_ref().map_or_else(
+                || LoadedData::Missing(at),
+                |chunk_data| match chunk_data.to_chunk(at) {
+                    Ok(chunk) => LoadedData::Loaded(chunk),
+                    Err(err) => LoadedData::Error((at, err)),
+                },
+            );
+
+            fetched_chunks.push(chunk);
         }
+
+        fetched_chunks
     }
 }
 
@@ -449,16 +477,14 @@ mod tests {
     fn not_existing() {
         let region_path = PathBuf::from("not_existing");
         let chunk_saver = ChunkFileManager::<AnvilChunkFile>::default();
-        let result = chunk_saver.load_chunks(
+        let chunks = chunk_saver.load_chunks(
             &LevelFolder {
                 root_folder: PathBuf::from(""),
                 region_folder: region_path,
             },
             &[Vector2::new(0, 0)],
         );
-        assert!(
-            matches!(result, Ok(chunks) if chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)))
-        );
+        assert!(chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)));
     }
 
     #[test]
@@ -491,7 +517,7 @@ mod tests {
                     &level_folder,
                     &chunks
                         .iter()
-                        .map(|(at, chunk)| (*at, chunk))
+                        .map(|(at, chunk)| (*at, chunk.clone()))
                         .collect::<Vec<_>>(),
                 )
                 .expect("Failed to write chunk");
@@ -501,11 +527,13 @@ mod tests {
                     &level_folder,
                     &chunks.iter().map(|(at, _)| *at).collect::<Vec<_>>(),
                 )
-                .expect("Could not read chunk")
                 .into_iter()
                 .filter_map(|chunk| match chunk {
                     LoadedData::Loaded(chunk) => Some(chunk),
                     LoadedData::Missing(_) => None,
+                    LoadedData::Error((position, error)) => {
+                        panic!("Error reading chunk at {:?} | Error: {:?}", position, error)
+                    }
                 })
                 .collect::<Vec<_>>();
 

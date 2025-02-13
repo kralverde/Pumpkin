@@ -1,7 +1,7 @@
 use std::{ops::Deref, path::PathBuf, sync::Arc};
 
 use dashmap::{DashMap, Entry};
-use log::info;
+use log::{info, trace, warn};
 use num_traits::Zero;
 use pumpkin_config::{chunk::ChunkFormat, ADVANCED_CONFIG};
 use pumpkin_util::math::vector2::Vector2;
@@ -173,25 +173,46 @@ impl Level {
         }
     }
 
-    pub async fn clean_chunks(&self, chunks: &[Vector2<i32>]) {
-        let chunks_to_clean = chunks
-            .par_iter()
-            .filter(|chunk| {
-                self.chunk_watchers
-                    .get(chunk)
-                    .is_none_or(|watcher_count| watcher_count.is_zero())
-            })
-            .filter_map(|chunk| self.loaded_chunks.remove(chunk))
-            .collect::<Vec<_>>();
+    pub async fn clean_chunks(self: &Arc<Self>, chunks: &[Vector2<i32>]) {
+        let mut chunks_tasks = tokio::task::JoinSet::new();
 
-        let writter = self.chunk_saver.clone();
-        let level_folder = self.level_folder.clone();
-        tokio::spawn(async move {
-            Self::write_chunks(writter, &level_folder, &chunks_to_clean).await;
+        for &at in chunks {
+            let loaded_chunks = self.loaded_chunks.clone();
+            let chunk_watchers = self.chunk_watchers.clone();
+
+            chunks_tasks.spawn(async move {
+                let removed_chunk = loaded_chunks.remove_if(&at, |at, _| {
+                    chunk_watchers
+                        .get(at)
+                        .as_ref()
+                        .is_none_or(|watcher| watcher.is_zero())
+                });
+
+                if let Some((_, chunk)) = removed_chunk {
+                    return Some(chunk);
+                } else if let Some(chunk_guard) = &loaded_chunks.get(&at) {
+                    return Some(chunk_guard.value().clone());
+                }
+                None
+            });
+        }
+
+        let rt = Handle::current();
+        let level = self.clone();
+
+        rt.spawn(async move {
+            let chunks_to_write = chunks_tasks
+                .join_all()
+                .await
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+
+            level.write_chunks(chunks_to_write.as_slice()).await;
         });
     }
 
-    pub async fn clean_chunk(&self, chunk: &Vector2<i32>) {
+    pub async fn clean_chunk(self: &Arc<Self>, chunk: &Vector2<i32>) {
         self.clean_chunks(&[*chunk]).await;
     }
 
@@ -200,54 +221,48 @@ impl Level {
     }
 
     pub fn clean_memory(&self, chunks_to_check: &[Vector2<i32>]) {
-        chunks_to_check.iter().for_each(|chunk| {
-            if let Some(entry) = self.chunk_watchers.get(chunk) {
-                if entry.value().is_zero() {
-                    self.chunk_watchers.remove(chunk);
-                }
-            }
+        let deleted_chunks = chunks_to_check
+            .par_iter()
+            .filter_map(|chunk| {
+                self.chunk_watchers
+                    .remove_if(chunk, |_, watcher| watcher.is_zero());
+                self.loaded_chunks
+                    .remove_if(chunk, |at, _| self.chunk_watchers.get(at).is_none())
+            })
+            .count();
 
-            if self.chunk_watchers.get(chunk).is_none() {
-                self.loaded_chunks.remove(chunk);
-            }
-        });
-        self.loaded_chunks.shrink_to_fit();
-        self.chunk_watchers.shrink_to_fit();
+        if deleted_chunks > 0 {
+            trace!("Cleaned {} chunks from memory", deleted_chunks);
+
+            self.loaded_chunks.shrink_to_fit();
+            self.chunk_watchers.shrink_to_fit();
+        }
     }
-
-    pub async fn write_chunks(
-        writer: Arc<dyn ChunkIO<ChunkData>>,
-        level_folder: &LevelFolder,
-        chunks_to_write: &[(Vector2<i32>, Arc<RwLock<ChunkData>>)],
-    ) {
+    pub async fn write_chunks(&self, chunks_to_write: &[Arc<RwLock<ChunkData>>]) {
         if chunks_to_write.is_empty() {
             return;
         }
 
-        let chunks = chunks_to_write
-            .iter()
-            .map(|(pos, chunk)| (*pos, chunk.clone()))
-            .collect::<Vec<_>>();
+        let mut guards = tokio::task::JoinSet::new();
 
-        let chunks = chunks
-            .par_iter()
-            .map(|(pos, chunk)| (*pos, chunk.read()))
-            .collect::<Vec<_>>();
+        for chunk in chunks_to_write {
+            let chunk = chunk.clone();
+            guards.spawn(async move {
+                let chunk_guard = chunk.read().await;
+                let chunk = chunk_guard.deref().clone();
+                drop(chunk_guard);
 
-        let mut chunk_guards = Vec::with_capacity(chunks.len());
-
-        for (pos, guard) in chunks {
-            chunk_guards.push((pos, guard.await));
+                (chunk.position, chunk)
+            });
         }
 
-        let chunks = chunk_guards
-            .par_iter()
-            .map(|(pos, guard)| (*pos, guard.deref()))
-            .collect::<Vec<_>>();
-
+        let chunks = guards.join_all().await;
         info!("Writing chunks to disk {:}", chunks.len());
 
-        if let Err(error) = writer.save_chunks(level_folder, &chunks) {
+        if let Err(error) = self
+            .chunk_saver
+            .save_chunks(&self.level_folder, chunks.as_slice())
+        {
             log::error!("Failed writing Chunk to disk {}", error.to_string());
         }
     }
@@ -262,14 +277,14 @@ impl Level {
         info!("Loading chunks from disk {:}", chunks_pos.len());
         self.chunk_saver
             .load_chunks(&self.level_folder, chunks_pos)
-            .unwrap_or_else(|err| {
-                log::error!("Failed to load chunks from disk: {}", err);
-                vec![]
-            })
             .into_par_iter()
-            .map(|chunk_data| match chunk_data {
-                LoadedData::Loaded(chunk) => (chunk.position, Some(chunk)),
-                LoadedData::Missing(pos) => (pos, None),
+            .filter_map(|chunk_data| match chunk_data {
+                LoadedData::Loaded(chunk) => Some((chunk.position, Some(chunk))),
+                LoadedData::Missing(pos) => Some((pos, None)),
+                LoadedData::Error((position, error)) => {
+                    log::error!("Failed to load chunk at {:?}: {}", position, error);
+                    None
+                }
             })
             .collect::<Vec<_>>()
     }
@@ -282,6 +297,21 @@ impl Level {
         channel: mpsc::Sender<(Arc<RwLock<ChunkData>>, bool)>,
         rt: &Handle,
     ) {
+        fn send_chunks(
+            is_new: bool,
+            chunk: Arc<RwLock<ChunkData>>,
+            channel: &mpsc::Sender<(Arc<RwLock<ChunkData>>, bool)>,
+            rt: &Handle,
+        ) {
+            let channel = channel.clone();
+            rt.spawn(async move {
+                let _ = channel
+                    .send((chunk, is_new))
+                    .await
+                    .inspect_err(|err| log::error!("unable to send chunk to channel: {}", err));
+            });
+        }
+
         if chunks.is_empty() {
             return;
         }
@@ -289,18 +319,12 @@ impl Level {
         let chunks_to_load = chunks
             .par_iter()
             .filter(|pos| {
-                let cached_chunk = self.loaded_chunks.get(pos);
-                if let Some(cached_chunk) = &cached_chunk {
-                    let chunk = cached_chunk.value().clone();
-                    let channel = channel.clone();
-                    rt.spawn(async move {
-                        let _ = channel.send((chunk, false)).await.inspect_err(|err| {
-                            log::error!("unable to send chunk to channel: {}", err)
-                        });
-                    });
+                if let Some(chunk) = &self.loaded_chunks.get(pos) {
+                    send_chunks(false, chunk.value().clone(), &channel, rt);
+                    false
+                } else {
+                    true
                 }
-
-                cached_chunk.is_none()
             })
             .copied()
             .collect::<Vec<_>>();
@@ -312,26 +336,20 @@ impl Level {
         self.load_chunks_from_save(&chunks_to_load)
             .into_par_iter()
             .for_each(|(pos, chunk)| {
-                let mut first_load = false;
-                let chunk = self
-                    .loaded_chunks
-                    .entry(pos)
-                    .or_insert_with(|| {
-                        first_load = true;
-                        match chunk {
+                if let Some(chunk) = &self.loaded_chunks.get(&pos) {
+                    send_chunks(true, chunk.value().clone(), &channel, rt);
+                } else {
+                    let chunk = &self
+                        .loaded_chunks
+                        .entry(pos)
+                        .or_insert_with(|| match chunk {
                             Some(chunk) => Arc::new(RwLock::new(chunk)),
                             None => Arc::new(RwLock::new(self.world_gen.generate_chunk(pos))),
-                        }
-                    })
-                    .clone();
+                        })
+                        .downgrade();
 
-                let channel = channel.clone();
-                rt.spawn(async move {
-                    let _ = channel
-                        .send((chunk, first_load))
-                        .await
-                        .inspect_err(|err| log::error!("unable to send chunk to channel: {}", err));
-                });
+                    send_chunks(true, chunk.value().clone(), &channel, rt);
+                };
             });
     }
 }

@@ -7,6 +7,8 @@ use bytes::{Buf, BufMut};
 use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::slice::ParallelSliceMut;
 
 use super::anvil::{AnvilChunkFormat, CHUNK_COUNT, SUBREGION_BITS};
 use super::{ChunkData, ChunkReadingError, ChunkWritingError};
@@ -50,8 +52,8 @@ struct LinearFileHeader {
     region_hash: u64,
 }
 pub struct LinearFile {
-    chunks_headers: Box<[LinearChunkHeader; CHUNK_COUNT]>,
-    chunks_data: Vec<u8>,
+    chunks_headers: [LinearChunkHeader; CHUNK_COUNT],
+    chunks_data: [Option<Vec<u8>>; CHUNK_COUNT],
 }
 
 impl LinearChunkHeader {
@@ -162,8 +164,8 @@ impl LinearFile {
 impl Default for LinearFile {
     fn default() -> Self {
         LinearFile {
-            chunks_headers: Box::new([LinearChunkHeader::default(); CHUNK_COUNT]),
-            chunks_data: vec![],
+            chunks_headers: [LinearChunkHeader::default(); CHUNK_COUNT],
+            chunks_data: [const { None }; CHUNK_COUNT],
         }
     }
 }
@@ -184,9 +186,20 @@ impl ChunkSerializer for LinearFile {
             .flat_map(|header| header.to_bytes())
             .collect();
 
+        let uncompressed_size = self
+            .chunks_headers
+            .iter()
+            .map(|header| header.size)
+            .sum::<u32>();
+
+        let mut chunks_bytes = Vec::with_capacity(uncompressed_size as usize);
+        for chunk in self.chunks_data.iter().flatten() {
+            chunks_bytes.put_slice(chunk.as_slice());
+        }
+
         // Compress the data buffer
         let compressed_buffer = zstd::encode_all(
-            [headers_buffer.as_slice(), self.chunks_data.as_slice()]
+            [headers_buffer.as_slice(), chunks_bytes.as_slice()]
                 .concat()
                 .as_slice(),
             ADVANCED_CONFIG.chunk.compression.level as i32,
@@ -252,11 +265,12 @@ impl ChunkSerializer for LinearFile {
         }
 
         // Uncompress the data (header + chunks)
-        let buffer = zstd::decode_all(compressed_data.as_slice())
+        let mut buffer = zstd::decode_all(compressed_data.as_slice())
             .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
 
-        let (headers_buffer, chunks_buffer) =
-            buffer.split_at(LinearChunkHeader::CHUNK_HEADER_SIZE * CHUNK_COUNT);
+        let headers_buffer: Vec<u8> = buffer
+            .drain(..LinearChunkHeader::CHUNK_HEADER_SIZE * CHUNK_COUNT)
+            .collect();
 
         // Parse the chunk headers
         let chunk_headers: [LinearChunkHeader; CHUNK_COUNT] = headers_buffer
@@ -268,93 +282,85 @@ impl ChunkSerializer for LinearFile {
 
         // Check if the total bytes of the chunks match the header
         let total_bytes = chunk_headers.iter().map(|header| header.size).sum::<u32>() as usize;
-        if chunks_buffer.len() != total_bytes {
+        if buffer.len() != total_bytes {
             error!(
                 "Invalid total bytes of the chunks {} != {}",
                 total_bytes,
-                chunks_buffer.len(),
+                buffer.len(),
             );
             return Err(ChunkReadingError::InvalidHeader);
         }
 
+        let mut chunks = [const { None }; CHUNK_COUNT];
+        for (i, header) in chunk_headers.iter().enumerate() {
+            if header.size != 0 {
+                chunks[i] = Some(buffer.drain(..header.size as usize).collect());
+            }
+        }
+
         Ok(LinearFile {
-            chunks_headers: Box::new(chunk_headers),
-            chunks_data: chunks_buffer.to_vec(),
+            chunks_headers: chunk_headers,
+            chunks_data: chunks,
         })
     }
 
-    fn add_chunk_data(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkWritingError> {
-        let chunk_index: usize = LinearFile::get_chunk_index(chunk_data.position);
-        let chunk_raw = AnvilChunkFormat {} //We use Anvil format to serialize the chunk
-            .to_bytes(chunk_data)
-            .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
+    fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
+        let mut chunks = chunks_data
+            .par_iter()
+            .map(|chunk| (LinearFile::get_chunk_index(chunk.position), chunk))
+            .collect::<Vec<_>>();
 
-        let new_chunk_size = chunk_raw.len();
-        let old_chunk_size = self.chunks_headers[chunk_index].size as usize;
+        chunks.par_sort_unstable_by_key(|(index, _)| *index);
 
-        self.chunks_headers[chunk_index] = LinearChunkHeader {
-            size: new_chunk_size as u32,
-            timestamp: SystemTime::now()
+        for (chunk_index, chunk_data) in chunks {
+            let chunk_raw = AnvilChunkFormat {} //We use Anvil format to serialize the chunk
+                .to_bytes(chunk_data)
+                .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
+
+            let header = &mut self.chunks_headers[chunk_index];
+            header.size = chunk_raw.len() as u32;
+            header.timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_secs() as u32,
-        };
+                .as_secs() as u32;
 
-        // We calculate the start point of the chunk in the data buffer
-        let mut offset: usize = 0;
-        for i in 0..chunk_index {
-            offset += self.chunks_headers[i].size as usize;
+            // We update the data buffer
+            self.chunks_data[chunk_index] = Some(chunk_raw);
         }
-
-        let old_total_size = self.chunks_data.len();
-        let new_total_size = (old_total_size + new_chunk_size) - old_chunk_size;
-
-        // We update the data buffer (avoiding reallocations)
-        if new_chunk_size > old_chunk_size {
-            self.chunks_data.resize(new_total_size, 0);
-        }
-
-        self.chunks_data.copy_within(
-            offset + old_chunk_size..old_total_size,
-            offset + new_chunk_size,
-        );
-
-        self.chunks_data[offset..offset + new_chunk_size].copy_from_slice(&chunk_raw);
-
-        if new_chunk_size < old_chunk_size {
-            self.chunks_data.truncate(new_total_size);
-        }
-
         Ok(())
     }
 
-    fn get_chunk_data(
+    fn get_chunks_data(
         &self,
-        chunk: Vector2<i32>,
-    ) -> Result<LoadedData<Self::Data>, ChunkReadingError> {
-        // We check if the chunk exists
-        let chunk_index: usize = LinearFile::get_chunk_index(chunk);
+        chunks: &[Vector2<i32>],
+    ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
+        let mut chunks = chunks
+            .par_iter()
+            .map(|&chunk| (LinearFile::get_chunk_index(chunk), chunk))
+            .collect::<Vec<_>>();
 
-        let chunk_size = self.chunks_headers[chunk_index].size as usize;
-        if chunk_size == 0 {
-            return Ok(LoadedData::Missing(chunk));
+        chunks.par_sort_unstable_by_key(|(index, _)| *index);
+
+        let mut fetched_chunks = Vec::with_capacity(chunks.len());
+        for (chunk_index, at) in chunks {
+            let chunk = self.chunks_data[chunk_index].as_ref().map_or_else(
+                || LoadedData::Missing(at),
+                |chunk_bytes| match ChunkData::from_bytes(chunk_bytes.as_slice(), at) {
+                    Ok(chunk) => LoadedData::Loaded(chunk),
+                    Err(err) => LoadedData::Error((at, ChunkReadingError::ParsingError(err))),
+                },
+            );
+
+            fetched_chunks.push(chunk);
         }
 
-        // We iterate over the headers to sum the size of the chunks until the desired one
-        let mut offset: usize = 0;
-        for i in 0..chunk_index {
-            offset += self.chunks_headers[i].size as usize;
-        }
-
-        Ok(LoadedData::Loaded(
-            ChunkData::from_bytes(&self.chunks_data[offset..offset + chunk_size], chunk)
-                .map_err(ChunkReadingError::ParsingError)?,
-        ))
+        fetched_chunks
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
     use pumpkin_util::math::vector2::Vector2;
     use std::fs;
     use std::path::PathBuf;
@@ -368,16 +374,14 @@ mod tests {
     fn not_existing() {
         let region_path = PathBuf::from("not_existing");
         let chunk_saver = ChunkFileManager::<LinearFile>::default();
-        let result = chunk_saver.load_chunks(
+        let chunks = chunk_saver.load_chunks(
             &LevelFolder {
                 root_folder: PathBuf::from(""),
                 region_folder: region_path,
             },
             &[Vector2::new(0, 0)],
         );
-        assert!(
-            matches!(result, Ok(chunks) if chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)))
-        );
+        assert!(chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)));
     }
 
     #[test]
@@ -410,7 +414,7 @@ mod tests {
                     &level_folder,
                     &chunks
                         .iter()
-                        .map(|(at, chunk)| (*at, chunk))
+                        .map(|(at, chunk)| (*at, chunk.clone()))
                         .collect::<Vec<_>>(),
                 )
                 .expect("Failed to write chunk");
@@ -420,11 +424,13 @@ mod tests {
                     &level_folder,
                     &chunks.iter().map(|(at, _)| *at).collect::<Vec<_>>(),
                 )
-                .expect("Could not read chunk")
                 .into_iter()
                 .filter_map(|chunk| match chunk {
                     LoadedData::Loaded(chunk) => Some(chunk),
                     LoadedData::Missing(_) => None,
+                    LoadedData::Error((position, error)) => {
+                        panic!("Error reading chunk at {:?} | Error: {:?}", position, error)
+                    }
                 })
                 .collect::<Vec<_>>();
 
