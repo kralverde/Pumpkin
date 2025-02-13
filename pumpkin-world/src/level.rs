@@ -1,7 +1,7 @@
 use std::{ops::Deref, path::PathBuf, sync::Arc};
 
 use dashmap::{DashMap, Entry};
-use log::{info, trace, warn};
+use log::{info, trace};
 use num_traits::Zero;
 use pumpkin_config::{chunk::ChunkFormat, ADVANCED_CONFIG};
 use pumpkin_util::math::vector2::Vector2;
@@ -257,7 +257,7 @@ impl Level {
         }
 
         let chunks = guards.join_all().await;
-        info!("Writing chunks to disk {:}", chunks.len());
+        trace!("Writing chunks to disk {:}", chunks.len());
 
         if let Err(error) = self
             .chunk_saver

@@ -110,6 +110,7 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
                 .file_locks
                 .entry(path.to_path_buf())
                 .or_try_insert_with(|| {
+                    trace!("Reading file: {:?}", path);
                     let file = OpenOptions::new()
                         .write(false)
                         .read(true)
@@ -143,9 +144,7 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
     }
 
     pub fn write_file(&self, path: &Path, serializer: &S) -> Result<(), ChunkWritingError> {
-        // We need to lock the dashmap entry to avoid removing the lock while writing
-        // and also to avoid other threads to write/read the file at the same time
-        //let _guard = self.file_locks.entry(path.to_path_buf());
+        trace!("Writing file: {:?}", path);
         let mut file = OpenOptions::new()
             .write(true)
             .read(false)
