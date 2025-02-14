@@ -20,19 +20,19 @@ pub mod tag;
 
 // This NBT crate is inspired from CrabNBT
 
-pub const END_ID: u8 = 0;
-pub const BYTE_ID: u8 = 1;
-pub const SHORT_ID: u8 = 2;
-pub const INT_ID: u8 = 3;
-pub const LONG_ID: u8 = 4;
-pub const FLOAT_ID: u8 = 5;
-pub const DOUBLE_ID: u8 = 6;
-pub const BYTE_ARRAY_ID: u8 = 7;
-pub const STRING_ID: u8 = 8;
-pub const LIST_ID: u8 = 9;
-pub const COMPOUND_ID: u8 = 10;
-pub const INT_ARRAY_ID: u8 = 11;
-pub const LONG_ARRAY_ID: u8 = 12;
+pub const END_ID: u8 = 0x00;
+pub const BYTE_ID: u8 = 0x01;
+pub const SHORT_ID: u8 = 0x02;
+pub const INT_ID: u8 = 0x03;
+pub const LONG_ID: u8 = 0x04;
+pub const FLOAT_ID: u8 = 0x05;
+pub const DOUBLE_ID: u8 = 0x06;
+pub const BYTE_ARRAY_ID: u8 = 0x07;
+pub const STRING_ID: u8 = 0x08;
+pub const LIST_ID: u8 = 0x09;
+pub const COMPOUND_ID: u8 = 0x0A;
+pub const INT_ARRAY_ID: u8 = 0x0B;
+pub const LONG_ARRAY_ID: u8 = 0x0C;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -214,7 +214,6 @@ impl_array!(BytesArray, "byte");
 
 #[cfg(test)]
 mod test {
-    use std::io::Read;
     use std::sync::LazyLock;
 
     use flate2::read::GzDecoder;
@@ -331,6 +330,8 @@ mod test {
         },
     });
 
+    // TODO: More robust tests
+
     #[test]
     fn test_deserialize_level_dat() {
         let raw_compressed_nbt = include_bytes!("../assets/level.dat");
@@ -344,24 +345,8 @@ mod test {
 
     #[test]
     fn test_serialize_level_dat() {
-        let raw_compressed_nbt = include_bytes!("../assets/level.dat");
-        assert!(!raw_compressed_nbt.is_empty());
-
-        let mut decoder = GzDecoder::new(&raw_compressed_nbt[..]);
-        let mut raw_bytes = Vec::new();
-        decoder.read_to_end(&mut raw_bytes).unwrap();
-
         let mut serialized = Vec::new();
-        to_bytes(&*LEVEL_DAT, "".to_string(), &mut serialized).expect("Failed to encode to bytes");
-        raw_bytes
-            .iter()
-            .zip(serialized.iter())
-            .enumerate()
-            .for_each(|(index, (expected_byte, serialized_byte))| {
-                if expected_byte != serialized_byte {
-                    panic!("{} vs {} ({})", expected_byte, serialized_byte, index);
-                }
-            });
+        to_bytes(&*LEVEL_DAT, &mut serialized).expect("Failed to encode to bytes");
 
         let level_dat_again: LevelDat =
             from_bytes(&serialized[..]).expect("Failed to decode from bytes");

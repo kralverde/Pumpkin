@@ -137,7 +137,7 @@ where
     T::deserialize(&mut deserializer)
 }
 
-/// Deserializes struct using Serde Deserializer from normal NBT
+/// Deserializes struct using Serde Deserializer from network NBT
 pub fn from_bytes_unnamed<'a, T>(r: impl Read) -> Result<T>
 where
     T: Deserialize<'a>,
@@ -205,13 +205,9 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
             let value = self.input.get_u8_be()?;
             visitor.visit_u8::<Error>(value)
         } else {
-            panic!("{:?}", self.tag_to_deserialize);
-
-            /*
             Err(Error::UnsupportedType(
                 "u8; NBT only supports signed values".to_string(),
             ))
-            */
         }
     }
 
@@ -357,4 +353,3 @@ impl<'de, R: Read> SeqAccess<'de> for ListAccess<'_, R> {
         result
     }
 }
-

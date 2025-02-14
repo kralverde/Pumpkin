@@ -154,7 +154,7 @@ where
 }
 
 /// Serializes struct using Serde Serializer to normal NBT
-pub fn to_bytes<T>(value: &T, name: String, w: impl Write) -> Result<()>
+pub fn to_bytes_named<T>(value: &T, name: String, w: impl Write) -> Result<()>
 where
     T: Serialize,
 {
@@ -164,6 +164,13 @@ where
     };
     value.serialize(&mut serializer)?;
     Ok(())
+}
+
+pub fn to_bytes<T>(value: &T, w: impl Write) -> Result<()>
+where
+    T: Serialize,
+{
+    to_bytes_named(value, String::new(), w)
 }
 
 impl<W: Write> ser::Serializer for &mut Serializer<W> {
