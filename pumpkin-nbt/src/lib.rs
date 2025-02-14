@@ -348,6 +348,8 @@ mod test {
         let mut serialized = Vec::new();
         to_bytes(&*LEVEL_DAT, &mut serialized).expect("Failed to encode to bytes");
 
+        assert!(!serialized.is_empty());
+
         let level_dat_again: LevelDat =
             from_bytes(&serialized[..]).expect("Failed to decode from bytes");
 

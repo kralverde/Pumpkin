@@ -104,6 +104,7 @@ impl Registry {
             .iter()
             .map(|(name, nbt)| RegistryEntry::from_nbt(name, nbt))
             .collect();
+
         let chat_type = Registry {
             registry_id: Identifier::vanilla("chat_type"),
             registry_entries,

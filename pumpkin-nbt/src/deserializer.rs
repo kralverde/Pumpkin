@@ -1,6 +1,6 @@
 use crate::*;
 use io::Read;
-use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, IntoDeserializer, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -52,15 +52,6 @@ impl<R: Read> ReadAdaptor<R> {
             .map_err(Error::Incomplete)?;
 
         Ok(u16::from_be_bytes(buf))
-    }
-
-    pub fn get_u32_be(&mut self) -> Result<u32> {
-        let mut buf = [0u8; 4];
-        self.reader
-            .read_exact(&mut buf)
-            .map_err(Error::Incomplete)?;
-
-        Ok(u32::from_be_bytes(buf))
     }
 
     pub fn get_i32_be(&mut self) -> Result<i32> {
@@ -151,7 +142,7 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
 
     forward_to_deserialize_any! {
         i8 i16 i32 i64 f32 f64 char str string unit unit_struct seq tuple tuple_struct
-        ignored_any bytes enum newtype_struct byte_buf option
+        ignored_any bytes newtype_struct byte_buf
     }
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
@@ -169,7 +160,11 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         };
 
         if let Some(list_type) = list_type {
-            let remaining_values = self.input.get_u32_be()?;
+            let remaining_values = self.input.get_i32_be()?;
+            if remaining_values < 0 {
+                return Err(Error::NegativeLength(remaining_values));
+            }
+
             return visitor.visit_seq(ListAccess {
                 de: self,
                 list_type,
@@ -254,6 +249,27 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         }
     }
 
+    fn deserialize_enum<V>(
+        self,
+        _name: &'static str,
+        _variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        let variant = get_nbt_string(&mut self.input)?;
+        visitor.visit_enum(variant.into_deserializer())
+    }
+
+    fn deserialize_option<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        // None is not encoded, so no need for it
+        visitor.visit_some(self)
+    }
+
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
@@ -330,7 +346,7 @@ impl<'de, R: Read> MapAccess<'de> for CompoundAccess<'_, R> {
 
 struct ListAccess<'a, R: Read> {
     de: &'a mut Deserializer<R>,
-    remaining_values: u32,
+    remaining_values: i32,
     list_type: u8,
 }
 
@@ -341,7 +357,7 @@ impl<'de, R: Read> SeqAccess<'de> for ListAccess<'_, R> {
     where
         E: DeserializeSeed<'de>,
     {
-        if self.remaining_values == 0 {
+        if self.remaining_values <= 0 {
             return Ok(None);
         }
 

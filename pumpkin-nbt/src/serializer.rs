@@ -263,12 +263,12 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
 
     fn serialize_str(self, v: &str) -> Result<()> {
         self.parse_state(STRING_ID)?;
-        if self.state == State::MapKey {
-            self.state = State::Named(v.to_string());
-            return Ok(());
-        }
 
         NbtTag::String(v.to_string()).serialize_data(&mut self.output)?;
+
+        if self.state == State::MapKey {
+            self.state = State::Named(v.to_string());
+        }
         Ok(())
     }
 
@@ -355,10 +355,13 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
-        if len.is_none() {
+        let Some(len) = len else {
             return Err(Error::SerdeError(
                 "Length of the sequence must be known first!".to_string(),
             ));
+        };
+        if len > i32::MAX as usize {
+            return Err(Error::LargeLength(len));
         }
 
         match &mut self.state {
@@ -375,19 +378,18 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
                 };
                 self.parse_state(id)?;
 
-                let len = len.unwrap();
-                if len > i32::MAX as usize {
-                    return Err(Error::LargeLength(len));
-                }
-
                 self.output.write_i32_be(len as i32)?;
                 self.state = State::ListElement;
             }
             _ => {
                 self.parse_state(LIST_ID)?;
-                self.state = State::FirstListElement {
-                    len: len.unwrap() as i32,
-                };
+                self.state = State::FirstListElement { len: len as i32 };
+                if len == 0 {
+                    // If we have no elements, FirstListElement state will never be invoked; so
+                    // write the list type and length here.
+                    self.output.write_u8_be(END_ID)?;
+                    self.output.write_i32_be(0)?;
+                }
             }
         }
 
@@ -428,20 +430,14 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
     }
 
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
-        self.output.write_u8_be(COMPOUND_ID)?;
-
         match &mut self.state {
             State::Root(root_name) => {
+                self.output.write_u8_be(COMPOUND_ID)?;
                 if let Some(root_name) = root_name {
                     NbtTag::String(root_name.clone()).serialize_data(&mut self.output)?;
                 }
             }
-            State::Named(string) => {
-                NbtTag::String(string.clone()).serialize_data(&mut self.output)?;
-            }
-            _ => {
-                unimplemented!()
-            }
+            _ => self.parse_state(COMPOUND_ID)?,
         }
 
         Ok(self)
