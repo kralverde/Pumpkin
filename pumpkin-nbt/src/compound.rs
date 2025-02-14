@@ -1,7 +1,7 @@
 use crate::deserializer::ReadAdaptor;
+use crate::serializer::WriteAdaptor;
 use crate::tag::NbtTag;
 use crate::{get_nbt_string, Error, Nbt, END_ID};
-use bytes::{BufMut, Bytes, BytesMut};
 use std::io::{ErrorKind, Read, Write};
 use std::vec::IntoIter;
 
@@ -56,19 +56,16 @@ impl NbtCompound {
         Ok(compound)
     }
 
-    pub fn serialize_content(&self) -> Bytes {
-        let mut bytes = BytesMut::new();
+    pub fn serialize_content<W>(&self, w: &mut WriteAdaptor<W>) -> Result<(), Error>
+    where
+        W: Write,
+    {
         for (name, tag) in &self.child_tags {
-            bytes.put_u8(tag.get_type_id());
-            bytes.put(NbtTag::String(name.clone()).serialize_data());
-            bytes.put(tag.serialize_data());
+            w.write_u8_be(tag.get_type_id())?;
+            NbtTag::String(name.clone()).serialize_data(w)?;
+            tag.serialize_data(w)?;
         }
-        bytes.put_u8(END_ID);
-        bytes.freeze()
-    }
-
-    pub fn serialize_content_to_writer<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
-        writer.write_all(&self.serialize_content())?;
+        w.write_u8_be(END_ID)?;
         Ok(())
     }
 
@@ -152,7 +149,7 @@ impl NbtCompound {
         self.get(name).and_then(|tag| tag.extract_string())
     }
 
-    pub fn get_list(&self, name: &str) -> Option<&Vec<NbtTag>> {
+    pub fn get_list(&self, name: &str) -> Option<&[NbtTag]> {
         self.get(name).and_then(|tag| tag.extract_list())
     }
 
@@ -160,11 +157,11 @@ impl NbtCompound {
         self.get(name).and_then(|tag| tag.extract_compound())
     }
 
-    pub fn get_int_array(&self, name: &str) -> Option<&Vec<i32>> {
+    pub fn get_int_array(&self, name: &str) -> Option<&[i32]> {
         self.get(name).and_then(|tag| tag.extract_int_array())
     }
 
-    pub fn get_long_array(&self, name: &str) -> Option<&Vec<i64>> {
+    pub fn get_long_array(&self, name: &str) -> Option<&[i64]> {
         self.get(name).and_then(|tag| tag.extract_long_array())
     }
 }

@@ -4,11 +4,12 @@ use std::{
     ops::Deref,
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use compound::NbtCompound;
 use deserializer::ReadAdaptor;
 use serde::{de, ser};
 use serde::{Deserialize, Deserializer};
+use serializer::WriteAdaptor;
 use tag::NbtTag;
 use thiserror::Error;
 
@@ -49,6 +50,8 @@ pub enum Error {
     Incomplete(io::Error),
     #[error("Negative list length {0}")]
     NegativeLength(i32),
+    #[error("Length too large {0}")]
+    LargeLength(usize),
 }
 
 impl ser::Error for Error {
@@ -111,11 +114,15 @@ impl Nbt {
     }
 
     pub fn write(&self) -> Bytes {
-        let mut bytes = BytesMut::new();
-        bytes.put_u8(COMPOUND_ID);
-        bytes.put(NbtTag::String(self.name.to_string()).serialize_data());
-        bytes.put(self.root_tag.serialize_content());
-        bytes.freeze()
+        let mut bytes = Vec::new();
+        let mut writer = WriteAdaptor::new(&mut bytes);
+        writer.write_u8_be(COMPOUND_ID).unwrap();
+        NbtTag::String(self.name.to_string())
+            .serialize_data(&mut writer)
+            .unwrap();
+        self.root_tag.serialize_content(&mut writer).unwrap();
+
+        bytes.into()
     }
 
     pub fn write_to_writer<W: Write>(&self, mut writer: W) -> Result<(), io::Error> {
@@ -125,10 +132,13 @@ impl Nbt {
 
     /// Writes NBT tag, without name of root compound.
     pub fn write_unnamed(&self) -> Bytes {
-        let mut bytes = BytesMut::new();
-        bytes.put_u8(COMPOUND_ID);
-        bytes.put(self.root_tag.serialize_content());
-        bytes.freeze()
+        let mut bytes = Vec::new();
+        let mut writer = WriteAdaptor::new(&mut bytes);
+
+        writer.write_u8_be(COMPOUND_ID).unwrap();
+        self.root_tag.serialize_content(&mut writer).unwrap();
+
+        bytes.into()
     }
 
     pub fn write_unnamed_to_writer<W: Write>(&self, mut writer: W) -> Result<(), io::Error> {
@@ -169,7 +179,7 @@ impl AsMut<NbtCompound> for Nbt {
 
 pub fn get_nbt_string<R: Read>(bytes: &mut ReadAdaptor<R>) -> Result<String, Error> {
     let len = bytes.get_u16_be()? as usize;
-    let string_bytes = bytes.read_to_bytes(len)?;
+    let string_bytes = bytes.read_boxed_slice(len)?;
     let string = cesu8::from_java_cesu8(&string_bytes).map_err(|_| Error::Cesu8DecodingError)?;
     Ok(string.to_string())
 }
@@ -204,6 +214,7 @@ impl_array!(BytesArray, "byte");
 
 #[cfg(test)]
 mod test {
+    use std::io::Read;
     use std::sync::LazyLock;
 
     use flate2::read::GzDecoder;
@@ -212,6 +223,7 @@ mod test {
     use pumpkin_world::world_info::{DataPacks, LevelData, WorldGenSettings, WorldVersion};
 
     use crate::deserializer::from_bytes;
+    use crate::serializer::to_bytes;
     use crate::BytesArray;
     use crate::IntArray;
     use crate::LongArray;
@@ -237,8 +249,10 @@ mod test {
             float: 1.00,
             string: "Hello test".to_string(),
         };
-        let bytes = to_bytes_unnamed(&test).unwrap();
-        let recreated_struct: Test = from_bytes_unnamed(&mut &bytes[..]).unwrap();
+
+        let mut bytes = Vec::new();
+        to_bytes_unnamed(&test, &mut bytes).unwrap();
+        let recreated_struct: Test = from_bytes_unnamed(&bytes[..]).unwrap();
 
         assert_eq!(test, recreated_struct);
     }
@@ -260,8 +274,10 @@ mod test {
             int_array: vec![13, 1321, 2],
             long_array: vec![1, 0, 200301, 1],
         };
-        let bytes = to_bytes_unnamed(&test).unwrap();
-        let recreated_struct: TestArray = from_bytes_unnamed(&mut &bytes[..]).unwrap();
+
+        let mut bytes = Vec::new();
+        to_bytes_unnamed(&test, &mut bytes).unwrap();
+        let recreated_struct: TestArray = from_bytes_unnamed(&bytes[..]).unwrap();
 
         assert_eq!(test, recreated_struct);
     }
@@ -316,13 +332,40 @@ mod test {
     });
 
     #[test]
-    fn test_serialize_deserialize_level_dat() {
+    fn test_deserialize_level_dat() {
         let raw_compressed_nbt = include_bytes!("../assets/level.dat");
         assert!(!raw_compressed_nbt.is_empty());
 
         let decoder = GzDecoder::new(&raw_compressed_nbt[..]);
-        let level_dat: LevelDat = from_bytes(decoder).unwrap();
+        let level_dat: LevelDat = from_bytes(decoder).expect("Failed to decode from file");
 
         assert_eq!(level_dat, *LEVEL_DAT);
+    }
+
+    #[test]
+    fn test_serialize_level_dat() {
+        let raw_compressed_nbt = include_bytes!("../assets/level.dat");
+        assert!(!raw_compressed_nbt.is_empty());
+
+        let mut decoder = GzDecoder::new(&raw_compressed_nbt[..]);
+        let mut raw_bytes = Vec::new();
+        decoder.read_to_end(&mut raw_bytes).unwrap();
+
+        let mut serialized = Vec::new();
+        to_bytes(&*LEVEL_DAT, "".to_string(), &mut serialized).expect("Failed to encode to bytes");
+        raw_bytes
+            .iter()
+            .zip(serialized.iter())
+            .enumerate()
+            .for_each(|(index, (expected_byte, serialized_byte))| {
+                if expected_byte != serialized_byte {
+                    panic!("{} vs {} ({})", expected_byte, serialized_byte, index);
+                }
+            });
+
+        let level_dat_again: LevelDat =
+            from_bytes(&serialized[..]).expect("Failed to decode from bytes");
+
+        assert_eq!(level_dat_again, *LEVEL_DAT);
     }
 }

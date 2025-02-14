@@ -99,7 +99,7 @@ impl<R: Read> ReadAdaptor<R> {
         Ok(f64::from_be_bytes(buf))
     }
 
-    pub fn read_to_bytes(&mut self, count: usize) -> Result<Bytes> {
+    pub fn read_boxed_slice(&mut self, count: usize) -> Result<Box<[u8]>> {
         let mut buf = vec![0u8; count];
         self.reader
             .read_exact(&mut buf)
@@ -113,6 +113,7 @@ impl<R: Read> ReadAdaptor<R> {
 pub struct Deserializer<R: Read> {
     input: ReadAdaptor<R>,
     tag_to_deserialize: Option<u8>,
+    in_list: bool,
     is_named: bool,
 }
 
@@ -121,6 +122,7 @@ impl<R: Read> Deserializer<R> {
         Deserializer {
             input: ReadAdaptor { reader: input },
             tag_to_deserialize: None,
+            in_list: false,
             is_named,
         }
     }
@@ -148,7 +150,7 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     type Error = Error;
 
     forward_to_deserialize_any! {
-        u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 char str string unit unit_struct seq tuple tuple_struct
+        i8 i16 i32 i64 f32 f64 char str string unit unit_struct seq tuple tuple_struct
         ignored_any bytes enum newtype_struct byte_buf option
     }
 
@@ -193,6 +195,51 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         );
         self.tag_to_deserialize = None;
         result
+    }
+
+    fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        if self.in_list {
+            let value = self.input.get_u8_be()?;
+            visitor.visit_u8::<Error>(value)
+        } else {
+            panic!("{:?}", self.tag_to_deserialize);
+
+            /*
+            Err(Error::UnsupportedType(
+                "u8; NBT only supports signed values".to_string(),
+            ))
+            */
+        }
+    }
+
+    fn deserialize_u16<V>(self, _visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        Err(Error::UnsupportedType(
+            "u16; NBT only supports signed values".to_string(),
+        ))
+    }
+
+    fn deserialize_u32<V>(self, _visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        Err(Error::UnsupportedType(
+            "u32; NBT only supports signed values".to_string(),
+        ))
+    }
+
+    fn deserialize_u64<V>(self, _visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        Err(Error::UnsupportedType(
+            "u64; NBT only supports signed values".to_string(),
+        ))
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value>
@@ -304,6 +351,10 @@ impl<'de, R: Read> SeqAccess<'de> for ListAccess<'_, R> {
 
         self.remaining_values -= 1;
         self.de.tag_to_deserialize = Some(self.list_type);
-        seed.deserialize(&mut *self.de).map(Some)
+        self.de.in_list = true;
+        let result = seed.deserialize(&mut *self.de).map(Some);
+        self.de.in_list = false;
+        result
     }
 }
+

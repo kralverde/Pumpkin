@@ -55,7 +55,7 @@ pub struct LevelData {
     // The time of day. 0 is sunrise, 6000 is mid day, 12000 is sunset, 18000 is mid night, 24000 is the next day's 0. This value keeps counting past 24000 and does not reset to 0.
     pub day_time: i64,
     // The current difficulty setting.
-    pub difficulty: u8,
+    pub difficulty: i8,
     // 1 or 0 (true/false) - True if the difficulty has been locked. Defaults to 0.
     pub difficulty_locked: bool,
     // TODO: DimensionData
@@ -154,7 +154,7 @@ impl Default for LevelData {
             },
             data_version: -1,
             day_time: 0,
-            difficulty: Difficulty::Normal as u8,
+            difficulty: Difficulty::Normal as i8,
             difficulty_locked: false,
             world_gen_settings: Default::default(),
             last_played: -1,

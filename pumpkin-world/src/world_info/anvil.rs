@@ -53,7 +53,8 @@ impl WorldInfoWriter for AnvilLevelInfo {
         let level = LevelDat { data: level_data };
 
         // convert it into nbt
-        let nbt = pumpkin_nbt::serializer::to_bytes_unnamed(&level).unwrap();
+        let mut nbt = Vec::new();
+        pumpkin_nbt::serializer::to_bytes_unnamed(&level, &mut nbt).unwrap();
         // now compress using GZip, TODO: im not sure about the to_vec, but writer is not implemented for BytesMut, see https://github.com/tokio-rs/bytes/pull/478
         let mut encoder = GzEncoder::new(nbt.to_vec(), Compression::best());
         let compressed_data = Vec::new();
