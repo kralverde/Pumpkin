@@ -82,6 +82,7 @@ pub struct Serializer<W: Write> {
     output: WriteAdaptor<W>,
     state: State,
     handled_root: bool,
+    expected_list_tag: u8,
 }
 
 impl<W: Write> Serializer<W> {
@@ -90,6 +91,7 @@ impl<W: Write> Serializer<W> {
             output: WriteAdaptor::new(output),
             state: State::Root(name),
             handled_root: false,
+            expected_list_tag: 0,
         }
     }
 }
@@ -107,6 +109,7 @@ enum State {
         len: i32,
     },
     ListElement,
+    CheckedListElement,
     Array {
         name: String,
         array_type: &'static str,
@@ -123,6 +126,7 @@ impl<W: Write> Serializer<W> {
             State::FirstListElement { len } => {
                 self.output.write_u8_be(tag)?;
                 self.output.write_i32_be(*len)?;
+                self.expected_list_tag = tag;
             }
             State::MapKey => {
                 if tag != STRING_ID {
@@ -131,7 +135,17 @@ impl<W: Write> Serializer<W> {
                     )));
                 }
             }
-            State::ListElement => {}
+            State::ListElement => {
+                // Rust rules mandate this is all the same type
+            }
+            State::CheckedListElement => {
+                if tag != self.expected_list_tag {
+                    return Err(Error::SerdeError(format!(
+                        "List values must all be of the same type! Expected {} but found {}!",
+                        self.expected_list_tag, tag
+                    )));
+                }
+            }
             State::Root(root_name) => {
                 if self.handled_root {
                     return Err(Error::SerdeError(
@@ -161,11 +175,7 @@ pub fn to_bytes_unnamed<T>(value: &T, w: impl Write) -> Result<()>
 where
     T: Serialize,
 {
-    let mut serializer = Serializer {
-        output: WriteAdaptor { writer: w },
-        state: State::Root(None),
-        handled_root: false,
-    };
+    let mut serializer = Serializer::new(w, None);
     value.serialize(&mut serializer)?;
     Ok(())
 }
@@ -175,11 +185,7 @@ pub fn to_bytes_named<T>(value: &T, name: String, w: impl Write) -> Result<()>
 where
     T: Serialize,
 {
-    let mut serializer = Serializer {
-        output: WriteAdaptor { writer: w },
-        state: State::Root(Some(name)),
-        handled_root: false,
-    };
+    let mut serializer = Serializer::new(w, Some(name));
     value.serialize(&mut serializer)?;
     Ok(())
 }
@@ -196,7 +202,7 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
     type Error = Error;
 
     type SerializeSeq = Self;
-    type SerializeTuple = Impossible<(), Error>;
+    type SerializeTuple = Self;
     type SerializeTupleStruct = Impossible<(), Error>;
     type SerializeTupleVariant = Impossible<(), Error>;
     type SerializeMap = Self;
@@ -380,10 +386,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
 
         match &mut self.state {
             State::Array { array_type, .. } => {
-                let id = match *array_type {
-                    NBT_BYTE_ARRAY_TAG => BYTE_ARRAY_ID,
-                    NBT_INT_ARRAY_TAG => INT_ARRAY_ID,
-                    NBT_LONG_ARRAY_TAG => LONG_ARRAY_ID,
+                let (id, expected_tag) = match *array_type {
+                    NBT_BYTE_ARRAY_TAG => (BYTE_ARRAY_ID, BYTE_ID),
+                    NBT_INT_ARRAY_TAG => (INT_ARRAY_ID, INT_ID),
+                    NBT_LONG_ARRAY_TAG => (LONG_ARRAY_ID, LONG_ID),
                     _ => {
                         return Err(Error::SerdeError(
                             "Array supports only byte, int, long".to_string(),
@@ -393,7 +399,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
 
                 self.parse_state(id)?;
                 self.output.write_i32_be(len as i32)?;
-                self.state = State::ListElement;
+
+                // We can mark anything as an nbt array list, so mark as needed to be checked
+                self.expected_list_tag = expected_tag;
+                self.state = State::CheckedListElement;
             }
             _ => {
                 self.parse_state(LIST_ID)?;
@@ -410,8 +419,8 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
         Ok(self)
     }
 
-    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple> {
-        Err(Error::UnsupportedType("tuple".to_string()))
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
+        self.serialize_seq(Some(len))
     }
 
     fn serialize_tuple_struct(
@@ -454,6 +463,24 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
 
     fn is_human_readable(&self) -> bool {
         false
+    }
+}
+
+impl<W: Write> ser::SerializeTuple for &mut Serializer<W> {
+    type Ok = ();
+    type Error = Error;
+
+    fn serialize_element<T>(&mut self, value: &T) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        value.serialize(&mut **self)?;
+        self.state = State::CheckedListElement;
+        Ok(())
+    }
+
+    fn end(self) -> Result<()> {
+        Ok(())
     }
 }
 

@@ -223,8 +223,10 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     use crate::deserializer::from_bytes;
+    use crate::serializer::to_bytes;
     use crate::serializer::to_bytes_named;
     use crate::BytesArray;
+    use crate::Error;
     use crate::IntArray;
     use crate::LongArray;
     use crate::{deserializer::from_bytes_unnamed, serializer::to_bytes_unnamed};
@@ -412,6 +414,121 @@ mod test {
         to_bytes_named(&list_compound, "a".to_string(), &mut bytes).unwrap();
         let recreated_struct: TestList = from_bytes(&bytes[..]).unwrap();
         assert_eq!(list_compound, recreated_struct);
+    }
+
+    #[test]
+    fn test_nbt_arrays() {
+        #[derive(Serialize)]
+        struct Tagged {
+            #[serde(with = "LongArray")]
+            l: [i64; 1],
+            #[serde(with = "IntArray")]
+            i: [i32; 1],
+            #[serde(with = "BytesArray")]
+            b: [u8; 1],
+        }
+
+        let value = Tagged {
+            l: [0],
+            i: [0],
+            b: [0],
+        };
+        let expected_bytes = [
+            0x0A, // Component Tag
+            0x00, 0x00, // Empty root name
+            0x0C, // Long Array Type
+            0x00, 0x01, // Key length
+            0x6C, // Key (l)
+            0x00, 0x00, 0x00, 0x01, // Array Length
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Value(s)
+            0x0B, // Int Array Tag
+            0x00, 0x01, // Key length
+            0x69, // Key (i)
+            0x00, 0x00, 0x00, 0x01, // Array Length
+            0x00, 0x00, 0x00, 0x00, // Value(s)
+            0x07, // Byte Array Tag
+            0x00, 0x01, // Key length
+            0x62, // Key (b)
+            0x00, 0x00, 0x00, 0x01, // Array Length
+            0x00, // Value(s)
+            0x00, // End Tag
+        ];
+
+        let mut bytes = Vec::new();
+        to_bytes(&value, &mut bytes).unwrap();
+        assert_eq!(bytes, expected_bytes);
+
+        #[derive(Serialize)]
+        struct NotTagged {
+            l: [i64; 1],
+            i: [i32; 1],
+            b: [u8; 1],
+        }
+
+        let value = NotTagged {
+            l: [0],
+            i: [0],
+            b: [0],
+        };
+        let expected_bytes = [
+            0x0A, // Component Tag
+            0x00, 0x00, // Empty root name
+            0x09, // List Tag
+            0x00, 0x01, // Key length
+            0x6C, // Key (l)
+            0x04, // Array Type
+            0x00, 0x00, 0x00, 0x01, // Array Length
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Value(s)
+            0x09, // List Tag
+            0x00, 0x01, // Key length
+            0x69, // Key (i)
+            0x03, // Array Type
+            0x00, 0x00, 0x00, 0x01, // Array Length
+            0x00, 0x00, 0x00, 0x00, // Value(s)
+            0x09, // List Tag
+            0x00, 0x01, // Key length
+            0x62, // Key (b)
+            0x01, // Array Type
+            0x00, 0x00, 0x00, 0x01, // Array Length
+            0x00, // Value(s)
+            0x00, // End Tag
+        ];
+
+        let mut bytes = Vec::new();
+        to_bytes(&value, &mut bytes).unwrap();
+        assert_eq!(bytes, expected_bytes);
+    }
+
+    #[test]
+    fn test_tuple_fail() {
+        #[derive(Serialize)]
+        struct BadData {
+            x: (i32, i64),
+        }
+
+        let value = BadData { x: (0, 0) };
+        let mut bytes = Vec::new();
+        let err = to_bytes(&value, &mut bytes);
+
+        match err {
+            Err(Error::SerdeError(_)) => (),
+            _ => panic!("Expected to fail serialization!"),
+        };
+    }
+
+    #[test]
+    fn test_tuple_ok() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct GoodData {
+            x: (i32, i32),
+        }
+
+        let value = GoodData { x: (1, 2) };
+        let mut bytes = Vec::new();
+        to_bytes(&value, &mut bytes).unwrap();
+
+        let reconstructed = from_bytes(&bytes[..]).unwrap();
+        assert_eq!(value, reconstructed);
     }
 
     // TODO: More robust tests

@@ -24,7 +24,7 @@ impl WorldInfoReader for AnvilLevelInfo {
         let info = from_bytes::<LevelDat>(compression_reader)
             .map_err(|e| WorldInfoError::DeserializationError(e.to_string()))?;
 
-        // todo check version
+        // TODO: check version
 
         Ok(info.data)
     }
@@ -55,17 +55,7 @@ impl WorldInfoWriter for AnvilLevelInfo {
         // write compressed data into file
         let compression_writer = GzEncoder::new(world_info_file, Compression::best());
         // TODO: Proper error handling
-        to_bytes(&level, compression_writer).unwrap();
-
-        /*
-        let mut raw_nbt = Vec::new();
-        to_bytes(&level, &mut raw_nbt).unwrap();
-        println!("{:02X?}", &raw_nbt);
-
-        let mut encoder = GzEncoder::new(world_info_file, Compression::best());
-        encoder.write_all(&raw_nbt).unwrap();
-        */
-
+        to_bytes(&level, compression_writer).expect("Failed to write level.dat to disk");
         Ok(())
     }
 }

@@ -3,7 +3,7 @@ use dashmap::{
     DashMap,
 };
 use pumpkin_data::chunk::ChunkStatus;
-use pumpkin_nbt::deserializer::from_bytes;
+use pumpkin_nbt::{deserializer::from_bytes, LongArray};
 use pumpkin_util::math::{ceil_log2, vector2::Vector2};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -167,9 +167,9 @@ struct PaletteEntry {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct ChunkHeightmaps {
-    // #[serde(with = "LongArray")]
+    #[serde(with = "LongArray")]
     motion_blocking: Box<[i64]>,
-    // #[serde(with = "LongArray")]
+    #[serde(with = "LongArray")]
     world_surface: Box<[i64]>,
 }
 
@@ -182,7 +182,7 @@ struct ChunkSection {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct ChunkSectionBlockStates {
-    //  #[serde(with = "LongArray")]
+    #[serde(with = "LongArray")]
     data: Option<Box<[i64]>>,
     palette: Vec<PaletteEntry>,
 }
