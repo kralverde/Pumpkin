@@ -169,7 +169,7 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
             return visitor.visit_seq(ListAccess {
                 de: self,
                 list_type,
-                remaining_values,
+                remaining_values: remaining_values as usize,
             });
         }
 
@@ -347,18 +347,22 @@ impl<'de, R: Read> MapAccess<'de> for CompoundAccess<'_, R> {
 
 struct ListAccess<'a, R: Read> {
     de: &'a mut Deserializer<R>,
-    remaining_values: i32,
+    remaining_values: usize,
     list_type: u8,
 }
 
 impl<'de, R: Read> SeqAccess<'de> for ListAccess<'_, R> {
     type Error = Error;
 
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.remaining_values)
+    }
+
     fn next_element_seed<E>(&mut self, seed: E) -> Result<Option<E::Value>>
     where
         E: DeserializeSeed<'de>,
     {
-        if self.remaining_values <= 0 {
+        if self.remaining_values == 0 {
             return Ok(None);
         }
 
