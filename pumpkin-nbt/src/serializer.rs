@@ -5,7 +5,8 @@ use std::io::Write;
 use crate::tag::NbtTag;
 use crate::{
     Error, BYTE_ARRAY_ID, BYTE_ID, COMPOUND_ID, DOUBLE_ID, END_ID, FLOAT_ID, INT_ARRAY_ID, INT_ID,
-    LIST_ID, LONG_ARRAY_ID, LONG_ID, SHORT_ID, STRING_ID,
+    LIST_ID, LONG_ARRAY_ID, LONG_ID, NBT_ARRAY_TAG, NBT_BYTE_ARRAY_TAG, NBT_INT_ARRAY_TAG,
+    NBT_LONG_ARRAY_TAG, SHORT_ID, STRING_ID,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -77,15 +78,10 @@ impl<W: Write> WriteAdaptor<W> {
     }
 }
 
-pub trait SerializeChild {
-    fn serialize_child<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: ser::Serializer;
-}
-
 pub struct Serializer<W: Write> {
     output: WriteAdaptor<W>,
     state: State,
+    handled_root: bool,
 }
 
 // NBT has a different order of things, then most other formats
@@ -97,9 +93,14 @@ enum State {
     Named(String),
     // Used by maps, to check if key is String
     MapKey,
-    FirstListElement { len: i32 },
+    FirstListElement {
+        len: i32,
+    },
     ListElement,
-    Array { name: String, array_type: String },
+    Array {
+        name: String,
+        array_type: &'static str,
+    },
 }
 
 impl<W: Write> Serializer<W> {
@@ -121,23 +122,27 @@ impl<W: Write> Serializer<W> {
                 }
             }
             State::ListElement => {}
-            _ => return Err(Error::SerdeError("Invalid Serializer state!".to_string())),
+            State::Root(root_name) => {
+                if self.handled_root {
+                    return Err(Error::SerdeError(
+                        "Invalid state: already handled root component!".to_string(),
+                    ));
+                } else {
+                    if tag != COMPOUND_ID {
+                        return Err(Error::SerdeError(
+                            "Invalid state: root is not a compound!".to_string(),
+                        ));
+                    }
+                    self.handled_root = true;
+                    self.output.write_u8_be(tag)?;
+                    if let Some(root_name) = root_name {
+                        NbtTag::String(root_name.clone()).serialize_data(&mut self.output)?;
+                    }
+                }
+            }
         };
         Ok(())
     }
-}
-
-/// Serializes struct using Serde Serializer to unnamed (network) NBT (Exclusive to TextComponent)
-pub fn to_bytes_text_component<T>(value: &T, w: impl Write) -> Result<()>
-where
-    T: SerializeChild,
-{
-    let mut serializer = Serializer {
-        output: WriteAdaptor { writer: w },
-        state: State::Root(None),
-    };
-    value.serialize_child(&mut serializer)?;
-    Ok(())
 }
 
 /// Serializes struct using Serde Serializer to unnamed (network) NBT
@@ -148,6 +153,7 @@ where
     let mut serializer = Serializer {
         output: WriteAdaptor { writer: w },
         state: State::Root(None),
+        handled_root: false,
     };
     value.serialize(&mut serializer)?;
     Ok(())
@@ -161,6 +167,7 @@ where
     let mut serializer = Serializer {
         output: WriteAdaptor { writer: w },
         state: State::Root(Some(name)),
+        handled_root: false,
     };
     value.serialize(&mut serializer)?;
     Ok(())
@@ -264,11 +271,12 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
     fn serialize_str(self, v: &str) -> Result<()> {
         self.parse_state(STRING_ID)?;
 
-        NbtTag::String(v.to_string()).serialize_data(&mut self.output)?;
-
         if self.state == State::MapKey {
             self.state = State::Named(v.to_string());
+        } else {
+            NbtTag::String(v.to_string()).serialize_data(&mut self.output)?;
         }
+
         Ok(())
     }
 
@@ -333,25 +341,20 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
     where
         T: ?Sized + Serialize,
     {
-        if name != "nbt_array" {
-            return Err(Error::SerdeError(
-                "new_type variant supports only nbt_array".to_string(),
-            ));
+        if name == NBT_ARRAY_TAG {
+            let name = match self.state {
+                State::Named(ref name) => name.clone(),
+                _ => return Err(Error::SerdeError("Invalid Serializer state!".to_string())),
+            };
+
+            self.state = State::Array {
+                name,
+                array_type: variant,
+            };
+        } else {
+            return Err(Error::UnsupportedType("newtype variant".to_string()));
         }
-
-        let name = match self.state {
-            State::Named(ref name) => name.clone(),
-            _ => return Err(Error::SerdeError("Invalid Serializer state!".to_string())),
-        };
-
-        self.state = State::Array {
-            name,
-            array_type: variant.to_string(),
-        };
-
-        value.serialize(self)?;
-
-        Ok(())
+        value.serialize(self)
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
@@ -366,18 +369,18 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
 
         match &mut self.state {
             State::Array { array_type, .. } => {
-                let id = match array_type.as_str() {
-                    "byte" => BYTE_ARRAY_ID,
-                    "int" => INT_ARRAY_ID,
-                    "long" => LONG_ARRAY_ID,
+                let id = match *array_type {
+                    NBT_BYTE_ARRAY_TAG => BYTE_ARRAY_ID,
+                    NBT_INT_ARRAY_TAG => INT_ARRAY_ID,
+                    NBT_LONG_ARRAY_TAG => LONG_ARRAY_ID,
                     _ => {
                         return Err(Error::SerdeError(
                             "Array supports only byte, int, long".to_string(),
                         ))
                     }
                 };
-                self.parse_state(id)?;
 
+                self.parse_state(id)?;
                 self.output.write_i32_be(len as i32)?;
                 self.state = State::ListElement;
             }
@@ -419,27 +422,12 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        if let State::FirstListElement { .. } = self.state {
-            self.parse_state(COMPOUND_ID)?;
-        } else if let State::ListElement = self.state {
-            return Ok(self);
-        } else {
-            self.output.write_u8_be(COMPOUND_ID)?;
-        }
+        self.parse_state(COMPOUND_ID)?;
         Ok(self)
     }
 
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
-        match &mut self.state {
-            State::Root(root_name) => {
-                self.output.write_u8_be(COMPOUND_ID)?;
-                if let Some(root_name) = root_name {
-                    NbtTag::String(root_name.clone()).serialize_data(&mut self.output)?;
-                }
-            }
-            _ => self.parse_state(COMPOUND_ID)?,
-        }
-
+        self.parse_state(COMPOUND_ID)?;
         Ok(self)
     }
 

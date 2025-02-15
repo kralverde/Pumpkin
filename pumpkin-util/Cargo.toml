@@ -14,3 +14,6 @@ num-traits = "0.2"
 
 colored = "3.0"
 md5 = "0.7"
+
+[dev-dependencies]
+fastnbt = { git = "https://github.com/owengage/fastnbt.git" }

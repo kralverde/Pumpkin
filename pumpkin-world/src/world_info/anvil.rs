@@ -70,7 +70,7 @@ impl WorldInfoWriter for AnvilLevelInfo {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct LevelDat {
     // This tag contains all the level data.
     #[serde(rename = "Data")]
@@ -80,11 +80,18 @@ pub struct LevelDat {
 #[cfg(test)]
 mod test {
 
+    use std::sync::LazyLock;
+
+    use flate2::read::GzDecoder;
+    use pumpkin_nbt::{deserializer::from_bytes, serializer::to_bytes};
     use temp_dir::TempDir;
 
-    use crate::{level::LevelFolder, world_info::LevelData};
+    use crate::{
+        level::LevelFolder,
+        world_info::{DataPacks, LevelData, WorldGenSettings, WorldVersion},
+    };
 
-    use super::{AnvilLevelInfo, WorldInfoReader, WorldInfoWriter};
+    use super::{AnvilLevelInfo, LevelDat, WorldInfoReader, WorldInfoWriter};
 
     #[test]
     fn test_perserve_level_dat_seed() {
@@ -106,5 +113,71 @@ mod test {
         let data = AnvilLevelInfo.read_world_info(&level_folder).unwrap();
 
         assert_eq!(data.world_gen_settings.seed, seed);
+    }
+
+    static LEVEL_DAT: LazyLock<LevelDat> = LazyLock::new(|| LevelDat {
+        data: LevelData {
+            allow_commands: true,
+            border_center_x: 0.0,
+            border_center_z: 0.0,
+            border_damage_per_block: 0.2,
+            border_size: 59_999_968.0,
+            border_safe_zone: 5.0,
+            border_size_lerp_target: 59_999_968.0,
+            border_size_lerp_time: 0,
+            border_warning_blocks: 5.0,
+            border_warning_time: 15.0,
+            clear_weather_time: 0,
+            data_packs: DataPacks {
+                disabled: vec![
+                    "minecart_improvements".to_string(),
+                    "redstone_experiments".to_string(),
+                    "trade_rebalance".to_string(),
+                ],
+                enabled: vec!["vanilla".to_string()],
+            },
+            data_version: 4189,
+            day_time: 1727,
+            difficulty: 2,
+            difficulty_locked: false,
+            world_gen_settings: WorldGenSettings { seed: 1 },
+            last_played: 1733847709327,
+            level_name: "New World".to_string(),
+            spawn_x: 160,
+            spawn_y: 70,
+            spawn_z: 160,
+            spawn_angle: 0.0,
+            nbt_version: 19133,
+            version: WorldVersion {
+                name: "1.21.4".to_string(),
+                id: 4189,
+                snapshot: false,
+                series: "main".to_string(),
+            },
+        },
+    });
+
+    #[test]
+    fn test_deserialize_level_dat() {
+        let raw_compressed_nbt = include_bytes!("../../assets/level.dat");
+        assert!(!raw_compressed_nbt.is_empty());
+
+        let decoder = GzDecoder::new(&raw_compressed_nbt[..]);
+        let level_dat: LevelDat = from_bytes(decoder).expect("Failed to decode from file");
+
+        assert_eq!(level_dat, *LEVEL_DAT);
+    }
+
+    #[test]
+    fn test_serialize_level_dat() {
+        let mut serialized = Vec::new();
+        to_bytes(&*LEVEL_DAT, &mut serialized).expect("Failed to encode to bytes");
+
+        assert!(!serialized.is_empty());
+
+        let level_dat_again: LevelDat =
+            from_bytes(&serialized[..]).expect("Failed to decode from bytes");
+
+        assert_eq!(level_dat_again, *LEVEL_DAT);
     }
 }

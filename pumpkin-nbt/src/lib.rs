@@ -184,6 +184,11 @@ pub fn get_nbt_string<R: Read>(bytes: &mut ReadAdaptor<R>) -> Result<String, Err
     Ok(string.to_string())
 }
 
+pub(crate) const NBT_ARRAY_TAG: &str = "__nbt_array";
+pub(crate) const NBT_INT_ARRAY_TAG: &str = "__nbt_int_array";
+pub(crate) const NBT_LONG_ARRAY_TAG: &str = "__nbt_long_array";
+pub(crate) const NBT_BYTE_ARRAY_TAG: &str = "__nbt_byte_array";
+
 macro_rules! impl_array {
     ($name:ident, $variant:expr) => {
         pub struct $name;
@@ -194,7 +199,7 @@ macro_rules! impl_array {
                 T: serde::Serialize,
                 S: serde::Serializer,
             {
-                serializer.serialize_newtype_variant("nbt_array", 0, $variant, &input)
+                serializer.serialize_newtype_variant(NBT_ARRAY_TAG, 0, $variant, &input)
             }
 
             pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
@@ -208,21 +213,17 @@ macro_rules! impl_array {
     };
 }
 
-impl_array!(IntArray, "int");
-impl_array!(LongArray, "long");
-impl_array!(BytesArray, "byte");
+impl_array!(IntArray, NBT_INT_ARRAY_TAG);
+impl_array!(LongArray, NBT_LONG_ARRAY_TAG);
+impl_array!(BytesArray, NBT_BYTE_ARRAY_TAG);
 
 #[cfg(test)]
 mod test {
-    use std::sync::LazyLock;
 
-    use flate2::read::GzDecoder;
     use serde::{Deserialize, Serialize};
 
-    use pumpkin_world::world_info::{DataPacks, LevelData, WorldGenSettings, WorldVersion};
-
     use crate::deserializer::from_bytes;
-    use crate::serializer::to_bytes;
+    use crate::serializer::to_bytes_named;
     use crate::BytesArray;
     use crate::IntArray;
     use crate::LongArray;
@@ -281,78 +282,137 @@ mod test {
         assert_eq!(test, recreated_struct);
     }
 
-    #[derive(Serialize, Deserialize, PartialEq, Debug)]
-    struct LevelDat {
-        // This tag contains all the level data.
-        #[serde(rename = "Data")]
-        data: LevelData,
+    #[test]
+    fn test_simple_ser_de_named() {
+        let name = String::from("Test");
+        let test = Test {
+            byte: 123,
+            short: 1342,
+            int: 4313,
+            long: 34,
+            float: 1.00,
+            string: "Hello test".to_string(),
+        };
+
+        let mut bytes = Vec::new();
+        to_bytes_named(&test, name, &mut bytes).unwrap();
+        let recreated_struct: Test = from_bytes(&bytes[..]).unwrap();
+
+        assert_eq!(test, recreated_struct);
     }
 
-    static LEVEL_DAT: LazyLock<LevelDat> = LazyLock::new(|| LevelDat {
-        data: LevelData {
-            allow_commands: true,
-            border_center_x: 0.0,
-            border_center_z: 0.0,
-            border_damage_per_block: 0.2,
-            border_size: 59_999_968.0,
-            border_safe_zone: 5.0,
-            border_size_lerp_target: 59_999_968.0,
-            border_size_lerp_time: 0,
-            border_warning_blocks: 5.0,
-            border_warning_time: 15.0,
-            clear_weather_time: 0,
-            data_packs: DataPacks {
-                disabled: vec![
-                    "minecart_improvements".to_string(),
-                    "redstone_experiments".to_string(),
-                    "trade_rebalance".to_string(),
-                ],
-                enabled: vec!["vanilla".to_string()],
+    #[test]
+    fn test_simple_ser_de_array_named() {
+        let name = String::from("Test");
+        let test = TestArray {
+            byte_array: vec![0, 3, 2],
+            int_array: vec![13, 1321, 2],
+            long_array: vec![1, 0, 200301, 1],
+        };
+
+        let mut bytes = Vec::new();
+        to_bytes_named(&test, name, &mut bytes).unwrap();
+        let recreated_struct: TestArray = from_bytes(&bytes[..]).unwrap();
+
+        assert_eq!(test, recreated_struct);
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct Egg {
+        food: String,
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct Breakfast {
+        food: Egg,
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct TestList {
+        option: Option<Egg>,
+        nested_compound: Breakfast,
+        compounds: Vec<Test>,
+        list_string: Vec<String>,
+        empty: Vec<Test>,
+    }
+
+    #[test]
+    fn test_list() {
+        let test1 = Test {
+            byte: 123,
+            short: 1342,
+            int: 4313,
+            long: 34,
+            float: 1.00,
+            string: "Hello test".to_string(),
+        };
+
+        let test2 = Test {
+            byte: 13,
+            short: 342,
+            int: -4313,
+            long: -132334,
+            float: -69.420,
+            string: "Hello compounds".to_string(),
+        };
+
+        let list_compound = TestList {
+            option: Some(Egg {
+                food: "Skibid".to_string(),
+            }),
+            nested_compound: Breakfast {
+                food: Egg {
+                    food: "Over easy".to_string(),
+                },
             },
-            data_version: 4189,
-            day_time: 1727,
-            difficulty: 2,
-            difficulty_locked: false,
-            world_gen_settings: WorldGenSettings { seed: 1 },
-            last_played: 1733847709327,
-            level_name: "New World".to_string(),
-            spawn_x: 160,
-            spawn_y: 70,
-            spawn_z: 160,
-            spawn_angle: 0.0,
-            nbt_version: 19133,
-            version: WorldVersion {
-                name: "1.21.4".to_string(),
-                id: 4189,
-                snapshot: false,
-                series: "main".to_string(),
+            compounds: vec![test1, test2],
+            list_string: vec!["".to_string(), "abcbcbcbbc".to_string()],
+            empty: vec![],
+        };
+
+        let mut bytes = Vec::new();
+        to_bytes_unnamed(&list_compound, &mut bytes).unwrap();
+        let recreated_struct: TestList = from_bytes_unnamed(&bytes[..]).unwrap();
+        assert_eq!(list_compound, recreated_struct);
+    }
+
+    #[test]
+    fn test_list_named() {
+        let test1 = Test {
+            byte: 123,
+            short: 1342,
+            int: 4313,
+            long: 34,
+            float: 1.00,
+            string: "Hello test".to_string(),
+        };
+
+        let test2 = Test {
+            byte: 13,
+            short: 342,
+            int: -4313,
+            long: -132334,
+            float: -69.420,
+            string: "Hello compounds".to_string(),
+        };
+
+        let list_compound = TestList {
+            option: None,
+            nested_compound: Breakfast {
+                food: Egg {
+                    food: "Over easy".to_string(),
+                },
             },
-        },
-    });
+            compounds: vec![test1, test2],
+            list_string: vec!["".to_string(), "abcbcbcbbc".to_string()],
+            empty: vec![],
+        };
+
+        let mut bytes = Vec::new();
+        to_bytes_named(&list_compound, "a".to_string(), &mut bytes).unwrap();
+        let recreated_struct: TestList = from_bytes(&bytes[..]).unwrap();
+        assert_eq!(list_compound, recreated_struct);
+    }
 
     // TODO: More robust tests
-
-    #[test]
-    fn test_deserialize_level_dat() {
-        let raw_compressed_nbt = include_bytes!("../assets/level.dat");
-        assert!(!raw_compressed_nbt.is_empty());
-
-        let decoder = GzDecoder::new(&raw_compressed_nbt[..]);
-        let level_dat: LevelDat = from_bytes(decoder).expect("Failed to decode from file");
-
-        assert_eq!(level_dat, *LEVEL_DAT);
-    }
-
-    #[test]
-    fn test_serialize_level_dat() {
-        let mut serialized = Vec::new();
-        to_bytes(&*LEVEL_DAT, &mut serialized).expect("Failed to encode to bytes");
-
-        assert!(!serialized.is_empty());
-
-        let level_dat_again: LevelDat =
-            from_bytes(&serialized[..]).expect("Failed to decode from bytes");
-
-        assert_eq!(level_dat_again, *LEVEL_DAT);
-    }
 }

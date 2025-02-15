@@ -15,8 +15,8 @@ pub mod hover;
 pub mod style;
 
 /// Represents a Text component
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
 pub struct TextComponent(pub TextComponentBase);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -153,28 +153,10 @@ impl TextComponent {
     }
 }
 
-impl serde::Serialize for TextComponent {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_bytes(&self.encode())
-    }
-}
-
-impl pumpkin_nbt::serializer::SerializeChild for TextComponent {
-    fn serialize_child<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
 impl TextComponent {
     pub fn encode(&self) -> Box<[u8]> {
         let mut buf = Vec::new();
-        pumpkin_nbt::serializer::to_bytes_text_component(self, &mut buf).unwrap();
+        pumpkin_nbt::serializer::to_bytes_unnamed(self, &mut buf).unwrap();
         buf.into()
     }
 
@@ -275,4 +257,32 @@ pub enum TextContent {
     /// A keybind identifier
     /// https://minecraft.wiki/w/Controls#Configurable_controls
     Keybind { keybind: Cow<'static, str> },
+}
+
+#[cfg(test)]
+mod test {
+    use fastnbt::SerOpts;
+    use pumpkin_nbt::serializer::to_bytes_unnamed;
+
+    use crate::text::{color::NamedColor, TextComponent};
+
+    #[test]
+    fn test_serialize_text_component() {
+        let msg_comp = TextComponent::translate(
+            "multiplayer.player.joined",
+            [TextComponent::text("NAME".to_string())].into(),
+        )
+        .color_named(NamedColor::Yellow);
+
+        let mut bytes = Vec::new();
+        to_bytes_unnamed(&msg_comp, &mut bytes).unwrap();
+
+        let bytes_known_good = fastnbt::to_bytes_with_opts(
+            &msg_comp.0,
+            SerOpts::new().serialize_root_compound_name(false),
+        )
+        .unwrap();
+
+        assert_eq!(bytes, bytes_known_good);
+    }
 }
