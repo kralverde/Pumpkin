@@ -104,6 +104,7 @@ impl<R: Read> ReadAdaptor<R> {
 pub struct Deserializer<R: Read> {
     input: ReadAdaptor<R>,
     tag_to_deserialize: Option<u8>,
+    // Yes, this breaks with recursion. Just an attempt at a sanity check
     in_list: bool,
     is_named: bool,
 }
