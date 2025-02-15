@@ -94,7 +94,7 @@ mod test {
     use super::{AnvilLevelInfo, LevelDat, WorldInfoReader, WorldInfoWriter};
 
     #[test]
-    fn test_perserve_level_dat_seed() {
+    fn test_preserve_level_dat_seed() {
         let seed = 1337;
 
         let mut data = LevelData::default();

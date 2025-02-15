@@ -84,6 +84,16 @@ pub struct Serializer<W: Write> {
     handled_root: bool,
 }
 
+impl<W: Write> Serializer<W> {
+    pub fn new(output: W, name: Option<String>) -> Self {
+        Self {
+            output: WriteAdaptor::new(output),
+            state: State::Root(name),
+            handled_root: false,
+        }
+    }
+}
+
 // NBT has a different order of things, then most other formats
 // So I use State, to keep what serializer has to do, and some information like field name
 #[derive(Clone, Debug, PartialEq)]
@@ -129,9 +139,10 @@ impl<W: Write> Serializer<W> {
                     ));
                 } else {
                     if tag != COMPOUND_ID {
-                        return Err(Error::SerdeError(
-                            "Invalid state: root is not a compound!".to_string(),
-                        ));
+                        return Err(Error::SerdeError(format!(
+                            "Invalid state: root is not a compound! ({})",
+                            tag
+                        )));
                     }
                     self.handled_root = true;
                     self.output.write_u8_be(tag)?;

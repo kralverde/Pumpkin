@@ -16,7 +16,6 @@ pub mod style;
 
 /// Represents a Text component
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(transparent)]
 pub struct TextComponent(pub TextComponentBase);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -156,8 +155,11 @@ impl TextComponent {
 impl TextComponent {
     pub fn encode(&self) -> Box<[u8]> {
         let mut buf = Vec::new();
-        pumpkin_nbt::serializer::to_bytes_unnamed(self, &mut buf).unwrap();
-        buf.into()
+        // TODO: Properly handle errors
+        pumpkin_nbt::serializer::to_bytes_unnamed(&self.0, &mut buf)
+            .expect("Failed to serialize text component NBT for encode");
+
+        buf.into_boxed_slice()
     }
 
     pub fn color(mut self, color: Color) -> Self {
@@ -275,7 +277,7 @@ mod test {
         .color_named(NamedColor::Yellow);
 
         let mut bytes = Vec::new();
-        to_bytes_unnamed(&msg_comp, &mut bytes).unwrap();
+        to_bytes_unnamed(&msg_comp.0, &mut bytes).unwrap();
 
         let bytes_known_good = fastnbt::to_bytes_with_opts(
             &msg_comp.0,
