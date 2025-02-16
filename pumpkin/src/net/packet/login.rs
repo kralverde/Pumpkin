@@ -356,7 +356,7 @@ impl Client {
         // send tags
         self.send_packet(&CUpdateTags::new(&[
             pumpkin_data::tag::RegistryKey::Block,
-            //pumpkin_data::tag::RegistryKey::Fluid,
+            pumpkin_data::tag::RegistryKey::Fluid,
         ]))
         .await;
 

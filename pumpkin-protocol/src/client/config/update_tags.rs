@@ -1,5 +1,6 @@
 use bytes::BufMut;
 use pumpkin_data::{
+    fluid::Fluid,
     packet::clientbound::CONFIG_UPDATE_TAGS,
     tag::{RegistryKey, TAGS},
 };
@@ -36,11 +37,14 @@ impl ClientPacket for CUpdateTags<'_> {
                 p.put_list(values, |p, v| {
                     if let Some(string_id) = v {
                         let id = match registry_key {
-                            RegistryKey::Block => registry::get_block(string_id).unwrap().id,
+                            RegistryKey::Block => registry::get_block(string_id).unwrap().id as i32,
+                            RegistryKey::Fluid => {
+                                Fluid::ident_to_fluid_id(string_id).unwrap() as i32
+                            }
                             _ => unimplemented!(),
                         };
 
-                        p.put_var_int(&VarInt::from(id as i32));
+                        p.put_var_int(&VarInt::from(id));
                     }
                 });
             }
