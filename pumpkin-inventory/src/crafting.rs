@@ -18,7 +18,7 @@ fn check_ingredient_type(ingredient_type: &TagType, input: ItemStack) -> bool {
             false
             // items.iter().any(|tag| check_ingredient_type(&tag, input))
         }
-        TagType::Block(item) => Item::from_name(item).is_some_and(|item| item.id == input.item.id),
+        TagType::Item(item) => Item::from_name(item).is_some_and(|item| item.id == input.item.id),
     }
 }
 

@@ -54,14 +54,14 @@ pub fn get_tag_values(tag_category: RegistryKey, tag: &str) -> Option<&Vec<Optio
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TagType {
-    Block(String),
+    Item(String),
     Tag(String),
 }
 
 impl TagType {
     pub fn serialize(&self) -> String {
         match self {
-            TagType::Block(name) => name.clone(),
+            TagType::Item(name) => name.clone(),
             TagType::Tag(tag) => format!("#{}", tag),
         }
     }
@@ -79,7 +79,7 @@ impl Visitor<'_> for TagVisitor {
     {
         match v.strip_prefix('#') {
             Some(v) => Ok(TagType::Tag(v.to_string())),
-            None => Ok(TagType::Block(v.to_string())),
+            None => Ok(TagType::Item(v.to_string())),
         }
     }
 }
