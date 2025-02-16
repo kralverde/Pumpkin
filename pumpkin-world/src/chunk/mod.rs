@@ -161,7 +161,7 @@ pub enum Subchunk {
 struct PaletteEntry {
     // block name
     name: String,
-    properties: Option<HashMap<String, String>>,
+    properties: Option<HashMap<String, Vec<String>>>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
