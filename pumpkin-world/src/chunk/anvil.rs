@@ -567,4 +567,47 @@ mod tests {
 
         println!("Checked chunks successfully");
     }
+
+    // TODO
+    /*
+    #[test]
+    fn test_load_java_chunk() {
+        let temp_dir = TempDir::new().unwrap();
+        let level_folder = LevelFolder {
+            root_folder: temp_dir.path().to_path_buf(),
+            region_folder: temp_dir.path().join("region"),
+        };
+
+        fs::create_dir(&level_folder.region_folder).unwrap();
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join(file!())
+                .parent()
+                .unwrap()
+                .join("../../assets/r.0.0.mca"),
+            level_folder.region_folder.join("r.0.0.mca"),
+        )
+        .unwrap();
+
+        let mut actually_tested = false;
+        for x in 0..(1 << 5) {
+            for z in 0..(1 << 5) {
+                let result = AnvilChunkFormat {}.read_chunk(&level_folder, &Vector2 { x, z });
+
+                match result {
+                    Ok(_) => actually_tested = true,
+                    Err(ChunkReadingError::ParsingError(ChunkParsingError::ChunkNotGenerated)) => {}
+                    Err(ChunkReadingError::ChunkNotExist) => {}
+                    Err(e) => panic!("{:?}", e),
+                }
+
+                println!("=========== OK ===========");
+            }
+        }
+
+        assert!(actually_tested);
+    }
+    */
 }

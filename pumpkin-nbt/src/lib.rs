@@ -8,7 +8,6 @@ use bytes::Bytes;
 use compound::NbtCompound;
 use deserializer::ReadAdaptor;
 use serde::{de, ser};
-use serde::{Deserialize, Deserializer};
 use serializer::WriteAdaptor;
 use tag::NbtTag;
 use thiserror::Error;
@@ -191,45 +190,32 @@ pub(crate) const NBT_BYTE_ARRAY_TAG: &str = "__nbt_byte_array";
 
 macro_rules! impl_array {
     ($name:ident, $variant:expr) => {
-        pub struct $name;
-
-        impl $name {
-            pub fn serialize<T, S>(input: T, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                T: serde::Serialize,
-                S: serde::Serializer,
-            {
-                serializer.serialize_newtype_variant(NBT_ARRAY_TAG, 0, $variant, &input)
-            }
-
-            pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
-            where
-                T: Deserialize<'de>,
-                D: Deserializer<'de>,
-            {
-                T::deserialize(deserializer)
-            }
+        pub fn $name<T, S>(input: T, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            T: serde::Serialize,
+            S: serde::Serializer,
+        {
+            serializer.serialize_newtype_variant(NBT_ARRAY_TAG, 0, $variant, &input)
         }
     };
 }
 
-impl_array!(IntArray, NBT_INT_ARRAY_TAG);
-impl_array!(LongArray, NBT_LONG_ARRAY_TAG);
-impl_array!(BytesArray, NBT_BYTE_ARRAY_TAG);
+impl_array!(nbt_int_array, NBT_INT_ARRAY_TAG);
+impl_array!(nbt_long_array, NBT_LONG_ARRAY_TAG);
+impl_array!(nbt_byte_array, NBT_BYTE_ARRAY_TAG);
 
 #[cfg(test)]
 mod test {
 
-    use serde::{Deserialize, Serialize};
-
     use crate::deserializer::from_bytes;
+    use crate::nbt_byte_array;
+    use crate::nbt_int_array;
+    use crate::nbt_long_array;
     use crate::serializer::to_bytes;
     use crate::serializer::to_bytes_named;
-    use crate::BytesArray;
     use crate::Error;
-    use crate::IntArray;
-    use crate::LongArray;
     use crate::{deserializer::from_bytes_unnamed, serializer::to_bytes_unnamed};
+    use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
     struct Test {
@@ -261,11 +247,11 @@ mod test {
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
     struct TestArray {
-        #[serde(with = "BytesArray")]
+        #[serde(serialize_with = "nbt_byte_array")]
         byte_array: Vec<u8>,
-        #[serde(with = "IntArray")]
+        #[serde(serialize_with = "nbt_int_array")]
         int_array: Vec<i32>,
-        #[serde(with = "LongArray")]
+        #[serde(serialize_with = "nbt_long_array")]
         long_array: Vec<i64>,
     }
 
@@ -420,11 +406,11 @@ mod test {
     fn test_nbt_arrays() {
         #[derive(Serialize)]
         struct Tagged {
-            #[serde(with = "LongArray")]
+            #[serde(serialize_with = "nbt_long_array")]
             l: [i64; 1],
-            #[serde(with = "IntArray")]
+            #[serde(serialize_with = "nbt_int_array")]
             i: [i32; 1],
-            #[serde(with = "BytesArray")]
+            #[serde(serialize_with = "nbt_byte_array")]
             b: [u8; 1],
         }
 

@@ -17,6 +17,40 @@ impl NbtCompound {
         }
     }
 
+    pub fn skip_content<R>(reader: &mut ReadAdaptor<R>) -> Result<(), Error>
+    where
+        R: Read,
+    {
+        loop {
+            let tag_id = match reader.get_u8_be() {
+                Ok(id) => id,
+                Err(err) => match err {
+                    Error::Incomplete(err) => match err.kind() {
+                        ErrorKind::UnexpectedEof => {
+                            break;
+                        }
+                        _ => {
+                            return Err(Error::Incomplete(err));
+                        }
+                    },
+                    _ => {
+                        return Err(err);
+                    }
+                },
+            };
+            if tag_id == END_ID {
+                break;
+            }
+
+            let len = reader.get_u16_be()?;
+            reader.skip_bytes(len as u64)?;
+
+            NbtTag::skip_data(reader, tag_id)?;
+        }
+
+        Ok(())
+    }
+
     pub fn deserialize_content<R>(reader: &mut ReadAdaptor<R>) -> Result<NbtCompound, Error>
     where
         R: Read,
@@ -45,12 +79,8 @@ impl NbtCompound {
             }
 
             let name = get_nbt_string(reader)?;
-
-            if let Ok(tag) = NbtTag::deserialize_data(reader, tag_id) {
-                compound.put(&name, tag);
-            } else {
-                break;
-            }
+            let tag = NbtTag::deserialize_data(reader, tag_id)?;
+            compound.put(&name, tag);
         }
 
         Ok(compound)

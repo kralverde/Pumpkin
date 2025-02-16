@@ -3,7 +3,7 @@ use dashmap::{
     DashMap,
 };
 use pumpkin_data::chunk::ChunkStatus;
-use pumpkin_nbt::{deserializer::from_bytes, LongArray};
+use pumpkin_nbt::{deserializer::from_bytes, nbt_long_array};
 use pumpkin_util::math::{ceil_log2, vector2::Vector2};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -161,15 +161,16 @@ pub enum Subchunk {
 struct PaletteEntry {
     // block name
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct ChunkHeightmaps {
-    #[serde(with = "LongArray")]
+    #[serde(serialize_with = "nbt_long_array")]
     motion_blocking: Box<[i64]>,
-    #[serde(with = "LongArray")]
+    #[serde(serialize_with = "nbt_long_array")]
     world_surface: Box<[i64]>,
 }
 
@@ -177,12 +178,16 @@ pub struct ChunkHeightmaps {
 struct ChunkSection {
     #[serde(rename = "Y")]
     y: i8,
+    #[serde(skip_serializing_if = "Option::is_none")]
     block_states: Option<ChunkSectionBlockStates>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct ChunkSectionBlockStates {
-    #[serde(with = "LongArray")]
+    #[serde(
+        serialize_with = "nbt_long_array",
+        skip_serializing_if = "Option::is_none"
+    )]
     data: Option<Box<[i64]>>,
     palette: Vec<PaletteEntry>,
 }

@@ -409,7 +409,7 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
                 self.state = State::FirstListElement { len: len as i32 };
                 if len == 0 {
                     // If we have no elements, FirstListElement state will never be invoked; so
-                    // write the list type and length here.
+                    // write the (unknown) list type and length here.
                     self.output.write_u8_be(END_ID)?;
                     self.output.write_i32_be(0)?;
                 }

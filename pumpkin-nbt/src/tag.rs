@@ -120,6 +120,63 @@ impl NbtTag {
         Self::deserialize_data(reader, tag_id)
     }
 
+    pub fn skip_data<R>(reader: &mut ReadAdaptor<R>, tag_id: u8) -> Result<(), Error>
+    where
+        R: Read,
+    {
+        match tag_id {
+            END_ID => Ok(()),
+            BYTE_ID => reader.skip_bytes(1),
+            SHORT_ID => reader.skip_bytes(2),
+            INT_ID => reader.skip_bytes(4),
+            LONG_ID => reader.skip_bytes(8),
+            FLOAT_ID => reader.skip_bytes(4),
+            DOUBLE_ID => reader.skip_bytes(8),
+            BYTE_ARRAY_ID => {
+                let len = reader.get_i32_be()?;
+                if len < 0 {
+                    return Err(Error::NegativeLength(len));
+                }
+                reader.skip_bytes(len as u64)
+            }
+            STRING_ID => {
+                let len = reader.get_u16_be()?;
+                reader.skip_bytes(len as u64)
+            }
+            LIST_ID => {
+                let tag_type_id = reader.get_u8_be()?;
+                let len = reader.get_i32_be()?;
+                if len < 0 {
+                    return Err(Error::NegativeLength(len));
+                }
+
+                for _ in 0..len {
+                    Self::skip_data(reader, tag_type_id)?;
+                }
+
+                Ok(())
+            }
+            COMPOUND_ID => NbtCompound::skip_content(reader),
+            INT_ARRAY_ID => {
+                let len = reader.get_i32_be()?;
+                if len < 0 {
+                    return Err(Error::NegativeLength(len));
+                }
+
+                reader.skip_bytes(len as u64 * 4)
+            }
+            LONG_ARRAY_ID => {
+                let len = reader.get_i32_be()?;
+                if len < 0 {
+                    return Err(Error::NegativeLength(len));
+                }
+
+                reader.skip_bytes(len as u64 * 8)
+            }
+            _ => Err(Error::UnknownTagId(tag_id)),
+        }
+    }
+
     pub fn deserialize_data<R>(reader: &mut ReadAdaptor<R>, tag_id: u8) -> Result<NbtTag, Error>
     where
         R: Read,
@@ -151,8 +208,12 @@ impl NbtTag {
                 Ok(NbtTag::Double(double))
             }
             BYTE_ARRAY_ID => {
-                let len = reader.get_i32_be()? as usize;
-                let byte_array = reader.read_boxed_slice(len)?;
+                let len = reader.get_i32_be()?;
+                if len < 0 {
+                    return Err(Error::NegativeLength(len));
+                }
+
+                let byte_array = reader.read_boxed_slice(len as usize)?;
                 Ok(NbtTag::ByteArray(byte_array))
             }
             STRING_ID => Ok(NbtTag::String(get_nbt_string(reader)?)),
