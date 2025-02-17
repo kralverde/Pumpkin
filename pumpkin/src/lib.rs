@@ -63,7 +63,7 @@ pub static LOGGER_IMPL: LazyLock<Option<(Box<dyn Log>, LevelFilter)>> = LazyLock
                 config.set_level_color(level, None);
             }
         } else if ADVANCED_CONFIG.commands.use_console {
-            // We are techically logging to a file like object
+            // We are technically logging to a file like object
             config.set_write_log_enable_colors(true);
         }
 
