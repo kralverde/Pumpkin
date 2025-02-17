@@ -376,7 +376,7 @@ fn setup_console(rl: Readline, server: Arc<Server>) -> JoinHandle<Readline> {
             }
         }
         log::debug!("Stopped console commands task");
-        rl.flush();
+        let _ = rl.flush();
         rl
     })
 }
