@@ -4,8 +4,14 @@ use async_trait::async_trait;
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{damage::DamageType, sound::Sound};
 use pumpkin_nbt::tag::NbtTag;
-use pumpkin_protocol::client::play::{CDamageEvent, CEntityStatus, MetaDataType, Metadata};
+use pumpkin_protocol::{
+    client::play::{
+        CDamageEvent, CEntityStatus, CSetEquipment, EquipmentSlot, MetaDataType, Metadata,
+    },
+    codec::slot::Slot,
+};
 use pumpkin_util::math::vector3::Vector3;
+use pumpkin_world::item::ItemStack;
 
 use super::{Entity, EntityId, NBTStorage};
 
@@ -49,6 +55,19 @@ impl LivingEntity {
         }
     }
 
+    pub async fn send_equipment_changes(&self, equipment: &[(EquipmentSlot, ItemStack)]) {
+        let equipment: Vec<(EquipmentSlot, Slot)> = equipment
+            .iter()
+            .map(|(slot, stack)| (*slot, Slot::from(stack)))
+            .collect();
+        self.entity
+            .world
+            .read()
+            .await
+            .broadcast_packet_all(&CSetEquipment::new(self.entity_id().into(), equipment))
+            .await;
+    }
+
     pub fn set_pos(&self, position: Vector3<f64>) {
         self.last_pos.store(self.entity.pos.load());
         self.entity.set_pos(position);
@@ -87,6 +106,8 @@ impl LivingEntity {
 
         self.entity
             .world
+            .read()
+            .await
             .broadcast_packet_all(&CDamageEvent::new(
                 self.entity.entity_id.into(),
                 damage_type.id.into(),
@@ -181,11 +202,15 @@ impl LivingEntity {
         // Spawns death smoke particles
         self.entity
             .world
+            .read()
+            .await
             .broadcast_packet_all(&CEntityStatus::new(self.entity.entity_id, 60))
             .await;
         // Plays the death sound and death animation
         self.entity
             .world
+            .read()
+            .await
             .broadcast_packet_all(&CEntityStatus::new(self.entity.entity_id, 3))
             .await;
     }

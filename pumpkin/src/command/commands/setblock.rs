@@ -42,7 +42,10 @@ impl CommandExecutor for SetblockExecutor {
         let pos = BlockPosArgumentConsumer::find_arg(args, ARG_BLOCK_POS)?;
         let mode = self.0;
         // TODO: allow console to use the command (seed sender.world)
-        let world = sender.world().ok_or(CommandError::InvalidRequirement)?;
+        let world = sender
+            .world()
+            .await
+            .ok_or(CommandError::InvalidRequirement)?;
 
         let success = match mode {
             Mode::Destroy => {
@@ -72,11 +75,10 @@ impl CommandExecutor for SetblockExecutor {
                         TextComponent::text(pos.0.x.to_string()),
                         TextComponent::text(pos.0.y.to_string()),
                         TextComponent::text(pos.0.z.to_string()),
-                    ]
-                    .into(),
+                    ],
                 )
             } else {
-                TextComponent::translate("commands.setblock.failed", [].into())
+                TextComponent::translate("commands.setblock.failed", [])
             })
             .await;
 

@@ -1,3 +1,5 @@
+pub mod tag;
+
 pub mod item {
     include!(concat!(env!("OUT_DIR"), "/item.rs"));
 }
@@ -46,4 +48,8 @@ pub mod scoreboard {
 
 pub mod damage {
     include!(concat!(env!("OUT_DIR"), "/damage_type.rs"));
+}
+
+pub mod fluid {
+    include!(concat!(env!("OUT_DIR"), "/fluid.rs"));
 }

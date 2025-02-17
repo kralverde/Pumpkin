@@ -42,7 +42,7 @@ impl CommandExecutor for KillExecutor {
             let mut entity_display =
                 TextComponent::text(name.clone()).hover_event(HoverEvent::show_entity(
                     entity.entity_uuid.to_string(),
-                    Some(format!("{:?}", entity.entity_type).to_lowercase()),
+                    entity.entity_type.resource_name.into(),
                     Some(TextComponent::text(name.clone())),
                 ));
 
@@ -52,11 +52,11 @@ impl CommandExecutor for KillExecutor {
                 ));
             }
 
-            TextComponent::translate("commands.kill.success.single", [entity_display].into())
+            TextComponent::translate("commands.kill.success.single", [entity_display])
         } else {
             TextComponent::translate(
                 "commands.kill.success.multiple",
-                [TextComponent::text(target_count.to_string())].into(),
+                [TextComponent::text(target_count.to_string())],
             )
         };
 
@@ -88,13 +88,12 @@ impl CommandExecutor for KillSelfExecutor {
                 [TextComponent::text(name.clone())
                     .hover_event(HoverEvent::show_entity(
                         entity.entity_uuid.to_string(),
-                        Some(format!("{:?}", entity.entity_type).to_lowercase()),
+                        entity.entity_type.resource_name.into(),
                         Some(TextComponent::text(name.clone())),
                     ))
                     .click_event(ClickEvent::SuggestCommand(
                         format!("/tell {} ", name.clone()).into(),
-                    ))]
-                .into(),
+                    ))],
             ))
             .await;
 

@@ -12,9 +12,9 @@ use crate::{
     entity::{player::Player, Entity, EntityBase, EntityId},
     error::PumpkinError,
     plugin::{
-        block::BlockBreakEvent,
-        player::{PlayerJoinEvent, PlayerLeaveEvent},
-        world::{ChunkLoad, ChunkSave, ChunkSend},
+        block::block_break::BlockBreakEvent,
+        player::{player_join::PlayerJoinEvent, player_leave::PlayerLeaveEvent},
+        world::{chunk_load::ChunkLoad, chunk_save::ChunkSave, chunk_send::ChunkSend},
     },
     server::Server,
     PLUGIN_MANAGER,
@@ -23,11 +23,14 @@ use border::Worldborder;
 use pumpkin_config::BasicConfiguration;
 use pumpkin_data::{
     entity::EntityType,
+    particle::Particle,
     sound::{Sound, SoundCategory},
     world::WorldEvent,
 };
 use pumpkin_macros::send_cancellable;
-use pumpkin_protocol::client::play::{CBlockUpdate, CDisguisedChatMessage, CRespawn, CWorldEvent};
+use pumpkin_protocol::client::play::{
+    CBlockUpdate, CDisguisedChatMessage, CRespawn, CSetBlockDestroyStage, CWorldEvent,
+};
 use pumpkin_protocol::{client::play::CLevelEvent, codec::identifier::Identifier};
 use pumpkin_protocol::{
     client::play::{
@@ -106,7 +109,7 @@ pub struct World {
     /// The underlying level, responsible for chunk management and terrain generation.
     pub level: Arc<Level>,
     /// A map of active players within the world, keyed by their unique UUID.
-    pub players: Arc<Mutex<HashMap<uuid::Uuid, Arc<Player>>>>,
+    pub players: Arc<RwLock<HashMap<uuid::Uuid, Arc<Player>>>>,
     /// A map of active entities within the world, keyed by their unique UUID.
     /// This does not include Players
     pub entities: Arc<RwLock<HashMap<uuid::Uuid, Arc<dyn EntityBase>>>>,
@@ -128,7 +131,7 @@ impl World {
     pub fn load(level: Level, dimension_type: DimensionType) -> Self {
         Self {
             level: Arc::new(level),
-            players: Arc::new(Mutex::new(HashMap::new())),
+            players: Arc::new(RwLock::new(HashMap::new())),
             entities: Arc::new(RwLock::new(HashMap::new())),
             scoreboard: Mutex::new(Scoreboard::new()),
             worldborder: Mutex::new(Worldborder::new(0.0, 0.0, 29_999_984.0, 0, 0, 0)),
@@ -151,7 +154,7 @@ impl World {
     where
         P: ClientPacket,
     {
-        let current_players = self.players.lock().await;
+        let current_players = self.players.read().await;
         for player in current_players.values() {
             player.client.send_packet(packet).await;
         }
@@ -182,9 +185,25 @@ impl World {
     where
         P: ClientPacket,
     {
-        let current_players = self.players.lock().await;
+        let current_players = self.players.read().await;
         for (_, player) in current_players.iter().filter(|c| !except.contains(c.0)) {
             player.client.send_packet(packet).await;
+        }
+    }
+
+    pub async fn spawn_particle(
+        &self,
+        position: Vector3<f64>,
+        offset: Vector3<f32>,
+        max_speed: f32,
+        particle_count: i32,
+        pariticle: Particle,
+    ) {
+        let players = self.players.read().await;
+        for (_, player) in players.iter() {
+            player
+                .spawn_particle(position, offset, max_speed, particle_count, pariticle)
+                .await;
         }
     }
 
@@ -202,7 +221,7 @@ impl World {
         pitch: f32,
     ) {
         let seed = thread_rng().gen::<f64>();
-        let players = self.players.lock().await;
+        let players = self.players.read().await;
         for (_, player) in players.iter() {
             player
                 .play_sound(sound_id, category, position, volume, pitch, seed)
@@ -260,7 +279,7 @@ impl World {
         };
 
         // player ticks
-        for player in self.players.lock().await.values() {
+        for player in self.players.read().await.values() {
             player.tick().await;
         }
 
@@ -271,7 +290,7 @@ impl World {
             entity.tick().await;
             // this boolean thing prevents deadlocks, since we lock players we can't broadcast packets
             let mut collied_player = None;
-            for player in self.players.lock().await.values() {
+            for player in self.players.read().await.values() {
                 if player
                     .living_entity
                     .entity
@@ -391,7 +410,7 @@ impl World {
         // here we send all the infos of already joined players
         let mut entries = Vec::new();
         {
-            let current_players = self.players.lock().await;
+            let current_players = self.players.read().await;
             for (_, playerr) in current_players
                 .iter()
                 .filter(|(c, _)| **c != player.gameprofile.id)
@@ -437,7 +456,7 @@ impl World {
         .await;
         // spawn players for our client
         let id = player.gameprofile.id;
-        for (_, existing_player) in self.players.lock().await.iter().filter(|c| c.0 != &id) {
+        for (_, existing_player) in self.players.read().await.iter().filter(|c| c.0 != &id) {
             let entity = &existing_player.living_entity.entity;
             let pos = entity.pos.load();
             let gameprofile = &existing_player.gameprofile;
@@ -514,9 +533,55 @@ impl World {
         player.send_mobs(self).await;
     }
 
+    pub async fn send_world_info(
+        &self,
+        player: &Arc<Player>,
+        position: Vector3<f64>,
+        yaw: f32,
+        pitch: f32,
+    ) {
+        self.worldborder
+            .lock()
+            .await
+            .init_client(&player.client)
+            .await;
+
+        // TODO: World spawn (compass stuff)
+
+        player
+            .client
+            .send_packet(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
+            .await;
+
+        let entity = &player.living_entity.entity;
+
+        self.broadcast_packet_except(
+            &[player.gameprofile.id],
+            // TODO: add velo
+            &CSpawnEntity::new(
+                entity.entity_id.into(),
+                player.gameprofile.id,
+                i32::from(EntityType::PLAYER.id).into(),
+                position,
+                pitch,
+                yaw,
+                yaw,
+                0.into(),
+                Vector3::new(0.0, 0.0, 0.0),
+            ),
+        )
+        .await;
+        player.send_client_information().await;
+
+        chunker::player_join(player).await;
+        // update commands
+
+        player.set_health(20.0).await;
+    }
+
     pub async fn respawn_player(&self, player: &Arc<Player>, alive: bool) {
         let last_pos = player.living_entity.last_pos.load();
-        let death_dimension = player.world().dimension_type.name();
+        let death_dimension = player.world().await.dimension_type.name();
         let death_location = BlockPos(Vector3::new(
             last_pos.x.round() as i32,
             last_pos.y.round() as i32,
@@ -567,43 +632,7 @@ impl World {
 
         // TODO: difficulty, exp bar, status effect
 
-        self.worldborder
-            .lock()
-            .await
-            .init_client(&player.client)
-            .await;
-
-        // TODO: world spawn (compass stuff)
-
-        player
-            .client
-            .send_packet(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
-            .await;
-
-        let entity = &player.living_entity.entity;
-
-        self.broadcast_packet_except(
-            &[player.gameprofile.id],
-            // TODO: add velo
-            &CSpawnEntity::new(
-                entity.entity_id.into(),
-                player.gameprofile.id,
-                i32::from(EntityType::PLAYER.id).into(),
-                position,
-                pitch,
-                yaw,
-                yaw,
-                0.into(),
-                Vector3::new(0.0, 0.0, 0.0),
-            ),
-        )
-        .await;
-        player.send_client_information().await;
-
-        chunker::player_join(player).await;
-        // update commands
-
-        player.set_health(20.0).await;
+        self.send_world_info(player, position, yaw, pitch).await;
     }
 
     /// IMPORTANT: Chunks have to be non-empty
@@ -655,11 +684,11 @@ impl World {
                 }
 
                 let (world, chunk) = if level.is_chunk_watched(&position) {
-                    (player.world().clone(), chunk)
+                    (player.world().await.clone(), chunk)
                 } else {
                     send_cancellable! {{
                         ChunkSave {
-                            world: player.world().clone(),
+                            world: player.world().await.clone(),
                             chunk,
                             cancelled: false,
                         };
@@ -718,7 +747,7 @@ impl World {
 
     /// Gets a Player by entity id
     pub async fn get_player_by_id(&self, id: EntityId) -> Option<Arc<Player>> {
-        for player in self.players.lock().await.values() {
+        for player in self.players.read().await.values() {
             if player.entity_id() == id {
                 return Some(player.clone());
             }
@@ -738,7 +767,7 @@ impl World {
 
     /// Gets a Player by username
     pub async fn get_player_by_name(&self, name: &str) -> Option<Arc<Player>> {
-        for player in self.players.lock().await.values() {
+        for player in self.players.read().await.values() {
             if player.gameprofile.name.to_lowercase() == name.to_lowercase() {
                 return Some(player.clone());
             }
@@ -759,7 +788,7 @@ impl World {
     ///
     /// An `Option<Arc<Player>>` containing the player if found, or `None` if not.
     pub async fn get_player_by_uuid(&self, id: uuid::Uuid) -> Option<Arc<Player>> {
-        return self.players.lock().await.get(&id).cloned();
+        return self.players.read().await.get(&id).cloned();
     }
 
     /// Gets a list of players who's location equals the given position in the world.
@@ -773,7 +802,7 @@ impl World {
     /// * `position`: The position the function will check.
     pub async fn get_players_by_pos(&self, position: BlockPos) -> HashMap<uuid::Uuid, Arc<Player>> {
         self.players
-            .lock()
+            .read()
             .await
             .iter()
             .filter_map(|(uuid, player)| {
@@ -803,7 +832,7 @@ impl World {
         let radius_squared = radius.powi(2);
 
         self.players
-            .lock()
+            .read()
             .await
             .iter()
             .filter_map(|(id, player)| {
@@ -848,7 +877,7 @@ impl World {
     /// * `player`: An `Arc<Player>` reference to the player object.
     pub async fn add_player(&self, uuid: uuid::Uuid, player: Arc<Player>) {
         {
-            let mut current_players = self.players.lock().await;
+            let mut current_players = self.players.write().await;
             current_players.insert(uuid, player.clone())
         };
 
@@ -856,7 +885,7 @@ impl World {
         tokio::spawn(async move {
             let msg_comp = TextComponent::translate(
                 "multiplayer.player.joined",
-                [TextComponent::text(player.gameprofile.name.clone())].into(),
+                [TextComponent::text(player.gameprofile.name.clone())],
             )
             .color_named(NamedColor::Yellow);
             let event = PlayerJoinEvent::new(player.clone(), msg_comp);
@@ -869,7 +898,7 @@ impl World {
 
             if !event.cancelled {
                 let current_players = current_players.clone();
-                let players = current_players.lock().await;
+                let players = current_players.read().await;
                 for player in players.values() {
                     player.send_system_message(&event.join_message).await;
                 }
@@ -891,14 +920,15 @@ impl World {
     /// # Arguments
     ///
     /// * `player`: A reference to the `Player` object to be removed.
+    /// * `fire_event`: A boolean flag indicating whether to fire a `PlayerLeaveEvent` event.
     ///
     /// # Notes
     ///
     /// - This function assumes `broadcast_packet_expect` and `remove_entity` are defined elsewhere.
     /// - The disconnect message sending is currently optional. Consider making it a configurable option.
-    pub async fn remove_player(&self, player: Arc<Player>) {
+    pub async fn remove_player(&self, player: Arc<Player>, fire_event: bool) {
         self.players
-            .lock()
+            .write()
             .await
             .remove(&player.gameprofile.id)
             .unwrap();
@@ -911,25 +941,27 @@ impl World {
         self.broadcast_packet_all(&CRemoveEntities::new(&[player.entity_id().into()]))
             .await;
 
-        let msg_comp = TextComponent::translate(
-            "multiplayer.player.left",
-            [TextComponent::text(player.gameprofile.name.clone())].into(),
-        )
-        .color_named(NamedColor::Yellow);
-        let event = PlayerLeaveEvent::new(player.clone(), msg_comp);
+        if fire_event {
+            let msg_comp = TextComponent::translate(
+                "multiplayer.player.left",
+                [TextComponent::text(player.gameprofile.name.clone())],
+            )
+            .color_named(NamedColor::Yellow);
+            let event = PlayerLeaveEvent::new(player.clone(), msg_comp);
 
-        let event = PLUGIN_MANAGER
-            .lock()
-            .await
-            .fire::<PlayerLeaveEvent>(event)
-            .await;
+            let event = PLUGIN_MANAGER
+                .lock()
+                .await
+                .fire::<PlayerLeaveEvent>(event)
+                .await;
 
-        if !event.cancelled {
-            let players = self.players.lock().await;
-            for player in players.values() {
-                player.send_system_message(&event.leave_message).await;
+            if !event.cancelled {
+                let players = self.players.read().await;
+                for player in players.values() {
+                    player.send_system_message(&event.leave_message).await;
+                }
+                log::info!("{}", event.leave_message.clone().to_pretty_console());
             }
-            log::info!("{}", event.leave_message.clone().to_pretty_console());
         }
     }
 
@@ -954,6 +986,14 @@ impl World {
         self.entities.write().await.remove(&entity.entity_uuid);
         self.broadcast_packet_all(&CRemoveEntities::new(&[entity.entity_id.into()]))
             .await;
+    }
+
+    pub async fn set_block_breaking(&self, from: &Entity, location: BlockPos, progress: i32) {
+        self.broadcast_packet_except(
+            &[from.entity_uuid],
+            &CSetBlockDestroyStage::new(from.entity_id.into(), location, progress as i8),
+        )
+        .await;
     }
 
     /// Sets a block

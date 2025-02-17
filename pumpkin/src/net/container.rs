@@ -490,8 +490,10 @@ impl Player {
             .living_entity
             .entity
             .world
+            .read()
+            .await
             .players
-            .lock()
+            .read()
             .await
             .iter()
             .filter_map(|(token, player)| {

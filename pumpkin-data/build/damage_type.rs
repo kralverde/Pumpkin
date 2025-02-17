@@ -15,8 +15,20 @@ struct DamageTypeEntry {
 pub struct DamageTypeData {
     death_message_type: Option<DeathMessageType>,
     exhaustion: f32,
+    effects: Option<DamageEffects>,
     message_id: String,
     scaling: DamageScaling,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum DamageEffects {
+    Hurt,
+    Thorns,
+    Drowning,
+    Burning,
+    Poking,
+    Freezing,
 }
 
 #[derive(Deserialize, Debug)]
@@ -43,18 +55,29 @@ pub(crate) fn build() -> TokenStream {
             .expect("Failed to parse damage_type.json");
 
     let mut constants = Vec::new();
-    let mut enum_variants = Vec::new();
+    let mut type_from_name = TokenStream::new();
 
     for (name, entry) in damage_types {
         let const_ident = format_ident!("{}", name.to_shouty_snake_case());
+        let resource_name = name.to_lowercase();
 
-        enum_variants.push(const_ident.clone());
+        type_from_name.extend(quote! {
+            #resource_name => Some(Self::#const_ident),
+        });
 
         let data = &entry.components;
         let death_message_type = match &data.death_message_type {
             Some(msg) => {
                 let msg_ident = Ident::new(&format!("{:?}", msg), proc_macro2::Span::call_site());
                 quote! { Some(DeathMessageType::#msg_ident) }
+            }
+            None => quote! { None },
+        };
+
+        let effects = match &data.effects {
+            Some(msg) => {
+                let msg_ident = Ident::new(&format!("{:?}", msg), proc_macro2::Span::call_site());
+                quote! { Some(DamageEffects::#msg_ident) }
             }
             None => quote! { None },
         };
@@ -72,6 +95,7 @@ pub(crate) fn build() -> TokenStream {
             pub const #const_ident: DamageType = DamageType {
                 death_message_type: #death_message_type,
                 exhaustion: #exhaustion,
+                effects: #effects,
                 message_id: #message_id,
                 scaling: #scaling,
                 id: #id_lit,
@@ -79,20 +103,12 @@ pub(crate) fn build() -> TokenStream {
         });
     }
 
-    let type_name_pairs = enum_variants.iter().map(|variant| {
-        let name = variant.to_string();
-        let name_lowercase = name.to_lowercase();
-        let resource_name = format!("minecraft:{}", name_lowercase);
-        quote! {
-            #resource_name => Some(Self::#variant)
-        }
-    });
-
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq)]
         pub struct DamageType {
             pub death_message_type: Option<DeathMessageType>,
             pub exhaustion: f32,
+            pub effects: Option<DamageEffects>,
             pub message_id: &'static str,
             pub scaling: DamageScaling,
             pub id: u32,
@@ -103,6 +119,16 @@ pub(crate) fn build() -> TokenStream {
             Default,
             FallVariants,
             IntentionalGameDesign,
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub enum DamageEffects {
+            Hurt,
+            Thorns,
+            Drowning,
+            Burning,
+            Poking,
+            Freezing,
         }
 
         #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,7 +144,7 @@ pub(crate) fn build() -> TokenStream {
             #[doc = r" Try to parse a damage type from a resource location string"]
             pub fn from_name(name: &str) -> Option<Self> {
                 match name {
-                    #(#type_name_pairs,)*
+                    #type_from_name
                     _ => None
                 }
             }

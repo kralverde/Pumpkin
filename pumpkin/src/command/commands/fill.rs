@@ -58,7 +58,10 @@ impl CommandExecutor for SetblockExecutor {
         let end_y = from.0.y.max(to.0.y);
         let end_z = from.0.z.max(to.0.z);
 
-        let world = sender.world().ok_or(CommandError::InvalidRequirement)?;
+        let world = sender
+            .world()
+            .await
+            .ok_or(CommandError::InvalidRequirement)?;
         let mut placed_blocks = 0;
 
         match mode {
@@ -148,7 +151,7 @@ impl CommandExecutor for SetblockExecutor {
         sender
             .send_message(TextComponent::translate(
                 "commands.fill.success",
-                [TextComponent::text(placed_blocks.to_string())].into(),
+                [TextComponent::text(placed_blocks.to_string())],
             ))
             .await;
 

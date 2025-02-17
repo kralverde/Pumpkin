@@ -1,8 +1,8 @@
 use bytes::*;
-use fastnbt::LongArray;
 use flate2::bufread::{GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
 use indexmap::IndexMap;
 use pumpkin_config::ADVANCED_CONFIG;
+use pumpkin_nbt::serializer::to_bytes;
 use pumpkin_util::math::ceil_log2;
 use pumpkin_util::math::vector2::Vector2;
 use rayon::{
@@ -15,7 +15,7 @@ use std::{
     io::{Read, Write},
 };
 
-use crate::block::registry::BLOCK_ID_TO_REGISTRY_ID;
+use crate::block::registry::STATE_ID_TO_REGISTRY_ID;
 use crate::chunks_io::{ChunkSerializer, LoadedData};
 
 use super::{
@@ -205,6 +205,7 @@ impl AnvilChunkData {
         bytes
     }
 
+ 
     fn to_chunk(&self, pos: Vector2<i32>) -> Result<ChunkData, ChunkReadingError> {
         let bytes = &self.compressed_data[..self.length as usize - 1];
 
@@ -258,6 +259,7 @@ impl Default for AnvilChunkFile {
     }
 }
 
+      
 impl ChunkSerializer for AnvilChunkFile {
     type Data = ChunkData;
 
@@ -268,6 +270,7 @@ impl ChunkSerializer for AnvilChunkFile {
 
     fn to_bytes(&self) -> Vec<u8> {
         let mut chunk_data: Vec<u8> = Vec::new();
+
 
         let mut location_bytes: Vec<u8> = Vec::with_capacity(SECTOR_BYTES);
         let mut timestamp_bytes: Vec<u8> = Vec::with_capacity(SECTOR_BYTES);
@@ -324,6 +327,7 @@ impl ChunkSerializer for AnvilChunkFile {
             let bytes_offset = (sector_offset - 2) * SECTOR_BYTES;
             let bytes_count = sector_count * SECTOR_BYTES;
 
+
             chunk_file.chunks_data[i] = Some(AnvilChunkData::from_bytes(
                 &chunks[bytes_offset..bytes_offset + bytes_count],
             )?);
@@ -379,75 +383,85 @@ impl ChunkSerializer for AnvilChunkFile {
 }
 
 pub fn chunk_to_bytes(chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializingError> {
-    let mut sections = Vec::new();
+   let mut sections = Vec::new();
 
-    for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
-        // get unique blocks
-        let unique_blocks: HashSet<_> = blocks.iter().collect();
+        for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
+            // get unique blocks
+            let unique_blocks: HashSet<_> = blocks.iter().collect();
 
-        let palette: IndexMap<_, _> = unique_blocks
-            .into_iter()
-            .enumerate()
-            .map(|(i, block)| {
-                let name = BLOCK_ID_TO_REGISTRY_ID.get(block).unwrap().as_str();
-                (block, (name, i))
-            })
-            .collect();
+            let palette: IndexMap<_, _> = unique_blocks
+                .into_iter()
+                .enumerate()
+                .map(|(i, block)| {
+                    let name = STATE_ID_TO_REGISTRY_ID.get(block).unwrap();
+                    (block, (name, i))
+                })
+                .collect();
 
-        // Determine the number of bits needed to represent the largest index in the palette
-        let block_bit_size = if palette.len() < 16 {
-            4
-        } else {
-            ceil_log2(palette.len() as u32).max(4)
-        };
+            // Determine the number of bits needed to represent the largest index in the palette
+            let block_bit_size = if palette.len() < 16 {
+                4
+            } else {
+                ceil_log2(palette.len() as u32).max(4)
+            };
 
-        let mut section_longs = Vec::new();
-        let mut current_pack_long: i64 = 0;
-        let mut bits_used_in_pack: u32 = 0;
+            let mut section_longs = Vec::new();
+            let mut current_pack_long: i64 = 0;
+            let mut bits_used_in_pack: u32 = 0;
 
-        // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
-        // if palette.len() > 1 {}
-        // TODO: Update to write empty data. Rn or read does not handle this elegantly
-        for block in blocks.iter() {
-            // Push if next bit does not fit
-            if bits_used_in_pack + block_bit_size as u32 > 64 {
-                section_longs.push(current_pack_long);
-                current_pack_long = 0;
-                bits_used_in_pack = 0;
+            // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
+            // if palette.len() > 1 {}
+            // TODO: Update to write empty data. Rn or read does not handle this elegantly
+            for block in blocks.iter() {
+                // Push if next bit does not fit
+                if bits_used_in_pack + block_bit_size as u32 > 64 {
+                    section_longs.push(current_pack_long);
+                    current_pack_long = 0;
+                    bits_used_in_pack = 0;
+                }
+                let index = palette.get(block).expect("Just added all unique").1;
+                current_pack_long |= (index as i64) << bits_used_in_pack;
+                bits_used_in_pack += block_bit_size as u32;
+
+                assert!(bits_used_in_pack <= 64);
+
+                // If the current 64-bit integer is full, push it to the section_longs and start a new one
+                if bits_used_in_pack >= 64 {
+                    section_longs.push(current_pack_long);
+                    current_pack_long = 0;
+                    bits_used_in_pack = 0;
+                }
             }
-            let index = palette.get(block).expect("Just added all unique").1;
-            current_pack_long |= (index as i64) << bits_used_in_pack;
-            bits_used_in_pack += block_bit_size as u32;
 
-            assert!(bits_used_in_pack <= 64);
-
-            // If the current 64-bit integer is full, push it to the section_longs and start a new one
-            if bits_used_in_pack >= 64 {
+            // Push the last 64-bit integer if it contains any data
+            if bits_used_in_pack > 0 {
                 section_longs.push(current_pack_long);
-                current_pack_long = 0;
-                bits_used_in_pack = 0;
             }
-        }
 
-        // Push the last 64-bit integer if it contains any data
-        if bits_used_in_pack > 0 {
-            section_longs.push(current_pack_long);
+            sections.push(ChunkSection {
+                y: i as i8 - 4,
+                block_states: Some(ChunkSectionBlockStates {
+                    data: Some(section_longs.into_boxed_slice()),
+                    palette: palette
+                        .into_iter()
+                        .map(|entry| PaletteEntry {
+                            name: entry.1 .0.to_string(),
+                            properties: {
+                                /*
+                                let properties = &get_block(entry.1 .0).unwrap().properties;
+                                let mut map = HashMap::new();
+                                for property in properties {
+                                    map.insert(property.name.to_string(), property.values.clone());
+                                }
+                                Some(map)
+                                */
+                                None
+                            },
+                        })
+                        .collect(),
+                }),
+            });
         }
-
-        sections.push(ChunkSection {
-            y: i as i8 - 4,
-            block_states: Some(ChunkSectionBlockStates {
-                data: Some(LongArray::new(section_longs)),
-                palette: palette
-                    .into_iter()
-                    .map(|entry| PaletteEntry {
-                        name: entry.1 .0.to_owned(),
-                        properties: None,
-                    })
-                    .collect(),
-            }),
-        });
-    }
 
     let nbt = ChunkNbt {
         data_version: WORLD_DATA_VERSION,
@@ -458,7 +472,9 @@ pub fn chunk_to_bytes(chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializin
         sections,
     };
 
-    fastnbt::to_bytes(&nbt).map_err(ChunkSerializingError::ErrorSerializingChunk)
+    let mut result = Vec::new();
+    to_bytes(&nbt, &mut result).map_err(ChunkSerializingError::ErrorSerializingChunk)?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -549,4 +565,47 @@ mod tests {
 
         println!("Checked chunks successfully");
     }
+
+    // TODO
+    /*
+    #[test]
+    fn test_load_java_chunk() {
+        let temp_dir = TempDir::new().unwrap();
+        let level_folder = LevelFolder {
+            root_folder: temp_dir.path().to_path_buf(),
+            region_folder: temp_dir.path().join("region"),
+        };
+
+        fs::create_dir(&level_folder.region_folder).unwrap();
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join(file!())
+                .parent()
+                .unwrap()
+                .join("../../assets/r.0.0.mca"),
+            level_folder.region_folder.join("r.0.0.mca"),
+        )
+        .unwrap();
+
+        let mut actually_tested = false;
+        for x in 0..(1 << 5) {
+            for z in 0..(1 << 5) {
+                let result = AnvilChunkFormat {}.read_chunk(&level_folder, &Vector2 { x, z });
+
+                match result {
+                    Ok(_) => actually_tested = true,
+                    Err(ChunkReadingError::ParsingError(ChunkParsingError::ChunkNotGenerated)) => {}
+                    Err(ChunkReadingError::ChunkNotExist) => {}
+                    Err(e) => panic!("{:?}", e),
+                }
+
+                println!("=========== OK ===========");
+            }
+        }
+
+        assert!(actually_tested);
+    }
+    */
 }
