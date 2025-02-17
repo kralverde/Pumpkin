@@ -97,6 +97,7 @@ impl Level {
         log::info!("Saving level...");
 
         // chunks are automatically saved when all players get removed
+        // TODO: Await this ^
 
         // then lets save the world info
         self.world_info_writer
