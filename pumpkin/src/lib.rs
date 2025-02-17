@@ -62,6 +62,9 @@ pub static LOGGER_IMPL: LazyLock<Option<(Box<dyn Log>, LevelFilter)>> = LazyLock
             for level in Level::iter() {
                 config.set_level_color(level, None);
             }
+        } else if ADVANCED_CONFIG.commands.use_console {
+            // We are techically logging to a file like object
+            config.set_write_log_enable_colors(true);
         }
 
         if !ADVANCED_CONFIG.logging.threads {
