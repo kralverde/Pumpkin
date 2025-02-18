@@ -121,7 +121,6 @@ impl Level {
     pub async fn save(&self) {
         log::info!("Saving level...");
 
-
         // chunks are automatically saved when all players get removed
         // TODO: Await chunks that have been called by this ^
 
