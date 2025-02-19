@@ -29,9 +29,12 @@ pub const SUBCHUNK_VOLUME: usize = CHUNK_AREA * 16;
 pub const SUBCHUNKS_COUNT: usize = WORLD_HEIGHT / 16;
 pub const CHUNK_VOLUME: usize = CHUNK_AREA * WORLD_HEIGHT;
 
+// TODO: Make FileLocksManager async and make reading and writing chunks async for a probably
+// significant speed-up
+
 /// File locks manager to prevent multiple threads from writing to the same file at the same time
 /// but allowing multiple threads to read from the same file at the same time.
-static FILE_LOCK_MANAGER: LazyLock<Arc<FileLocksManager>> = LazyLock::new(Arc::default);
+pub static FILE_LOCK_MANAGER: LazyLock<Arc<FileLocksManager>> = LazyLock::new(Arc::default);
 pub trait ChunkReader: Sync + Send {
     fn read_chunk(
         &self,
@@ -109,9 +112,10 @@ pub struct FileWriteGuard<'a> {
 
 /// Central File Lock Manager for chunk files
 /// This is used to prevent multiple threads from writing to the same file at the same time
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct FileLocksManager {
-    locks: DashMap<PathBuf, ()>,
+    // TODO: This is a memory leak because entries are never removed.
+    _locks: DashMap<PathBuf, ()>,
 }
 
 #[derive(Clone)]
@@ -208,14 +212,15 @@ struct ChunkNbt {
     heightmaps: ChunkHeightmaps,
 }
 
+// TODO: Make this async along with chunk file IO
 impl FileLocksManager {
     pub fn get_read_guard(&self, path: &Path) -> FileReadGuard {
-        if let Some(lock) = self.locks.get(path) {
+        if let Some(lock) = self._locks.get(path) {
             FileReadGuard { _guard: lock }
         } else {
             FileReadGuard {
                 _guard: self
-                    .locks
+                    ._locks
                     .entry(path.to_path_buf())
                     .or_insert(())
                     .downgrade(),
@@ -225,12 +230,18 @@ impl FileLocksManager {
 
     pub fn get_write_guard(&self, path: &Path) -> FileWriteGuard {
         FileWriteGuard {
-            _guard: self.locks.entry(path.to_path_buf()).or_insert(()),
+            _guard: self._locks.entry(path.to_path_buf()).or_insert(()),
+        }
+    }
+
+    pub fn wait_for_all_locks(&self) {
+        for mut entry in self._locks.iter_mut() {
+            let _ = entry.value_mut();
         }
     }
 
     pub fn remove_file_lock(path: &Path) {
-        FILE_LOCK_MANAGER.locks.remove(path);
+        FILE_LOCK_MANAGER._locks.remove(path);
     }
 }
 

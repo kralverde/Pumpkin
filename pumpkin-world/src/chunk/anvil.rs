@@ -12,6 +12,7 @@ use std::{
 };
 
 use crate::block::registry::STATE_ID_TO_REGISTRY_ID;
+use crate::chunk::FILE_LOCK_MANAGER;
 use crate::{chunk::ChunkWritingError, level::LevelFolder};
 
 use super::{
@@ -149,79 +150,84 @@ impl ChunkReader for AnvilChunkFormat {
         at: &pumpkin_util::math::vector2::Vector2<i32>,
     ) -> Result<super::ChunkData, ChunkReadingError> {
         let region = (at.x >> 5, at.z >> 5);
+        let path = save_file
+            .region_folder
+            .join(format!("r.{}.{}.mca", region.0, region.1));
 
-        let mut region_file = OpenOptions::new()
-            .read(true)
-            .open(
-                save_file
-                    .region_folder
-                    .join(format!("r.{}.{}.mca", region.0, region.1)),
-            )
-            .map_err(|err| match err.kind() {
-                std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
-                kind => ChunkReadingError::IoError(kind),
+        tokio::task::block_in_place(|| {
+            let _reader_guard = FILE_LOCK_MANAGER.get_read_guard(&path);
+            let mut region_file =
+                OpenOptions::new()
+                    .read(true)
+                    .open(path)
+                    .map_err(|err| match err.kind() {
+                        std::io::ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                        kind => ChunkReadingError::IoError(kind),
+                    })?;
+
+            let mut location_table: [u8; 4096] = [0; 4096];
+            let mut timestamp_table: [u8; 4096] = [0; 4096];
+
+            // fill the location and timestamp tables
+            region_file
+                .read_exact(&mut location_table)
+                .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+            region_file
+                .read_exact(&mut timestamp_table)
+                .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+
+            let chunk_x = at.x & 0x1F;
+            let chunk_z = at.z & 0x1F;
+            let table_entry = (chunk_x + chunk_z * 32) * 4;
+
+            let mut offset = BytesMut::new();
+            offset.put_u8(0);
+            offset
+                .extend_from_slice(&location_table[table_entry as usize..table_entry as usize + 3]);
+            let offset_at = offset.get_u32() as u64 * 4096;
+            let size_at = location_table[table_entry as usize + 3] as usize * 4096;
+
+            if offset_at == 0 && size_at == 0 {
+                return Err(ChunkReadingError::ChunkNotExist);
+            }
+
+            // Read the file using the offset and size
+            let mut file_buf = {
+                region_file
+                    .seek(std::io::SeekFrom::Start(offset_at))
+                    .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
+                let mut out = vec![0; size_at];
+                region_file
+                    .read_exact(&mut out)
+                    .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
+                out
+            };
+
+            let mut header: Bytes = file_buf.drain(0..5).collect();
+            if header.remaining() != 5 {
+                return Err(ChunkReadingError::InvalidHeader);
+            }
+
+            let size = header.get_u32();
+            let compression = header.get_u8();
+
+            let compression = Compression::from_byte(compression).map_err(|_| {
+                ChunkReadingError::Compression(CompressionError::UnknownCompression)
             })?;
 
-        let mut location_table: [u8; 4096] = [0; 4096];
-        let mut timestamp_table: [u8; 4096] = [0; 4096];
+            // size includes the compression scheme byte, so we need to subtract 1
+            let chunk_data: Vec<u8> = file_buf.drain(0..size as usize - 1).collect();
 
-        // fill the location and timestamp tables
-        region_file
-            .read_exact(&mut location_table)
-            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
-        region_file
-            .read_exact(&mut timestamp_table)
-            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+            let decompressed_chunk = if let Some(compression) = compression {
+                compression
+                    .decompress_data(&chunk_data)
+                    .map_err(ChunkReadingError::Compression)?
+            } else {
+                chunk_data
+            };
 
-        let chunk_x = at.x & 0x1F;
-        let chunk_z = at.z & 0x1F;
-        let table_entry = (chunk_x + chunk_z * 32) * 4;
-
-        let mut offset = BytesMut::new();
-        offset.put_u8(0);
-        offset.extend_from_slice(&location_table[table_entry as usize..table_entry as usize + 3]);
-        let offset_at = offset.get_u32() as u64 * 4096;
-        let size_at = location_table[table_entry as usize + 3] as usize * 4096;
-
-        if offset_at == 0 && size_at == 0 {
-            return Err(ChunkReadingError::ChunkNotExist);
-        }
-
-        // Read the file using the offset and size
-        let mut file_buf = {
-            region_file
-                .seek(std::io::SeekFrom::Start(offset_at))
-                .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
-            let mut out = vec![0; size_at];
-            region_file
-                .read_exact(&mut out)
-                .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
-            out
-        };
-
-        let mut header: Bytes = file_buf.drain(0..5).collect();
-        if header.remaining() != 5 {
-            return Err(ChunkReadingError::InvalidHeader);
-        }
-
-        let size = header.get_u32();
-        let compression = header.get_u8();
-
-        let compression = Compression::from_byte(compression)
-            .map_err(|_| ChunkReadingError::Compression(CompressionError::UnknownCompression))?;
-
-        // size includes the compression scheme byte, so we need to subtract 1
-        let chunk_data: Vec<u8> = file_buf.drain(0..size as usize - 1).collect();
-
-        let decompressed_chunk = if let Some(compression) = compression {
-            compression
-                .decompress_data(&chunk_data)
-                .map_err(ChunkReadingError::Compression)?
-        } else {
-            chunk_data
-        };
-
-        ChunkData::from_bytes(&decompressed_chunk, *at).map_err(ChunkReadingError::ParsingError)
+            ChunkData::from_bytes(&decompressed_chunk, *at).map_err(ChunkReadingError::ParsingError)
+        })
     }
 }
 
@@ -233,133 +239,137 @@ impl ChunkWriter for AnvilChunkFormat {
         at: &pumpkin_util::math::vector2::Vector2<i32>,
     ) -> Result<(), super::ChunkWritingError> {
         let region = (at.x >> 5, at.z >> 5);
+        let path = level_folder
+            .region_folder
+            .join(format!("./r.{}.{}.mca", region.0, region.1));
 
-        let mut region_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(
-                level_folder
-                    .region_folder
-                    .join(format!("./r.{}.{}.mca", region.0, region.1)),
-            )
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-
-        // Serialize chunk data
-        let raw_bytes = Self::to_bytes(chunk_data)
-            .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
-
-        // Compress chunk data
-        let compression: Compression = ADVANCED_CONFIG.chunk.compression.algorithm.clone().into();
-        let compressed_data = compression
-            .compress_data(&raw_bytes, ADVANCED_CONFIG.chunk.compression.level)
-            .map_err(ChunkWritingError::Compression)?;
-
-        // Length of compressed data + compression type
-        let length = compressed_data.len() as u32 + 1;
-
-        // | 0 1 2 3 |        4         |        5..      |
-        // | length  | compression type | compressed data |
-        let mut chunk_payload = BytesMut::with_capacity(5);
-        // Payload Header + Body
-        chunk_payload.put_u32(length);
-        chunk_payload.put_u8(compression as u8);
-        chunk_payload.put_slice(&compressed_data);
-
-        // Calculate sector size
-        let sector_size = chunk_payload.len().div_ceil(4096);
-
-        // Region file header tables
-        let mut location_table = [0u8; 4096];
-        let mut timestamp_table = [0u8; 4096];
-
-        let file_meta = region_file
-            .metadata()
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-
-        // The header consists of 8 KiB of data
-        // Try to fill the location and timestamp tables if they already exist
-        if file_meta.len() >= 8192 {
-            region_file
-                .read_exact(&mut location_table)
+        tokio::task::block_in_place(|| {
+            let _writer_guard = FILE_LOCK_MANAGER.get_write_guard(&path);
+            let mut region_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)
                 .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-            region_file
-                .read_exact(&mut timestamp_table)
+
+            // Serialize chunk data
+            let raw_bytes = Self::to_bytes(chunk_data)
+                .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
+
+            // Compress chunk data
+            let compression: Compression =
+                ADVANCED_CONFIG.chunk.compression.algorithm.clone().into();
+            let compressed_data = compression
+                .compress_data(&raw_bytes, ADVANCED_CONFIG.chunk.compression.level)
+                .map_err(ChunkWritingError::Compression)?;
+
+            // Length of compressed data + compression type
+            let length = compressed_data.len() as u32 + 1;
+
+            // | 0 1 2 3 |        4         |        5..      |
+            // | length  | compression type | compressed data |
+            let mut chunk_payload = BytesMut::with_capacity(5);
+            // Payload Header + Body
+            chunk_payload.put_u32(length);
+            chunk_payload.put_u8(compression as u8);
+            chunk_payload.put_slice(&compressed_data);
+
+            // Calculate sector size
+            let sector_size = chunk_payload.len().div_ceil(4096);
+
+            // Region file header tables
+            let mut location_table = [0u8; 4096];
+            let mut timestamp_table = [0u8; 4096];
+
+            let file_meta = region_file
+                .metadata()
                 .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-        }
 
-        // Get location table index
-        let chunk_x = at.x & 0x1F;
-        let chunk_z = at.z & 0x1F;
-        let table_index = (chunk_x as usize + chunk_z as usize * 32) * 4;
+            // The header consists of 8 KiB of data
+            // Try to fill the location and timestamp tables if they already exist
+            if file_meta.len() >= 8192 {
+                region_file
+                    .read_exact(&mut location_table)
+                    .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+                region_file
+                    .read_exact(&mut timestamp_table)
+                    .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+            }
 
-        // | 0 1 2  |      3       |
-        // | offset | sector count |
-        // Get the entry from the current location table and check
-        // if the new chunk fits in the space of the old chunk
-        let chunk_location = &location_table[table_index..table_index + 4];
-        let chunk_data_location: u64 = if chunk_location[3] >= sector_size as u8 {
-            // Return old chunk location
-            u32::from_be_bytes([0, chunk_location[0], chunk_location[1], chunk_location[2]]) as u64
-        } else {
-            // Retrieve next writable sector
-            self.find_free_sector(&location_table, sector_size) as u64
-        };
+            // Get location table index
+            let chunk_x = at.x & 0x1F;
+            let chunk_z = at.z & 0x1F;
+            let table_index = (chunk_x as usize + chunk_z as usize * 32) * 4;
 
-        assert!(
-            chunk_data_location > 1,
-            "This should never happen. The header would be corrupted"
-        );
+            // | 0 1 2  |      3       |
+            // | offset | sector count |
+            // Get the entry from the current location table and check
+            // if the new chunk fits in the space of the old chunk
+            let chunk_location = &location_table[table_index..table_index + 4];
+            let chunk_data_location: u64 = if chunk_location[3] >= sector_size as u8 {
+                // Return old chunk location
+                u32::from_be_bytes([0, chunk_location[0], chunk_location[1], chunk_location[2]])
+                    as u64
+            } else {
+                // Retrieve next writable sector
+                self.find_free_sector(&location_table, sector_size) as u64
+            };
 
-        // Construct location header
-        location_table[table_index] = (chunk_data_location >> 16) as u8;
-        location_table[table_index + 1] = (chunk_data_location >> 8) as u8;
-        location_table[table_index + 2] = chunk_data_location as u8;
-        location_table[table_index + 3] = sector_size as u8;
+            assert!(
+                chunk_data_location > 1,
+                "This should never happen. The header would be corrupted"
+            );
 
-        // Get epoch may result in errors if after the year 2106 :(
-        let epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
+            // Construct location header
+            location_table[table_index] = (chunk_data_location >> 16) as u8;
+            location_table[table_index + 1] = (chunk_data_location >> 8) as u8;
+            location_table[table_index + 2] = chunk_data_location as u8;
+            location_table[table_index + 3] = sector_size as u8;
 
-        // Construct timestamp header
-        timestamp_table[table_index] = (epoch >> 24) as u8;
-        timestamp_table[table_index + 1] = (epoch >> 16) as u8;
-        timestamp_table[table_index + 2] = (epoch >> 8) as u8;
-        timestamp_table[table_index + 3] = epoch as u8;
+            // Get epoch may result in errors if after the year 2106 :(
+            let epoch = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as u32;
 
-        // Write new location and timestamp table
-        region_file.seek(SeekFrom::Start(0)).unwrap();
-        region_file
-            .write_all(&[location_table, timestamp_table].concat())
-            .map_err(|e| ChunkWritingError::IoError(e.kind()))?;
+            // Construct timestamp header
+            timestamp_table[table_index] = (epoch >> 24) as u8;
+            timestamp_table[table_index + 1] = (epoch >> 16) as u8;
+            timestamp_table[table_index + 2] = (epoch >> 8) as u8;
+            timestamp_table[table_index + 3] = epoch as u8;
 
-        // Seek to where the chunk is located
-        region_file
-            .seek(SeekFrom::Start(chunk_data_location * 4096))
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+            // Write new location and timestamp table
+            region_file.seek(SeekFrom::Start(0)).unwrap();
+            region_file
+                .write_all(&[location_table, timestamp_table].concat())
+                .map_err(|e| ChunkWritingError::IoError(e.kind()))?;
 
-        // Write header and payload
-        region_file
-            .write_all(&chunk_payload)
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+            // Seek to where the chunk is located
+            region_file
+                .seek(SeekFrom::Start(chunk_data_location * 4096))
+                .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
-        // Calculate padding to fill the sectors
-        // (length + 4) 3 bits for length and 1 for compression type + payload length
-        let padding = ((sector_size * 4096) as u32 - ((length + 4) & 0xFFF)) & 0xFFF;
+            // Write header and payload
+            region_file
+                .write_all(&chunk_payload)
+                .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
-        // Write padding
-        region_file
-            .write_all(&vec![0u8; padding as usize])
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+            // Calculate padding to fill the sectors
+            // (length + 4) 3 bits for length and 1 for compression type + payload length
+            let padding = ((sector_size * 4096) as u32 - ((length + 4) & 0xFFF)) & 0xFFF;
 
-        region_file
-            .flush()
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+            // Write padding
+            region_file
+                .write_all(&vec![0u8; padding as usize])
+                .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
-        Ok(())
+            region_file
+                .flush()
+                .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+
+            Ok(())
+        })
     }
 }
 

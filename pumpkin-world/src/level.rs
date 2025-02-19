@@ -13,7 +13,7 @@ use tokio::{
 use crate::{
     chunk::{
         anvil::AnvilChunkFormat, linear::LinearChunkFormat, ChunkData, ChunkParsingError,
-        ChunkReader, ChunkReadingError, ChunkWriter,
+        ChunkReader, ChunkReadingError, ChunkWriter, FILE_LOCK_MANAGER,
     },
     generation::{get_world_gen, Seed, WorldGenerator},
     lock::{anvil::AnvilLevelLocker, LevelLocker},
@@ -124,15 +124,16 @@ impl Level {
     pub async fn save(&self) {
         log::info!("Saving level...");
 
-        // chunks are automatically saved when all players get removed
-        // TODO: Await chunks that have been called by this ^
-
         // save all stragling chunks
         for chunk in self.loaded_chunks.iter() {
             let pos = chunk.key();
             let chunk = chunk.value();
             self.write_chunk((*pos, chunk.clone())).await;
         }
+
+        // await saving tasks
+        log::debug!("Waiting for file locks...");
+        FILE_LOCK_MANAGER.wait_for_all_locks();
 
         // then lets save the world info
         let result = self
@@ -254,7 +255,6 @@ impl Level {
         let chunk_writer = self.chunk_writer.clone();
         let level_folder = self.level_folder.clone();
 
-        // TODO: Save the join handles to await them when stopping the server
         tokio::spawn(async move {
             let data = chunk_to_write.1.read().await;
             if let Err(error) = chunk_writer.write_chunk(&data, &level_folder, &chunk_to_write.0) {
