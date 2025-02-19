@@ -182,10 +182,10 @@ impl Level {
 
             chunks_tasks.spawn(async move {
                 let removed_chunk = loaded_chunks.remove_if(&at, |at, _| {
-                    chunk_watchers
-                        .get(at)
-                        .as_ref()
-                        .is_none_or(|watcher| watcher.is_zero())
+                    if let Some(value) = &chunk_watchers.get(at) {
+                        return value.is_zero();
+                    }
+                    true
                 });
 
                 if let Some((_, chunk)) = removed_chunk {
@@ -274,7 +274,7 @@ impl Level {
         if chunks_pos.is_empty() {
             return vec![];
         }
-        info!("Loading chunks from disk {:}", chunks_pos.len());
+        trace!("Loading chunks from disk {:}", chunks_pos.len());
         self.chunk_saver
             .load_chunks(&self.level_folder, chunks_pos)
             .into_par_iter()
@@ -319,8 +319,9 @@ impl Level {
         let chunks_to_load = chunks
             .par_iter()
             .filter(|pos| {
-                if let Some(chunk) = &self.loaded_chunks.get(pos) {
-                    send_chunks(false, chunk.value().clone(), &channel, rt);
+                if let Some(entry_bind) = &self.loaded_chunks.get(pos) {
+                    let chunk = entry_bind.value().clone();
+                    send_chunks(false, chunk, &channel, rt);
                     false
                 } else {
                     true
@@ -336,20 +337,22 @@ impl Level {
         self.load_chunks_from_save(&chunks_to_load)
             .into_par_iter()
             .for_each(|(pos, chunk)| {
-                if let Some(chunk) = &self.loaded_chunks.get(&pos) {
-                    send_chunks(true, chunk.value().clone(), &channel, rt);
+                if let Some(entry_bind) = &self.loaded_chunks.get(&pos) {
+                    send_chunks(true, entry_bind.value().clone(), &channel, rt);
                 } else {
-                    let chunk = &self
+                    let loaded_chunk = match chunk {
+                        Some(chunk) => chunk,
+                        None => self.world_gen.generate_chunk(pos),
+                    };
+
+                    let entry_bind = &self
                         .loaded_chunks
                         .entry(pos)
-                        .or_insert_with(|| match chunk {
-                            Some(chunk) => Arc::new(RwLock::new(chunk)),
-                            None => Arc::new(RwLock::new(self.world_gen.generate_chunk(pos))),
-                        })
+                        .or_insert(Arc::new(RwLock::new(loaded_chunk)))
                         .downgrade();
 
-                    send_chunks(true, chunk.value().clone(), &channel, rt);
-                };
+                    send_chunks(true, entry_bind.value().clone(), &channel, rt);
+                }
             });
     }
 }

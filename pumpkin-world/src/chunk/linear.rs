@@ -138,7 +138,7 @@ impl LinearFileHeader {
 }
 
 impl LinearFile {
-    const fn get_chunk_index(at: Vector2<i32>) -> usize {
+    const fn get_chunk_index(at: &Vector2<i32>) -> usize {
         // we need only the 5 last bits of the x and z coordinates
         let decode_x = at.x - ((at.x >> SUBREGION_BITS) << SUBREGION_BITS);
         let decode_z = at.z - ((at.z >> SUBREGION_BITS) << SUBREGION_BITS);
@@ -307,7 +307,7 @@ impl ChunkSerializer for LinearFile {
     fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
         let mut chunks = chunks_data
             .par_iter()
-            .map(|chunk| (LinearFile::get_chunk_index(chunk.position), chunk))
+            .map(|chunk| (LinearFile::get_chunk_index(&chunk.position), chunk))
             .collect::<Vec<_>>();
 
         chunks.par_sort_unstable_by_key(|(index, _)| *index);
@@ -335,7 +335,7 @@ impl ChunkSerializer for LinearFile {
     ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
         let mut chunks = chunks
             .par_iter()
-            .map(|&chunk| (LinearFile::get_chunk_index(chunk), chunk))
+            .map(|chunk| (LinearFile::get_chunk_index(chunk), *chunk))
             .collect::<Vec<_>>();
 
         chunks.par_sort_unstable_by_key(|(index, _)| *index);

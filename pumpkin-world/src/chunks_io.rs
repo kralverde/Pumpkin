@@ -104,43 +104,43 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
         // using dead-lock save methods like `or_try_insert_with`
 
         if let Some(serializer) = &self.file_locks.get(path) {
-            Ok(serializer.value().clone())
-        } else {
-            let serializer = &self
-                .file_locks
-                .entry(path.to_path_buf())
-                .or_try_insert_with(|| {
-                    trace!("Reading file: {:?}", path);
-                    let file = OpenOptions::new()
-                        .write(false)
-                        .read(true)
-                        .create(false)
-                        .truncate(false)
-                        .open(path)
-                        .map_err(|err| match err.kind() {
-                            ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
-                            kind => ChunkReadingError::IoError(kind),
-                        });
-
-                    match file {
-                        Ok(file) => {
-                            let file_bytes = file
-                                .bytes()
-                                .collect::<Result<Vec<_>, _>>()
-                                .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
-
-                            Ok(Arc::new(RwLock::new(S::from_bytes(&file_bytes)?)))
-                        }
-                        Err(ChunkReadingError::ChunkNotExist) => {
-                            Ok(Arc::new(RwLock::new(S::default())))
-                        }
-                        Err(err) => Err(err),
-                    }
-                })?
-                .downgrade();
-
-            Ok(serializer.value().clone())
+            return Ok(serializer.value().clone());
         }
+
+        let serializer = &self
+            .file_locks
+            .entry(path.to_path_buf())
+            .or_try_insert_with(|| {
+                trace!("Reading file: {:?}", path);
+                let file = OpenOptions::new()
+                    .write(false)
+                    .read(true)
+                    .create(false)
+                    .truncate(false)
+                    .open(path)
+                    .map_err(|err| match err.kind() {
+                        ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                        kind => ChunkReadingError::IoError(kind),
+                    });
+
+                match file {
+                    Ok(file) => {
+                        let file_bytes = file
+                            .bytes()
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+
+                        Ok(Arc::new(RwLock::new(S::from_bytes(&file_bytes)?)))
+                    }
+                    Err(ChunkReadingError::ChunkNotExist) => {
+                        Ok(Arc::new(RwLock::new(S::default())))
+                    }
+                    Err(err) => Err(err),
+                }
+            })?
+            .downgrade();
+
+        Ok(serializer.value().clone())
     }
 
     pub fn write_file(&self, path: &Path, serializer: &S) -> Result<(), ChunkWritingError> {
@@ -214,9 +214,8 @@ where
 
                 // We need to block the read to avoid other threads to write/modify the data
 
-                let chunk_guard = tokio::task::block_in_place(|| chunk_serializer.blocking_read());
+                let chunk_guard = &tokio::task::block_in_place(|| chunk_serializer.blocking_read());
                 let fetched_chunks = chunk_guard.get_chunks_data(chunks.as_slice());
-                drop(chunk_guard);
 
                 fetched_chunks
             })

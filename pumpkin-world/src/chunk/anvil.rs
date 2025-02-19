@@ -205,7 +205,6 @@ impl AnvilChunkData {
         bytes
     }
 
- 
     fn to_chunk(&self, pos: Vector2<i32>) -> Result<ChunkData, ChunkReadingError> {
         let bytes = &self.compressed_data[..self.length as usize - 1];
 
@@ -243,7 +242,7 @@ impl AnvilChunkFile {
         (at.x >> SUBREGION_BITS, at.z >> SUBREGION_BITS) // Divide by 32 for the region coordinates
     }
 
-    const fn get_chunk_index(pos: Vector2<i32>) -> usize {
+    const fn get_chunk_index(pos: &Vector2<i32>) -> usize {
         let local_x = (pos.x & 31) as usize;
         let local_z = (pos.z & 31) as usize;
         (local_z << 5) + local_x
@@ -259,7 +258,6 @@ impl Default for AnvilChunkFile {
     }
 }
 
-      
 impl ChunkSerializer for AnvilChunkFile {
     type Data = ChunkData;
 
@@ -270,7 +268,6 @@ impl ChunkSerializer for AnvilChunkFile {
 
     fn to_bytes(&self) -> Vec<u8> {
         let mut chunk_data: Vec<u8> = Vec::new();
-
 
         let mut location_bytes: Vec<u8> = Vec::with_capacity(SECTOR_BYTES);
         let mut timestamp_bytes: Vec<u8> = Vec::with_capacity(SECTOR_BYTES);
@@ -327,7 +324,6 @@ impl ChunkSerializer for AnvilChunkFile {
             let bytes_offset = (sector_offset - 2) * SECTOR_BYTES;
             let bytes_count = sector_count * SECTOR_BYTES;
 
-
             chunk_file.chunks_data[i] = Some(AnvilChunkData::from_bytes(
                 &chunks[bytes_offset..bytes_offset + bytes_count],
             )?);
@@ -340,7 +336,7 @@ impl ChunkSerializer for AnvilChunkFile {
         let mut chunks = chunks_data
             .par_iter()
             .map(|chunk| {
-                let chunk_index = Self::get_chunk_index(chunk.position);
+                let chunk_index = Self::get_chunk_index(&chunk.position);
                 (chunk_index, chunk)
             })
             .collect::<Vec<_>>();
@@ -360,7 +356,7 @@ impl ChunkSerializer for AnvilChunkFile {
     ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
         let mut chunks = chunks
             .par_iter()
-            .map(|chunk| (Self::get_chunk_index(*chunk), *chunk))
+            .map(|chunk| (Self::get_chunk_index(chunk), *chunk))
             .collect::<Vec<_>>();
 
         chunks.par_sort_unstable_by_key(|(index, _)| *index);
@@ -383,85 +379,85 @@ impl ChunkSerializer for AnvilChunkFile {
 }
 
 pub fn chunk_to_bytes(chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializingError> {
-   let mut sections = Vec::new();
+    let mut sections = Vec::new();
 
-        for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
-            // get unique blocks
-            let unique_blocks: HashSet<_> = blocks.iter().collect();
+    for (i, blocks) in chunk_data.subchunks.array_iter().enumerate() {
+        // get unique blocks
+        let unique_blocks: HashSet<_> = blocks.iter().collect();
 
-            let palette: IndexMap<_, _> = unique_blocks
-                .into_iter()
-                .enumerate()
-                .map(|(i, block)| {
-                    let name = STATE_ID_TO_REGISTRY_ID.get(block).unwrap();
-                    (block, (name, i))
-                })
-                .collect();
+        let palette: IndexMap<_, _> = unique_blocks
+            .into_iter()
+            .enumerate()
+            .map(|(i, block)| {
+                let name = STATE_ID_TO_REGISTRY_ID.get(block).unwrap();
+                (block, (name, i))
+            })
+            .collect();
 
-            // Determine the number of bits needed to represent the largest index in the palette
-            let block_bit_size = if palette.len() < 16 {
-                4
-            } else {
-                ceil_log2(palette.len() as u32).max(4)
-            };
+        // Determine the number of bits needed to represent the largest index in the palette
+        let block_bit_size = if palette.len() < 16 {
+            4
+        } else {
+            ceil_log2(palette.len() as u32).max(4)
+        };
 
-            let mut section_longs = Vec::new();
-            let mut current_pack_long: i64 = 0;
-            let mut bits_used_in_pack: u32 = 0;
+        let mut section_longs = Vec::new();
+        let mut current_pack_long: i64 = 0;
+        let mut bits_used_in_pack: u32 = 0;
 
-            // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
-            // if palette.len() > 1 {}
-            // TODO: Update to write empty data. Rn or read does not handle this elegantly
-            for block in blocks.iter() {
-                // Push if next bit does not fit
-                if bits_used_in_pack + block_bit_size as u32 > 64 {
-                    section_longs.push(current_pack_long);
-                    current_pack_long = 0;
-                    bits_used_in_pack = 0;
-                }
-                let index = palette.get(block).expect("Just added all unique").1;
-                current_pack_long |= (index as i64) << bits_used_in_pack;
-                bits_used_in_pack += block_bit_size as u32;
-
-                assert!(bits_used_in_pack <= 64);
-
-                // If the current 64-bit integer is full, push it to the section_longs and start a new one
-                if bits_used_in_pack >= 64 {
-                    section_longs.push(current_pack_long);
-                    current_pack_long = 0;
-                    bits_used_in_pack = 0;
-                }
-            }
-
-            // Push the last 64-bit integer if it contains any data
-            if bits_used_in_pack > 0 {
+        // Empty data if the palette only contains one index https://minecraft.fandom.com/wiki/Chunk_format
+        // if palette.len() > 1 {}
+        // TODO: Update to write empty data. Rn or read does not handle this elegantly
+        for block in blocks.iter() {
+            // Push if next bit does not fit
+            if bits_used_in_pack + block_bit_size as u32 > 64 {
                 section_longs.push(current_pack_long);
+                current_pack_long = 0;
+                bits_used_in_pack = 0;
             }
+            let index = palette.get(block).expect("Just added all unique").1;
+            current_pack_long |= (index as i64) << bits_used_in_pack;
+            bits_used_in_pack += block_bit_size as u32;
 
-            sections.push(ChunkSection {
-                y: i as i8 - 4,
-                block_states: Some(ChunkSectionBlockStates {
-                    data: Some(section_longs.into_boxed_slice()),
-                    palette: palette
-                        .into_iter()
-                        .map(|entry| PaletteEntry {
-                            name: entry.1 .0.to_string(),
-                            properties: {
-                                /*
-                                let properties = &get_block(entry.1 .0).unwrap().properties;
-                                let mut map = HashMap::new();
-                                for property in properties {
-                                    map.insert(property.name.to_string(), property.values.clone());
-                                }
-                                Some(map)
-                                */
-                                None
-                            },
-                        })
-                        .collect(),
-                }),
-            });
+            assert!(bits_used_in_pack <= 64);
+
+            // If the current 64-bit integer is full, push it to the section_longs and start a new one
+            if bits_used_in_pack >= 64 {
+                section_longs.push(current_pack_long);
+                current_pack_long = 0;
+                bits_used_in_pack = 0;
+            }
         }
+
+        // Push the last 64-bit integer if it contains any data
+        if bits_used_in_pack > 0 {
+            section_longs.push(current_pack_long);
+        }
+
+        sections.push(ChunkSection {
+            y: i as i8 - 4,
+            block_states: Some(ChunkSectionBlockStates {
+                data: Some(section_longs.into_boxed_slice()),
+                palette: palette
+                    .into_iter()
+                    .map(|entry| PaletteEntry {
+                        name: entry.1 .0.to_string(),
+                        properties: {
+                            /*
+                            let properties = &get_block(entry.1 .0).unwrap().properties;
+                            let mut map = HashMap::new();
+                            for property in properties {
+                                map.insert(property.name.to_string(), property.values.clone());
+                            }
+                            Some(map)
+                            */
+                            None
+                        },
+                    })
+                    .collect(),
+            }),
+        });
+    }
 
     let nbt = ChunkNbt {
         data_version: WORLD_DATA_VERSION,
