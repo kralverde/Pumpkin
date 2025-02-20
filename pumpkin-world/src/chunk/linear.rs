@@ -8,7 +8,6 @@ use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use rayon::slice::ParallelSliceMut;
 
 use super::anvil::{chunk_to_bytes, CHUNK_COUNT, SUBREGION_BITS};
 use super::{ChunkData, ChunkReadingError, ChunkWritingError};

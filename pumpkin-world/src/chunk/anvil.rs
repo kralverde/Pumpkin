@@ -5,10 +5,7 @@ use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_nbt::serializer::to_bytes;
 use pumpkin_util::math::ceil_log2;
 use pumpkin_util::math::vector2::Vector2;
-use rayon::{
-    iter::{IntoParallelRefIterator, ParallelIterator},
-    slice::ParallelSliceMut,
-};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use std::{
     collections::HashSet,
