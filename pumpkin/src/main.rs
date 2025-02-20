@@ -31,7 +31,7 @@
 #![expect(clippy::module_name_repetitions)]
 #![expect(clippy::struct_excessive_bools)]
 // Not warn event sending macros
-#![allow(unused_labels)]
+#![expect(unused_labels)]
 
 #[cfg(target_os = "wasi")]
 compile_error!("Compiling for WASI targets is not supported!");
@@ -48,7 +48,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Mutex;
 
 use crate::server::CURRENT_MC_VERSION;
-use pumpkin::{init_log, PumpkinServer};
+use pumpkin::{init_log, stop_server, PumpkinServer, SHOULD_STOP};
 use pumpkin_protocol::CURRENT_MC_PROTOCOL;
 use pumpkin_util::text::{color::NamedColor, TextComponent};
 use std::time::Instant;
@@ -84,6 +84,7 @@ async fn main() {
     std::panic::set_hook(Box::new(move |info| {
         default_panic(info);
         // TODO: Gracefully exit?
+        // we need to abide by the panic rules here
         std::process::exit(1);
     }));
 
@@ -121,6 +122,7 @@ async fn main() {
     );
 
     pumpkin_server.start().await;
+    log::info!("The server has stopped.");
 }
 
 fn handle_interrupt() {
@@ -130,7 +132,7 @@ fn handle_interrupt() {
             .color_named(NamedColor::Red)
             .to_pretty_console()
     );
-    std::process::exit(0);
+    stop_server();
 }
 
 // Non-UNIX Ctrl-C handling

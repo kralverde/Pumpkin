@@ -1,4 +1,4 @@
-use std::{ops::Deref, path::PathBuf, sync::Arc};
+use std::{fs, ops::Deref, path::PathBuf, sync::Arc};
 
 use dashmap::{DashMap, Entry};
 use log::trace;
@@ -16,7 +16,10 @@ use crate::{
     chunks_io::{ChunkFileManager, ChunkIO, LoadedData},
     generation::{get_world_gen, Seed, WorldGenerator},
     lock::{anvil::AnvilLevelLocker, LevelLocker},
-    world_info::{anvil::AnvilLevelInfo, LevelData, WorldInfoReader, WorldInfoWriter},
+    world_info::{
+        anvil::{AnvilLevelInfo, LEVEL_DAT_BACKUP_FILE_NAME, LEVEL_DAT_FILE_NAME},
+        LevelData, WorldInfoError, WorldInfoReader, WorldInfoWriter,
+    },
 };
 
 /// The `Level` module provides functionality for working with chunks within or outside a Minecraft world.
@@ -65,9 +68,34 @@ impl Level {
         let locker = AnvilLevelLocker::look(&level_folder).expect("Failed to lock level");
 
         // TODO: Load info correctly based on world format type
-        let level_info = AnvilLevelInfo
-            .read_world_info(&level_folder)
-            .unwrap_or_default(); // TODO: Improve error handling
+        let level_info = AnvilLevelInfo.read_world_info(&level_folder);
+        if let Err(error) = &level_info {
+            match error {
+                // If it doesn't exist, just make a new one
+                WorldInfoError::InfoNotFound => (),
+                WorldInfoError::UnsupportedVersion(version) => {
+                    log::error!("Failed to load world info!, {version}");
+                    log::error!("{}", error);
+                    panic!("Unsupported world data! See the logs for more info.");
+                }
+                e => {
+                    panic!("World Error {}", e);
+                }
+            }
+        } else {
+            let dat_path = level_folder.root_folder.join(LEVEL_DAT_FILE_NAME);
+            if dat_path.exists() {
+                let backup_path = level_folder.root_folder.join(LEVEL_DAT_BACKUP_FILE_NAME);
+                fs::copy(dat_path, backup_path).unwrap();
+            }
+        }
+
+        let level_info = level_info.unwrap_or_default(); // TODO: Improve error handling
+        log::info!(
+            "Loading world with seed: {}",
+            level_info.world_gen_settings.seed
+        );
+
         let seed = Seed(level_info.world_gen_settings.seed as u64);
         let world_gen = get_world_gen(seed).into();
 
@@ -93,12 +121,25 @@ impl Level {
     pub async fn save(&self) {
         log::info!("Saving level...");
         // chunks are automatically saved when all players get removed
-        // lets first save all chunks
+        // TODO: Await chunks that have been called by this ^
+
+        // save all stragling chunks
+        let chunks_to_write = self
+            .loaded_chunks
+            .iter()
+            .map(|chunk| chunk.value().clone())
+            .collect::<Vec<_>>();
+        self.write_chunks(chunks_to_write).await;
 
         // then lets save the world info
-        self.world_info_writer
-            .write_world_info(self.level_info.clone(), &self.level_folder)
-            .expect("Failed to save world info");
+        let result = self
+            .world_info_writer
+            .write_world_info(self.level_info.clone(), &self.level_folder);
+
+        // Lets not stop the overall save for this
+        if let Err(err) = result {
+            log::error!("Failed to save level.dat: {}", err);
+        }
     }
 
     pub fn get_block() {}
@@ -123,6 +164,7 @@ impl Level {
     }
 
     pub fn mark_chunk_as_newly_watched(&self, chunk: Vector2<i32>) {
+        log::trace!("{:?} marked as newly watched", chunk);
         match self.chunk_watchers.entry(chunk) {
             Entry::Occupied(mut occupied) => {
                 let value = occupied.get_mut();
@@ -151,6 +193,7 @@ impl Level {
 
     /// Returns whether the chunk should be removed from memory
     pub fn mark_chunk_as_not_watched(&self, chunk: Vector2<i32>) -> bool {
+        log::trace!("{:?} marked as no longer watched", chunk);
         match self.chunk_watchers.entry(chunk) {
             Entry::Occupied(mut occupied) => {
                 let value = occupied.get_mut();
@@ -188,28 +231,25 @@ impl Level {
                     true
                 });
 
-                if let Some((_, chunk)) = removed_chunk {
+                if let Some((at, chunk)) = removed_chunk {
+                    log::trace!("{:?} is being cleaned", at);
                     return Some(chunk);
                 } else if let Some(chunk_guard) = &loaded_chunks.get(&at) {
+                    log::trace!("{:?} is not being cleaned but saved", at);
                     return Some(chunk_guard.value().clone());
                 }
                 None
             });
         }
 
-        let rt = Handle::current();
-        let level = self.clone();
+        let chunks_to_write = chunks_tasks
+            .join_all()
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
 
-        rt.spawn(async move {
-            let chunks_to_write = chunks_tasks
-                .join_all()
-                .await
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-
-            level.write_chunks(chunks_to_write.as_slice()).await;
-        });
+        self.write_chunks(chunks_to_write).await;
     }
 
     pub async fn clean_chunk(self: &Arc<Self>, chunk: &Vector2<i32>) {
@@ -238,35 +278,38 @@ impl Level {
             self.chunk_watchers.shrink_to_fit();
         }
     }
-    pub async fn write_chunks(&self, chunks_to_write: &[Arc<RwLock<ChunkData>>]) {
+    pub async fn write_chunks(&self, chunks_to_write: Vec<Arc<RwLock<ChunkData>>>) {
         if chunks_to_write.is_empty() {
             return;
         }
 
-        let futures = chunks_to_write
-            .iter()
-            .map(|chunk| chunk.read())
-            .collect::<Vec<_>>();
+        let chunk_saver = self.chunk_saver.clone();
+        let level_folder = self.level_folder.clone();
 
-        let mut chunks_guards = Vec::new();
-        for guard in futures {
-            let chunk = guard.await;
-            chunks_guards.push(chunk);
-        }
+        // TODO: Save the join handles to await them when stopping the server
+        tokio::spawn(async move {
+            let futures = chunks_to_write
+                .iter()
+                .map(|chunk| chunk.read())
+                .collect::<Vec<_>>();
 
-        let chunks = chunks_guards
-            .iter()
-            .map(|chunk| (chunk.position, chunk.deref()))
-            .collect::<Vec<_>>();
+            let mut chunks_guards = Vec::new();
+            for guard in futures {
+                let chunk = guard.await;
+                chunks_guards.push(chunk);
+            }
 
-        trace!("Writing chunks to disk {:}", chunks_guards.len());
+            let chunks = chunks_guards
+                .iter()
+                .map(|chunk| (chunk.position, chunk.deref()))
+                .collect::<Vec<_>>();
 
-        if let Err(error) = self
-            .chunk_saver
-            .save_chunks(&self.level_folder, chunks.as_slice())
-        {
-            log::error!("Failed writing Chunk to disk {}", error.to_string());
-        }
+            trace!("Writing chunks to disk {:}", chunks_guards.len());
+
+            if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks.as_slice()) {
+                log::error!("Failed writing Chunk to disk {}", error.to_string());
+            }
+        });
     }
 
     fn load_chunks_from_save(
