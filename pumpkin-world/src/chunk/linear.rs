@@ -7,7 +7,6 @@ use bytes::{Buf, BufMut};
 use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use super::anvil::{chunk_to_bytes, CHUNK_COUNT, SUBREGION_BITS};
 use super::{ChunkData, ChunkReadingError, ChunkWritingError};
@@ -304,16 +303,12 @@ impl ChunkSerializer for LinearFile {
     }
 
     fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
-        let chunks = chunks_data
-            .par_iter()
-            .map(|chunk| (LinearFile::get_chunk_index(&chunk.position), chunk))
-            .collect::<Vec<_>>();
-
-        for (chunk_index, chunk_data) in chunks {
+        for chunk_data in chunks_data {
+            let index = LinearFile::get_chunk_index(&chunk_data.position);
             let chunk_raw = chunk_to_bytes(chunk_data)
                 .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
-            let header = &mut self.chunks_headers[chunk_index];
+            let header = &mut self.chunks_headers[index];
             header.size = chunk_raw.len() as u32;
             header.timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -321,8 +316,9 @@ impl ChunkSerializer for LinearFile {
                 .as_secs() as u32;
 
             // We update the data buffer
-            self.chunks_data[chunk_index] = Some(chunk_raw);
+            self.chunks_data[index] = Some(chunk_raw);
         }
+
         Ok(())
     }
 
@@ -330,25 +326,20 @@ impl ChunkSerializer for LinearFile {
         &self,
         chunks: &[Vector2<i32>],
     ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
-        let chunks = chunks
-            .par_iter()
-            .map(|chunk| (LinearFile::get_chunk_index(chunk), *chunk))
-            .collect::<Vec<_>>();
-
-        let mut fetched_chunks = Vec::with_capacity(chunks.len());
-        for (chunk_index, at) in chunks {
-            let chunk = match &self.chunks_data[chunk_index] {
-                None => LoadedData::Missing(at),
-                Some(chunk_bytes) => match ChunkData::from_bytes(chunk_bytes.as_slice(), at) {
-                    Ok(chunk) => LoadedData::Loaded(chunk),
-                    Err(err) => LoadedData::Error((at, ChunkReadingError::ParsingError(err))),
-                },
-            };
-
-            fetched_chunks.push(chunk);
-        }
-
-        fetched_chunks
+        chunks
+            .iter()
+            .map(|&at| {
+                let index = LinearFile::get_chunk_index(&at);
+                let chunk = &self.chunks_data[index];
+                match chunk {
+                    Some(chunk_bytes) => match ChunkData::from_bytes(chunk_bytes, at) {
+                        Ok(chunk) => LoadedData::Loaded(chunk),
+                        Err(err) => LoadedData::Error((at, ChunkReadingError::ParsingError(err))),
+                    },
+                    None => LoadedData::Missing(at),
+                }
+            })
+            .collect::<Vec<_>>()
     }
 }
 

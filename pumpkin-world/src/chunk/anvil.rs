@@ -5,7 +5,6 @@ use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_nbt::serializer::to_bytes;
 use pumpkin_util::math::ceil_log2;
 use pumpkin_util::math::vector2::Vector2;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use std::{
     collections::HashSet,
@@ -330,16 +329,9 @@ impl ChunkSerializer for AnvilChunkFile {
     }
 
     fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
-        let chunks = chunks_data
-            .par_iter()
-            .map(|chunk| {
-                let chunk_index = Self::get_chunk_index(&chunk.position);
-                (chunk_index, chunk)
-            })
-            .collect::<Vec<_>>();
-
-        for (chunk_index, chunk_data) in chunks {
-            self.chunks_data[chunk_index] = Some(AnvilChunkData::from_chunk(chunk_data)?);
+        for chunk in chunks_data {
+            let index = AnvilChunkFile::get_chunk_index(&chunk.position);
+            self.chunks_data[index] = Some(AnvilChunkData::from_chunk(chunk)?);
         }
 
         Ok(())
@@ -349,25 +341,21 @@ impl ChunkSerializer for AnvilChunkFile {
         &self,
         chunks: &[Vector2<i32>],
     ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
-        let chunks = chunks
-            .par_iter()
-            .map(|chunk| (Self::get_chunk_index(chunk), *chunk))
-            .collect::<Vec<_>>();
+        chunks
+            .iter()
+            .map(|&at| {
+                let index = AnvilChunkFile::get_chunk_index(&at);
+                let chunk_raw = &self.chunks_data[index];
 
-        let mut fetched_chunks = Vec::with_capacity(chunks.len());
-        for (chunk_index, at) in chunks {
-            let chunk = self.chunks_data[chunk_index].as_ref().map_or_else(
-                || LoadedData::Missing(at),
-                |chunk_data| match chunk_data.to_chunk(at) {
-                    Ok(chunk) => LoadedData::Loaded(chunk),
-                    Err(err) => LoadedData::Error((at, err)),
-                },
-            );
-
-            fetched_chunks.push(chunk);
-        }
-
-        fetched_chunks
+                match chunk_raw {
+                    Some(chunk_data) => match chunk_data.to_chunk(at) {
+                        Ok(chunk) => LoadedData::Loaded(chunk),
+                        Err(err) => LoadedData::Error((at, err)),
+                    },
+                    None => LoadedData::Missing(at),
+                }
+            })
+            .collect::<Vec<_>>()
     }
 }
 
