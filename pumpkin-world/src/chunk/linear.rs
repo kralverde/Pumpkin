@@ -305,12 +305,10 @@ impl ChunkSerializer for LinearFile {
     }
 
     fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
-        let mut chunks = chunks_data
+        let chunks = chunks_data
             .par_iter()
             .map(|chunk| (LinearFile::get_chunk_index(&chunk.position), chunk))
             .collect::<Vec<_>>();
-
-        chunks.par_sort_unstable_by_key(|(index, _)| *index);
 
         for (chunk_index, chunk_data) in chunks {
             let chunk_raw = chunk_to_bytes(chunk_data)
@@ -333,12 +331,10 @@ impl ChunkSerializer for LinearFile {
         &self,
         chunks: &[Vector2<i32>],
     ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
-        let mut chunks = chunks
+        let chunks = chunks
             .par_iter()
             .map(|chunk| (LinearFile::get_chunk_index(chunk), *chunk))
             .collect::<Vec<_>>();
-
-        chunks.par_sort_unstable_by_key(|&(index, _)| index);
 
         let mut fetched_chunks = Vec::with_capacity(chunks.len());
         for (chunk_index, at) in chunks {

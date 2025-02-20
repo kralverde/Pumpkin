@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     error,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -104,6 +104,7 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
         // using dead-lock save methods like `or_try_insert_with`
 
         if let Some(serializer) = &self.file_locks.get(path) {
+            trace!("Using cached file: {:?}", path);
             return Ok(serializer.value().clone());
         }
 
@@ -111,7 +112,7 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
             .file_locks
             .entry(path.to_path_buf())
             .or_try_insert_with(|| {
-                trace!("Reading file: {:?}", path);
+                trace!("Reading file from Disk: {:?}", path);
                 let file = OpenOptions::new()
                     .write(false)
                     .read(true)
@@ -144,13 +145,17 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
     }
 
     pub fn write_file(&self, path: &Path, serializer: &S) -> Result<(), ChunkWritingError> {
-        trace!("Writing file: {:?}", path);
+        trace!("Writing file to Disk: {:?}", path);
+
+        // We use tmp files to avoid corruption of the data if the process is abruptly interrupted.
+        let tmp_path = &path.with_extension("tmp");
+
         let mut file = OpenOptions::new()
             .write(true)
             .read(false)
             .create(true)
             .truncate(true)
-            .open(path)
+            .open(tmp_path)
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
         file.write_all(serializer.to_bytes().as_slice())
@@ -159,6 +164,10 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
         file.flush()
             .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
 
+        // The rename of the file works like an atomic operation ensuring
+        // that the data is not corrupted before the rename is completed
+        fs::rename(tmp_path, path).map_err(|err| ChunkWritingError::IoError(err.kind()))?;
+
         Ok(())
     }
 
@@ -166,8 +175,13 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
         // Remove the locks that are not being used,
         // there will be always at least one strong reference, the one in the DashMap
         paths.par_iter().for_each(|path| {
-            self.file_locks
+            let removed = self
+                .file_locks
                 .remove_if(path, |_, lock| Arc::strong_count(lock) <= 1);
+
+            if let Some((path, _)) = removed {
+                trace!("Removed lock for file: {:?}", path);
+            }
         });
     }
 }
