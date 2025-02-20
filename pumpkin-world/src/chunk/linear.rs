@@ -8,7 +8,7 @@ use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
 
-use super::anvil::{chunk_to_bytes, CHUNK_COUNT, SUBREGION_BITS};
+use super::anvil::{CHUNK_COUNT, SUBREGION_BITS, chunk_to_bytes};
 use super::{ChunkData, ChunkReadingError, ChunkWritingError};
 
 /// The signature of the linear file format
@@ -353,8 +353,8 @@ mod tests {
 
     use crate::generation::{Seed, get_world_gen};
     use crate::{
-        chunk::{ ChunkReadingError, linear::LinearChunkFormat},
-        chunk_io::{ChunkFileManager, ChunkIO, LoadedData},
+        chunk::linear::LinearFile,
+        chunks_io::{ChunkFileManager, ChunkIO, LoadedData},
         level::LevelFolder,
     };
 

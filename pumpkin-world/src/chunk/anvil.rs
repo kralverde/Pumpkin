@@ -463,8 +463,8 @@ mod tests {
 
     use crate::generation::{Seed, get_world_gen};
     use crate::{
-        chunk::{ ChunkReadingError, anvil::AnvilChunkFormat},
-        chunks_io::{ChunkFileManager, ChunkIO, LoadedData}, 
+        chunk::anvil::AnvilChunkFile,
+        chunks_io::{ChunkFileManager, ChunkIO, LoadedData},
         level::LevelFolder,
     };
 
