@@ -359,7 +359,7 @@ impl ChunkSerializer for AnvilChunkFile {
             .map(|chunk| (Self::get_chunk_index(chunk), *chunk))
             .collect::<Vec<_>>();
 
-        chunks.par_sort_unstable_by_key(|(index, _)| *index);
+        chunks.par_sort_unstable_by_key(|&(index, _)| index);
 
         let mut fetched_chunks = Vec::with_capacity(chunks.len());
         for (chunk_index, at) in chunks {
@@ -528,7 +528,7 @@ mod tests {
                     &level_folder,
                     &chunks
                         .iter()
-                        .map(|(at, chunk)| (*at, chunk.clone()))
+                        .map(|(at, chunk)| (*at, chunk))
                         .collect::<Vec<_>>(),
                 )
                 .expect("Failed to write chunk");

@@ -1,7 +1,7 @@
 use std::{ops::Deref, path::PathBuf, sync::Arc};
 
 use dashmap::{DashMap, Entry};
-use log::{info, trace};
+use log::trace;
 use num_traits::Zero;
 use pumpkin_config::{chunk::ChunkFormat, ADVANCED_CONFIG};
 use pumpkin_util::math::vector2::Vector2;
@@ -243,21 +243,23 @@ impl Level {
             return;
         }
 
-        let mut guards = tokio::task::JoinSet::new();
+        let futures = chunks_to_write
+            .iter()
+            .map(|chunk| chunk.read())
+            .collect::<Vec<_>>();
 
-        for chunk in chunks_to_write {
-            let chunk = chunk.clone();
-            guards.spawn(async move {
-                let chunk_guard = chunk.read().await;
-                let chunk = chunk_guard.deref().clone();
-                drop(chunk_guard);
-
-                (chunk.position, chunk)
-            });
+        let mut chunks_guards = Vec::new();
+        for guard in futures {
+            let chunk = guard.await;
+            chunks_guards.push(chunk);
         }
 
-        let chunks = guards.join_all().await;
-        trace!("Writing chunks to disk {:}", chunks.len());
+        let chunks = chunks_guards
+            .iter()
+            .map(|chunk| (chunk.position, chunk.deref()))
+            .collect::<Vec<_>>();
+
+        trace!("Writing chunks to disk {:}", chunks_guards.len());
 
         if let Err(error) = self
             .chunk_saver
@@ -320,8 +322,7 @@ impl Level {
             .par_iter()
             .filter(|pos| {
                 if let Some(entry_bind) = &self.loaded_chunks.get(pos) {
-                    let chunk = entry_bind.value().clone();
-                    send_chunks(false, chunk, &channel, rt);
+                    send_chunks(false, entry_bind.value().clone(), &channel, rt);
                     false
                 } else {
                     true
@@ -337,22 +338,23 @@ impl Level {
         self.load_chunks_from_save(&chunks_to_load)
             .into_par_iter()
             .for_each(|(pos, chunk)| {
-                if let Some(entry_bind) = &self.loaded_chunks.get(&pos) {
-                    send_chunks(true, entry_bind.value().clone(), &channel, rt);
+                let (is_new, entry_bind) = if let Some(entry_bind) = self.loaded_chunks.get(&pos) {
+                    (false, entry_bind)
                 } else {
-                    let loaded_chunk = match chunk {
-                        Some(chunk) => chunk,
-                        None => self.world_gen.generate_chunk(pos),
-                    };
-
-                    let entry_bind = &self
+                    let entry_bind = self
                         .loaded_chunks
                         .entry(pos)
-                        .or_insert(Arc::new(RwLock::new(loaded_chunk)))
+                        .or_insert_with(|| {
+                            Arc::new(RwLock::new(
+                                chunk.unwrap_or_else(|| self.world_gen.generate_chunk(pos)),
+                            ))
+                        })
                         .downgrade();
 
-                    send_chunks(true, entry_bind.value().clone(), &channel, rt);
-                }
+                    (true, entry_bind)
+                };
+                send_chunks(is_new, entry_bind.value().clone(), &channel, rt);
+                drop(entry_bind);
             });
     }
 }

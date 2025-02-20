@@ -54,7 +54,7 @@ where
     fn save_chunks(
         &self,
         folder: &LevelFolder,
-        chunks_data: &[(Vector2<i32>, D)],
+        chunks_data: &[(Vector2<i32>, &D)],
     ) -> Result<(), ChunkWritingError>;
 }
 
@@ -214,8 +214,9 @@ where
 
                 // We need to block the read to avoid other threads to write/modify the data
 
-                let chunk_guard = &tokio::task::block_in_place(|| chunk_serializer.blocking_read());
+                let chunk_guard = tokio::task::block_in_place(|| chunk_serializer.blocking_read());
                 let fetched_chunks = chunk_guard.get_chunks_data(chunks.as_slice());
+                drop(chunk_guard);
 
                 fetched_chunks
             })
@@ -229,7 +230,7 @@ where
     fn save_chunks(
         &self,
         folder: &LevelFolder,
-        chunks_data: &[(Vector2<i32>, D)],
+        chunks_data: &[(Vector2<i32>, &D)],
     ) -> Result<(), ChunkWritingError> {
         let mut regions_chunks: BTreeMap<String, Vec<&D>> = BTreeMap::new();
 
