@@ -351,10 +351,12 @@ mod tests {
     use std::path::PathBuf;
     use temp_dir::TempDir;
 
-    use crate::chunk::linear::LinearFile;
-    use crate::chunks_io::{ChunkFileManager, ChunkIO, LoadedData};
-    use crate::generation::{get_world_gen, Seed};
-    use crate::level::LevelFolder;
+    use crate::generation::{Seed, get_world_gen};
+    use crate::{
+        chunk::{ ChunkReadingError, linear::LinearChunkFormat},
+        chunk_io::{ChunkFileManager, ChunkIO, LoadedData},
+        level::LevelFolder,
+    };
 
     #[test]
     fn not_existing() {

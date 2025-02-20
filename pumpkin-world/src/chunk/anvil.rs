@@ -422,7 +422,7 @@ pub fn chunk_to_bytes(chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializin
                 palette: palette
                     .into_iter()
                     .map(|entry| PaletteEntry {
-                        name: entry.1 .0.to_string(),
+                        name: entry.1.0.to_string(),
                         properties: {
                             /*
                             let properties = &get_block(entry.1 .0).unwrap().properties;
@@ -461,10 +461,12 @@ mod tests {
     use std::path::PathBuf;
     use temp_dir::TempDir;
 
-    use crate::chunk::anvil::AnvilChunkFile;
-    use crate::chunks_io::{ChunkFileManager, ChunkIO, LoadedData};
-    use crate::generation::{get_world_gen, Seed};
-    use crate::level::LevelFolder;
+    use crate::generation::{Seed, get_world_gen};
+    use crate::{
+        chunk::{ ChunkReadingError, anvil::AnvilChunkFormat},
+        chunks_io::{ChunkFileManager, ChunkIO, LoadedData}, 
+        level::LevelFolder,
+    };
 
     #[test]
     fn not_existing() {

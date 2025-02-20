@@ -6,9 +6,9 @@ use std::{collections::HashMap, iter::repeat_with};
 use thiserror::Error;
 
 use crate::{
+    WORLD_HEIGHT,
     block::BlockState,
     coordinates::{ChunkRelativeBlockCoordinates, Height},
-    WORLD_HEIGHT,
 };
 
 pub mod anvil;
