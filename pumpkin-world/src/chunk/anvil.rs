@@ -63,6 +63,8 @@ pub struct AnvilChunkFile {
 }
 
 impl Compression {
+    const NO_COMPRESSION: u8 = 3;
+
     fn decompress_data(&self, compressed_data: &[u8]) -> Result<Vec<u8>, CompressionError> {
         match self {
             Compression::GZip => {
@@ -187,14 +189,18 @@ impl AnvilChunkData {
     }
 
     fn to_bytes(&self) -> Vec<u8> {
-        let total_size = self.compressed_data.len() + 5;
+        // 4 bytes for the *length* and 1 byte for the *compression* method
+        let total_size = self.compressed_data.len() + 4 + 1;
         let sector_count = total_size.div_ceil(SECTOR_BYTES);
         let padded_size = sector_count * SECTOR_BYTES;
 
         let mut bytes = Vec::with_capacity(padded_size);
 
         bytes.put_u32(self.length);
-        bytes.put_u8(self.compression.map_or(3, |c| c as u8));
+        bytes.put_u8(
+            self.compression
+                .map_or(Compression::NO_COMPRESSION, |c| c as u8),
+        );
         bytes.extend_from_slice(&self.compressed_data);
 
         bytes.resize(padded_size, 0);
@@ -202,6 +208,7 @@ impl AnvilChunkData {
     }
 
     fn to_chunk(&self, pos: Vector2<i32>) -> Result<ChunkData, ChunkReadingError> {
+        // -1 for the padding/align of the *compresion* byte
         let bytes = &self.compressed_data[..self.length as usize - 1];
 
         if let Some(compression) = self.compression {
@@ -235,7 +242,8 @@ impl AnvilChunkData {
 
 impl AnvilChunkFile {
     pub const fn get_region_coords(at: Vector2<i32>) -> (i32, i32) {
-        (at.x >> SUBREGION_BITS, at.z >> SUBREGION_BITS) // Divide by 32 for the region coordinates
+        // Divide by 32 for the region coordinates
+        (at.x >> SUBREGION_BITS, at.z >> SUBREGION_BITS)
     }
 
     const fn get_chunk_index(pos: &Vector2<i32>) -> usize {
@@ -265,8 +273,11 @@ impl ChunkSerializer for AnvilChunkFile {
     fn to_bytes(&self) -> Vec<u8> {
         let mut chunk_data: Vec<u8> = Vec::new();
 
-        let mut location_bytes: Vec<u8> = Vec::with_capacity(SECTOR_BYTES);
-        let mut timestamp_bytes: Vec<u8> = Vec::with_capacity(SECTOR_BYTES);
+        let mut location_bytes = [0; SECTOR_BYTES];
+        let mut timestamp_bytes = [0; SECTOR_BYTES];
+
+        let mut location_buf = location_bytes.as_mut_slice();
+        let mut timestamp_buf = timestamp_bytes.as_mut_slice();
 
         // The first two sectors are reserved for the location table
         let mut current_sector: u32 = 2;
@@ -274,18 +285,21 @@ impl ChunkSerializer for AnvilChunkFile {
             let chunk = if let Some(chunk_data) = &self.chunks_data[i] {
                 chunk_data
             } else {
-                location_bytes.put_u32(0);
-                timestamp_bytes.put_u32(0);
+                // If the chunk is not present, we write 0 to the location and timestamp tables
+                location_buf.put_u32(0);
+                timestamp_buf.put_u32(0);
                 continue;
             };
 
             let chunk_bytes = chunk.to_bytes();
+            // The number of sectors the chunk data occupies
             let sector_count = (chunk_bytes.len() / SECTOR_BYTES) as u32;
 
-            location_bytes.put_u32((current_sector << 8) | sector_count);
-            timestamp_bytes.put_u32(self.timestamp_table[i]);
+            // The location is stored as a 32-bit integer where the first 24 bits are the sector offset and the last 8 bits are the sector count
+            location_buf.put_u32((current_sector << 8) | sector_count);
+            timestamp_buf.put_u32(self.timestamp_table[i]);
 
-            chunk_data.extend(chunk_bytes);
+            chunk_data.extend_from_slice(&chunk_bytes);
 
             current_sector += sector_count;
         }
@@ -316,7 +330,8 @@ impl ChunkSerializer for AnvilChunkFile {
                 continue;
             }
 
-            //we correct the sectors values
+            //we correct the sectors values, -2 for the first two sectors (location and timestamp tables)
+            //and * SECTOR_BYTES for the byte offset at byte level
             let bytes_offset = (sector_offset - 2) * SECTOR_BYTES;
             let bytes_count = sector_count * SECTOR_BYTES;
 
