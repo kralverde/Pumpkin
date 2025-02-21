@@ -208,7 +208,7 @@ impl AnvilChunkData {
     }
 
     fn to_chunk(&self, pos: Vector2<i32>) -> Result<ChunkData, ChunkReadingError> {
-        // -1 for the padding/align of the *compresion* byte
+        // -1 for the padding/align of the *compression* byte
         let bytes = &self.compressed_data[..self.length as usize - 1];
 
         if let Some(compression) = self.compression {
