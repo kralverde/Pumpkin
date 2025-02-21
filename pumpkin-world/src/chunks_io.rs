@@ -11,7 +11,6 @@ use dashmap::DashMap;
 use log::{error, trace};
 use pumpkin_util::math::vector2::Vector2;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use tokio::sync::RwLock;
 
 use crate::{
     chunk::{ChunkReadingError, ChunkWritingError},
@@ -56,6 +55,10 @@ where
         folder: &LevelFolder,
         chunks_data: &[(Vector2<i32>, &D)],
     ) -> Result<(), ChunkWritingError>;
+
+    fn cache_count(&self) -> usize;
+
+    fn wait_for_lock_releases(&self);
 }
 
 /// Trait to serialize and deserialize the chunk data to and from bytes.
@@ -85,63 +88,107 @@ pub trait ChunkSerializer: Send + Sync + Sized + Default {
 /// It also avoid IO operations that could produce dataraces thanks to the
 /// DashMap that manages the locks for the files.
 pub struct ChunkFileManager<S: ChunkSerializer> {
-    file_locks: Arc<DashMap<PathBuf, Arc<RwLock<S>>>>,
+    // TODO: Make file reading/writing async
+
+    // Dashmap has rw-locks on shards, but we want per-serializer
+    file_locks: DashMap<PathBuf, Arc<parking_lot::RwLock<S>>>,
     _serializer: std::marker::PhantomData<S>,
 }
 
 impl<S: ChunkSerializer> Default for ChunkFileManager<S> {
     fn default() -> Self {
         Self {
-            file_locks: Arc::default(),
+            file_locks: DashMap::default(),
             _serializer: std::marker::PhantomData,
         }
     }
 }
 
-impl<S: ChunkSerializer> ChunkFileManager<S> {
-    pub fn read_file(&self, path: &Path) -> Result<Arc<RwLock<S>>, ChunkReadingError> {
-        // We get the entry from the DashMap and try to insert a new lock if it doesn't exist
-        // using dead-lock save methods like `or_try_insert_with`
+pub struct ChunkFileManagerLockGuard<'a, S: ChunkSerializer> {
+    lock: Arc<parking_lot::RwLock<S>>,
+    parent: &'a ChunkFileManager<S>,
+    key: PathBuf,
+}
 
-        if let Some(serializer) = &self.file_locks.get(path) {
-            trace!("Using cached file: {:?}", path);
-            return Ok(serializer.value().clone());
-        }
+impl<'a, S: ChunkSerializer> ChunkFileManagerLockGuard<'a, S> {
+    fn new(
+        key: PathBuf,
+        parent: &'a ChunkFileManager<S>,
+        lock: Arc<parking_lot::RwLock<S>>,
+    ) -> Self {
+        Self { key, parent, lock }
+    }
 
-        let serializer = &self
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, S> {
+        self.lock.write()
+    }
+
+    fn read(&self) -> parking_lot::RwLockReadGuard<'_, S> {
+        self.lock.read()
+    }
+}
+
+impl<S: ChunkSerializer> Drop for ChunkFileManagerLockGuard<'_, S> {
+    fn drop(&mut self) {
+        // If we can aquire a write lock, that means nothing else is locking this -> drop it
+        let _ = self
+            .parent
             .file_locks
-            .entry(path.to_path_buf())
-            .or_try_insert_with(|| {
-                trace!("Reading file from Disk: {:?}", path);
-                let file = OpenOptions::new()
-                    .write(false)
-                    .read(true)
-                    .create(false)
-                    .truncate(false)
-                    .open(path)
-                    .map_err(|err| match err.kind() {
-                        ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
-                        kind => ChunkReadingError::IoError(kind),
-                    });
+            .remove_if(&self.key, |_, value| value.try_write().is_some());
+    }
+}
 
-                match file {
-                    Ok(file) => {
-                        let file_bytes = file
-                            .bytes()
-                            .collect::<Result<Vec<_>, _>>()
-                            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+impl<S: ChunkSerializer> ChunkFileManager<S> {
+    pub fn read_file(
+        &self,
+        path: &Path,
+    ) -> Result<ChunkFileManagerLockGuard<'_, S>, ChunkReadingError> {
+        // We get the entry from the DashMap and try to insert a new lock if it doesn't exist
+        // using dead-lock safe methods like `or_try_insert_with`
 
-                        Ok(Arc::new(RwLock::new(S::from_bytes(&file_bytes)?)))
-                    }
-                    Err(ChunkReadingError::ChunkNotExist) => {
-                        Ok(Arc::new(RwLock::new(S::default())))
-                    }
-                    Err(err) => Err(err),
-                }
-            })?
-            .downgrade();
+        let locked_ref = if let Some(serializer) = self.file_locks.get(path) {
+            trace!("Using cached chunk serializer: {:?}", path);
+            serializer
+        } else {
+            self.file_locks
+                .entry(path.to_path_buf())
+                .or_try_insert_with(|| {
+                    trace!("Reading file from Disk: {:?}", path);
+                    let file = OpenOptions::new()
+                        .write(false)
+                        .read(true)
+                        .create(false)
+                        .truncate(false)
+                        .open(path)
+                        .map_err(|err| match err.kind() {
+                            ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                            kind => ChunkReadingError::IoError(kind),
+                        });
 
-        Ok(serializer.value().clone())
+                    let value = match file {
+                        Ok(file) => {
+                            let file_bytes = file
+                                .bytes()
+                                .collect::<Result<Vec<_>, _>>()
+                                .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+
+                            S::from_bytes(&file_bytes)?
+                        }
+                        Err(ChunkReadingError::ChunkNotExist) => S::default(),
+                        Err(err) => return Err(err),
+                    };
+
+                    Ok(Arc::new(parking_lot::RwLock::new(value)))
+                })?
+                .downgrade()
+        };
+
+        let lock = locked_ref.clone();
+        Ok(ChunkFileManagerLockGuard::new(
+            path.to_path_buf(),
+            self,
+            lock,
+        ))
     }
 
     pub fn write_file(&self, path: &Path, serializer: &S) -> Result<(), ChunkWritingError> {
@@ -227,12 +274,9 @@ where
                 };
 
                 // We need to block the read to avoid other threads to write/modify the data
-
-                let chunk_guard = tokio::task::block_in_place(|| chunk_serializer.blocking_read());
-                let fetched_chunks = chunk_guard.get_chunks_data(chunks.as_slice());
-                drop(chunk_guard);
-
-                fetched_chunks
+                // NOTE: Currently this is done in a rayon thread, so async is not needed
+                let chunk_guard = chunk_serializer.read();
+                chunk_guard.get_chunks_data(chunks.as_slice())
             })
             .collect();
 
@@ -267,6 +311,8 @@ where
             .try_for_each(|(file_name, chunks)| {
                 let path = folder.region_folder.join(file_name);
 
+                //TODO: Do we need to read the chunk from file to write it every time? Cant we just write to
+                //offsets in the file? Especially for the anvil format.
                 let chunk_serializer = match self.read_file(&path) {
                     Ok(file) => Ok(file),
                     Err(ChunkReadingError::ChunkNotExist) => {
@@ -283,21 +329,36 @@ where
                 }?;
 
                 // We need to block the read to avoid other threads to write/modify/read the data
-                let mut chunk_guard =
-                    tokio::task::block_in_place(|| chunk_serializer.blocking_write());
+                // NOTE: We currently call this from a rayon thread so no async is needed.
+                let mut chunk_guard = chunk_serializer.write();
                 chunk_guard.add_chunks_data(chunks.as_slice())?;
 
                 // With the modification done, we can drop the write lock but keep the read lock
                 // to avoid other threads to write/modify the data, but allow other threads to read it
-                let chunk_guard = chunk_guard.downgrade();
+                let chunk_guard = parking_lot::RwLockWriteGuard::downgrade(chunk_guard);
                 self.write_file(&path, &chunk_guard)?;
-                drop(chunk_guard);
-
                 Ok(())
             })?;
 
         self.clean_cache(&paths);
 
         Ok(())
+    }
+
+    fn cache_count(&self) -> usize {
+        self.file_locks.len()
+    }
+
+    fn wait_for_lock_releases(&self) {
+        let locks: Vec<_> = self
+            .file_locks
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+
+        // Aquire a write lock on all entries to verify they are complete
+        for lock in locks {
+            let _lock = lock.write();
+        }
     }
 }

@@ -274,10 +274,11 @@ impl Player {
         level.clean_memory(&radial_chunks);
 
         log::debug!(
-            "Removed player id {} ({}) ({} chunks remain cached)",
+            "Removed player id {} ({}) ({} chunks, {} savers remain cached)",
             self.gameprofile.name,
             self.client.id,
-            level.loaded_chunk_count()
+            level.loaded_chunk_count(),
+            level.cached_chunk_saver_count(),
         );
 
         //self.world().level.list_cached();
