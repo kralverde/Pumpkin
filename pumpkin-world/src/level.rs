@@ -14,8 +14,8 @@ use tokio::{
 use crate::{
     chunk::{ChunkData, anvil::AnvilChunkFile, linear::LinearFile},
     chunks_io::{ChunkFileManager, ChunkIO, LoadedData},
-    generation::{ Seed, WorldGenerator, get_world_gen},
-    lock::{LevelLocker,anvil::AnvilLevelLocker },
+    generation::{Seed, WorldGenerator, get_world_gen},
+    lock::{LevelLocker, anvil::AnvilLevelLocker},
     world_info::{
         LevelData, WorldInfoError, WorldInfoReader, WorldInfoWriter,
         anvil::{AnvilLevelInfo, LEVEL_DAT_BACKUP_FILE_NAME, LEVEL_DAT_FILE_NAME},
@@ -120,16 +120,17 @@ impl Level {
 
     pub async fn save(&self) {
         log::info!("Saving level...");
-        // chunks are automatically saved when all players get removed
-        // TODO: Await chunks that have been called by this ^
-
         // save all stragling chunks
         let chunks_to_write = self
             .loaded_chunks
             .iter()
             .map(|chunk| chunk.value().clone())
             .collect::<Vec<_>>();
-        self.write_chunks(chunks_to_write).await;
+        self.write_chunks(&chunks_to_write).await;
+
+        // wait for chunks currently saving in other threads
+        // TODO: Make this async but its not a super big issue now since we're shutting down
+        self.chunk_saver.wait_for_lock_releases();
 
         // then lets save the world info
         let result = self
@@ -146,6 +147,10 @@ impl Level {
 
     pub fn loaded_chunk_count(&self) -> usize {
         self.loaded_chunks.len()
+    }
+
+    pub fn cached_chunk_saver_count(&self) -> usize {
+        self.chunk_saver.cache_count()
     }
 
     pub fn list_cached(&self) {
@@ -249,7 +254,7 @@ impl Level {
             .flatten()
             .collect::<Vec<_>>();
 
-        self.write_chunks(chunks_to_write).await;
+        self.write_chunks(&chunks_to_write).await;
     }
 
     pub async fn clean_chunk(self: &Arc<Self>, chunk: &Vector2<i32>) {
@@ -278,7 +283,7 @@ impl Level {
             self.chunk_watchers.shrink_to_fit();
         }
     }
-    pub async fn write_chunks(&self, chunks_to_write: Vec<Arc<RwLock<ChunkData>>>) {
+    pub async fn write_chunks(&self, chunks_to_write: &[Arc<RwLock<ChunkData>>]) {
         if chunks_to_write.is_empty() {
             return;
         }
@@ -286,26 +291,21 @@ impl Level {
         let chunk_saver = self.chunk_saver.clone();
         let level_folder = self.level_folder.clone();
 
-        // TODO: Save the join handles to await them when stopping the server
-        tokio::spawn(async move {
+        let chunks_to_write = chunks_to_write.to_vec();
+
+        // TODO: Make this async
+        rayon::spawn(move || {
             let futures = chunks_to_write
                 .iter()
-                .map(|chunk| chunk.read())
+                .map(|chunk| chunk.blocking_read())
                 .collect::<Vec<_>>();
 
-            let mut chunks_guards = Vec::new();
-            for guard in futures {
-                let chunk = guard.await;
-                chunks_guards.push(chunk);
-            }
-
-            let chunks = chunks_guards
+            let chunks = futures
                 .iter()
                 .map(|chunk| (chunk.position, chunk.deref()))
                 .collect::<Vec<_>>();
 
-            trace!("Writing chunks to disk {:}", chunks_guards.len());
-
+            trace!("Writing chunks to disk {:}", chunks.len());
             if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks.as_slice()) {
                 log::error!("Failed writing Chunk to disk {}", error.to_string());
             }
