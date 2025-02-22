@@ -60,7 +60,7 @@ use tokio::{
     sync::{RwLock, mpsc},
 };
 
-pub mod border;
+ub mod border;
 pub mod bossbar;
 pub mod custom_bossbar;
 pub mod scoreboard;
@@ -1033,9 +1033,10 @@ impl World {
         // Split the chunks into 64 chunks groups, this helps with the initial loading
         // of the world where allows to wait less chunks to be retrived before
         // starting to send them to the player.
-        chunks.chunks(64).for_each(|chunks| {
-            level.fetch_chunks(chunks, sender.clone(), &rt);
-        });
+        chunks
+            .chunks(64)
+            .for_each(|chunks| level.fetch_chunks(chunks, sender.clone(), &rt));
+
         receive
     }
 

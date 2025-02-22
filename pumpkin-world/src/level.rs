@@ -126,7 +126,7 @@ impl Level {
             .iter()
             .map(|chunk| chunk.value().clone())
             .collect::<Vec<_>>();
-        self.write_chunks(&chunks_to_write).await;
+        self.write_chunks(chunks_to_write).await;
 
         // wait for chunks currently saving in other threads
         // TODO: Make this async but its not a super big issue now since we're shutting down
@@ -254,7 +254,7 @@ impl Level {
             .flatten()
             .collect::<Vec<_>>();
 
-        self.write_chunks(&chunks_to_write).await;
+        self.write_chunks(chunks_to_write).await;
     }
 
     pub async fn clean_chunk(self: &Arc<Self>, chunk: &Vector2<i32>) {
@@ -283,7 +283,7 @@ impl Level {
             self.chunk_watchers.shrink_to_fit();
         }
     }
-    pub async fn write_chunks(&self, chunks_to_write: &[Arc<RwLock<ChunkData>>]) {
+    pub async fn write_chunks(&self, chunks_to_write: Vec<Arc<RwLock<ChunkData>>>) {
         if chunks_to_write.is_empty() {
             return;
         }
@@ -291,27 +291,29 @@ impl Level {
         let chunk_saver = self.chunk_saver.clone();
         let level_folder = self.level_folder.clone();
 
-        let futures = chunks_to_write
-            .iter()
-            .map(|chunk| chunk.read())
-            .collect::<Vec<_>>();
+        tokio::spawn(async move {
+            let futures = chunks_to_write
+                .iter()
+                .map(async |chunk| chunk.read().await)
+                .collect::<Vec<_>>();
 
-        let mut chunks_guards = Vec::new();
-        for guard in futures {
-            let chunk = guard.await;
-            chunks_guards.push(chunk);
-        }
+            let mut chunks_guards = Vec::new();
+            for guard in futures {
+                let chunk = guard.await;
+                chunks_guards.push(chunk);
+            }
 
-        let chunks = chunks_guards
-            .iter()
-            .map(|chunk| (chunk.position, chunk.deref()))
-            .collect::<Vec<_>>();
+            let chunks = chunks_guards
+                .iter()
+                .map(|chunk| (chunk.position, chunk.deref()))
+                .collect::<Vec<_>>();
 
-        trace!("Writing chunks to disk {:}", chunks_guards.len());
+            trace!("Writing chunks to disk {:}", chunks_guards.len());
 
-        if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks.as_slice()) {
-            log::error!("Failed writing Chunk to disk {}", error.to_string());
-        }
+            if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks).await {
+                log::error!("Failed writing Chunk to disk {}", error.to_string());
+            }
+        });
     }
 
     async fn load_chunks_from_save(
@@ -379,50 +381,48 @@ impl Level {
             .unzip::<_, _, Vec<_>, Vec<_>>();
 
         let tasks = tasks.into_iter().flatten().collect::<Vec<_>>();
-
-        rt.spawn(async move {
-            for task in tasks {
-                task.await;
-            }
-        });
-
-        let chunks_to_load = chunks.into_iter().flatten().collect::<Vec<_>>();
-        if chunks_to_load.is_empty() {
-            return;
+        if !tasks.is_empty() {
+            rt.spawn(async move {
+                for task in tasks {
+                    task.await;
+                }
+            });
         }
 
-        let level = self.clone();
-        rt.spawn(async move {
-            let tasks = level
-                .load_chunks_from_save(chunks_to_load)
-                .await
-                .into_iter()
-                .map(async |(pos, chunk)| {
-                    let (is_new, entry_bind) = if let Some(entry_bind) =
-                        level.loaded_chunks.get(&pos)
-                    {
-                        (false, entry_bind)
-                    } else {
-                        let entry_bind = level
-                            .loaded_chunks
-                            .entry(pos)
-                            .or_insert_with(|| {
-                                Arc::new(RwLock::new(
-                                    chunk.unwrap_or_else(|| level.world_gen.generate_chunk(pos)),
-                                ))
-                            })
-                            .downgrade();
+        let chunks_to_load = chunks.into_iter().flatten().collect::<Vec<_>>();
+        if !chunks_to_load.is_empty() {
+            let level = self.clone();
+            rt.spawn(async move {
+                let tasks = level
+                    .load_chunks_from_save(chunks_to_load)
+                    .await
+                    .into_iter()
+                    .map(async |(pos, chunk)| {
+                        let (is_new, entry_bind) =
+                            if let Some(entry_bind) = level.loaded_chunks.get(&pos) {
+                                (false, entry_bind)
+                            } else {
+                                let entry_bind = level
+                                    .loaded_chunks
+                                    .entry(pos)
+                                    .or_insert_with(|| {
+                                        Arc::new(RwLock::new(chunk.unwrap_or_else(|| {
+                                            level.world_gen.generate_chunk(pos)
+                                        })))
+                                    })
+                                    .downgrade();
 
-                        (true, entry_bind)
-                    };
+                                (true, entry_bind)
+                            };
 
-                    send_chunks(is_new, entry_bind.value().clone(), channel.clone()).await
-                })
-                .collect::<Vec<_>>();
+                        send_chunks(is_new, entry_bind.value().clone(), channel.clone()).await;
+                    })
+                    .collect::<Vec<_>>();
 
-            for task in tasks {
-                task.await;
-            }
-        });
+                for task in tasks {
+                    task.await;
+                }
+            });
+        }
     }
 }
