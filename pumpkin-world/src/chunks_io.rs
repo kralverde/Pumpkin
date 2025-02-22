@@ -7,10 +7,12 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use dashmap::DashMap;
 use log::{error, trace};
 use pumpkin_util::math::vector2::Vector2;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     chunk::{ChunkReadingError, ChunkWritingError},
@@ -37,23 +39,24 @@ where
 ///
 /// The `R` type is the type of the data that will be loaded/saved
 /// like ChunkData or EntityData
+#[async_trait]
 pub trait ChunkIO<D>
 where
     Self: Send + Sync,
     D: Send + Sized,
 {
     /// Load the chunks data
-    fn load_chunks(
+    async fn load_chunks(
         &self,
         folder: &LevelFolder,
         chunk_coords: &[Vector2<i32>],
     ) -> Vec<LoadedData<D, ChunkReadingError>>;
 
     /// Persist the chunks data
-    fn save_chunks(
+    async fn save_chunks(
         &self,
         folder: &LevelFolder,
-        chunks_data: &[(Vector2<i32>, &D)],
+        chunks_data: Vec<(Vector2<i32>, &D)>,
     ) -> Result<(), ChunkWritingError>;
 
     fn cache_count(&self) -> usize;
@@ -91,7 +94,7 @@ pub struct ChunkFileManager<S: ChunkSerializer> {
     // TODO: Make file reading/writing async
 
     // Dashmap has rw-locks on shards, but we want per-serializer
-    file_locks: DashMap<PathBuf, Arc<parking_lot::RwLock<S>>>,
+    file_locks: DashMap<PathBuf, Arc<RwLock<S>>>,
     _serializer: std::marker::PhantomData<S>,
 }
 
@@ -105,7 +108,7 @@ impl<S: ChunkSerializer> Default for ChunkFileManager<S> {
 }
 
 pub struct ChunkFileManagerLockGuard<'a, S: ChunkSerializer> {
-    lock: Arc<parking_lot::RwLock<S>>,
+    lock: Arc<tokio::sync::RwLock<S>>,
     parent: &'a ChunkFileManager<S>,
     key: PathBuf,
 }
@@ -114,17 +117,17 @@ impl<'a, S: ChunkSerializer> ChunkFileManagerLockGuard<'a, S> {
     fn new(
         key: PathBuf,
         parent: &'a ChunkFileManager<S>,
-        lock: Arc<parking_lot::RwLock<S>>,
+        lock: Arc<tokio::sync::RwLock<S>>,
     ) -> Self {
         Self { key, parent, lock }
     }
 
-    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, S> {
-        self.lock.write()
+    async fn write(&self) -> RwLockWriteGuard<'_, S> {
+        self.lock.write().await
     }
 
-    fn read(&self) -> parking_lot::RwLockReadGuard<'_, S> {
-        self.lock.read()
+    async fn read(&self) -> RwLockReadGuard<'_, S> {
+        self.lock.read().await
     }
 }
 
@@ -134,7 +137,7 @@ impl<S: ChunkSerializer> Drop for ChunkFileManagerLockGuard<'_, S> {
         let _ = self
             .parent
             .file_locks
-            .remove_if(&self.key, |_, value| value.try_write().is_some());
+            .remove_if(&self.key, |_, value| value.try_write().is_ok());
     }
 }
 
@@ -178,7 +181,7 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
                         Err(err) => return Err(err),
                     };
 
-                    Ok(Arc::new(parking_lot::RwLock::new(value)))
+                    Ok(Arc::new(RwLock::new(value)))
                 })?
                 .downgrade()
         };
@@ -233,13 +236,14 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
     }
 }
 
+#[async_trait]
 impl<D, S> ChunkIO<D> for ChunkFileManager<S>
 where
     D: Send + Sized,
     for<'a> &'a D: Send,
     S: ChunkSerializer<Data = D>,
 {
-    fn load_chunks(
+    async fn load_chunks(
         &self,
         folder: &LevelFolder,
         chunk_coords: &[Vector2<i32>],
@@ -260,9 +264,9 @@ where
             .map(|key| folder.region_folder.join(key))
             .collect::<Vec<_>>();
 
-        let chunks_by_region: Vec<LoadedData<D, _>> = regions_chunks
-            .into_par_iter()
-            .flat_map(|(file_name, chunks)| {
+        let chunks_tasks = regions_chunks
+            .into_iter()
+            .map(async |(file_name, chunks)| {
                 let path = folder.region_folder.join(file_name);
 
                 let chunk_serializer = match self.read_file(&path) {
@@ -274,25 +278,33 @@ where
                 };
 
                 // We need to block the read to avoid other threads to write/modify the data
-                // NOTE: Currently this is done in a rayon thread, so async is not needed
-                let chunk_guard = chunk_serializer.read();
-                chunk_guard.get_chunks_data(chunks.as_slice())
+                let chunk_guard = chunk_serializer.read().await;
+                let fetched_chunks =
+                    tokio::task::block_in_place(|| chunk_guard.get_chunks_data(chunks.as_slice()));
+                drop(chunk_guard);
+
+                fetched_chunks
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        let mut chunks_by_region = Vec::with_capacity(chunk_coords.len());
+        for task in chunks_tasks {
+            chunks_by_region.extend(task.await);
+        }
 
         self.clean_cache(&paths);
 
         chunks_by_region
     }
 
-    fn save_chunks(
+    async fn save_chunks(
         &self,
         folder: &LevelFolder,
-        chunks_data: &[(Vector2<i32>, &D)],
+        chunks_data: Vec<(Vector2<i32>, &D)>,
     ) -> Result<(), ChunkWritingError> {
         let mut regions_chunks: BTreeMap<String, Vec<&D>> = BTreeMap::new();
 
-        for (at, chunk) in chunks_data {
+        for (at, chunk) in &chunks_data {
             let key = S::get_chunk_key(*at);
 
             regions_chunks
@@ -306,9 +318,9 @@ where
             .map(|key| folder.region_folder.join(key))
             .collect::<Vec<_>>();
 
-        regions_chunks
-            .into_par_iter()
-            .try_for_each(|(file_name, chunks)| {
+        let tasks = regions_chunks
+            .into_iter()
+            .map(async |(file_name, chunks)| {
                 let path = folder.region_folder.join(file_name);
 
                 //TODO: Do we need to read the chunk from file to write it every time? Cant we just write to
@@ -329,16 +341,20 @@ where
                 }?;
 
                 // We need to block the read to avoid other threads to write/modify/read the data
-                // NOTE: We currently call this from a rayon thread so no async is needed.
-                let mut chunk_guard = chunk_serializer.write();
-                chunk_guard.add_chunks_data(chunks.as_slice())?;
+                let mut chunk_guard = chunk_serializer.write().await;
+                tokio::task::block_in_place(|| chunk_guard.add_chunks_data(chunks.as_slice()))?;
 
                 // With the modification done, we can drop the write lock but keep the read lock
                 // to avoid other threads to write/modify the data, but allow other threads to read it
-                let chunk_guard = parking_lot::RwLockWriteGuard::downgrade(chunk_guard);
+                let chunk_guard = RwLockWriteGuard::downgrade(chunk_guard);
                 self.write_file(&path, &chunk_guard)?;
                 Ok(())
-            })?;
+            })
+            .collect::<Vec<_>>();
+
+        for task in tasks {
+            task.await?;
+        }
 
         self.clean_cache(&paths);
 

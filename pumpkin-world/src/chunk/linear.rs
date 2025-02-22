@@ -358,22 +358,26 @@ mod tests {
         level::LevelFolder,
     };
 
-    #[test]
-    fn not_existing() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn not_existing() {
         let region_path = PathBuf::from("not_existing");
         let chunk_saver = ChunkFileManager::<LinearFile>::default();
-        let chunks = chunk_saver.load_chunks(
-            &LevelFolder {
-                root_folder: PathBuf::from(""),
-                region_folder: region_path,
-            },
-            &[Vector2::new(0, 0)],
-        );
+
+        let chunks = chunk_saver
+            .load_chunks(
+                &LevelFolder {
+                    root_folder: PathBuf::from(""),
+                    region_folder: region_path,
+                },
+                &[Vector2::new(0, 0)],
+            )
+            .await;
+
         assert!(chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)));
     }
 
-    #[test]
-    fn test_writing() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_writing() {
         let generator = get_world_gen(Seed(0));
 
         let temp_dir = TempDir::new().unwrap();
@@ -398,11 +402,12 @@ mod tests {
             chunk_saver
                 .save_chunks(
                     &level_folder,
-                    &chunks
+                    chunks
                         .iter()
                         .map(|(at, chunk)| (*at, chunk))
                         .collect::<Vec<_>>(),
                 )
+                .await
                 .expect("Failed to write chunk");
 
             let read_chunks = chunk_saver
@@ -410,6 +415,7 @@ mod tests {
                     &level_folder,
                     &chunks.iter().map(|(at, _)| *at).collect::<Vec<_>>(),
                 )
+                .await
                 .into_iter()
                 .filter_map(|chunk| match chunk {
                     LoadedData::Loaded(chunk) => Some(chunk),

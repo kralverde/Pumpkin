@@ -293,35 +293,33 @@ impl Level {
 
         let chunks_to_write = chunks_to_write.to_vec();
 
-        // TODO: Make this async
-        rayon::spawn(move || {
-            let futures = chunks_to_write
-                .iter()
-                .map(|chunk| chunk.blocking_read())
-                .collect::<Vec<_>>();
+        let futures = chunks_to_write
+            .iter()
+            .map(|chunk| chunk.blocking_read())
+            .collect::<Vec<_>>();
 
-            let chunks = futures
-                .iter()
-                .map(|chunk| (chunk.position, chunk.deref()))
-                .collect::<Vec<_>>();
+        let chunks = futures
+            .iter()
+            .map(|chunk| (chunk.position, chunk.deref()))
+            .collect::<Vec<_>>();
 
-            trace!("Writing chunks to disk {:}", chunks.len());
-            if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks.as_slice()) {
-                log::error!("Failed writing Chunk to disk {}", error.to_string());
-            }
-        });
+        trace!("Writing chunks to disk {:}", chunks.len());
+        if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks).await {
+            log::error!("Failed writing Chunk to disk {}", error.to_string());
+        }
     }
 
-    fn load_chunks_from_save(
+    async fn load_chunks_from_save(
         &self,
-        chunks_pos: &[Vector2<i32>],
+        chunks_pos: Vec<Vector2<i32>>,
     ) -> Vec<(Vector2<i32>, Option<ChunkData>)> {
         if chunks_pos.is_empty() {
             return vec![];
         }
         trace!("Loading chunks from disk {:}", chunks_pos.len());
         self.chunk_saver
-            .load_chunks(&self.level_folder, chunks_pos)
+            .load_chunks(&self.level_folder, &chunks_pos)
+            .await
             .into_par_iter()
             .filter_map(|chunk_data| match chunk_data {
                 LoadedData::Loaded(chunk) => Some((chunk.position, Some(chunk))),
@@ -337,67 +335,89 @@ impl Level {
     /// Reads/Generates many chunks in a world
     /// Note: The order of the output chunks will almost never be in the same order as the order of input chunks
     pub fn fetch_chunks(
-        &self,
+        self: &Arc<Self>,
         chunks: &[Vector2<i32>],
         channel: mpsc::Sender<(Arc<RwLock<ChunkData>>, bool)>,
         rt: &Handle,
     ) {
-        fn send_chunks(
+        async fn send_chunks(
             is_new: bool,
             chunk: Arc<RwLock<ChunkData>>,
-            channel: &mpsc::Sender<(Arc<RwLock<ChunkData>>, bool)>,
-            rt: &Handle,
+            channel: mpsc::Sender<(Arc<RwLock<ChunkData>>, bool)>,
         ) {
-            let channel = channel.clone();
-            rt.spawn(async move {
-                let _ = channel
-                    .send((chunk, is_new))
-                    .await
-                    .inspect_err(|err| log::error!("unable to send chunk to channel: {}", err));
-            });
+            let _ = channel
+                .send((chunk, is_new))
+                .await
+                .inspect_err(|err| log::error!("unable to send chunk to channel: {}", err));
         }
 
         if chunks.is_empty() {
             return;
         }
 
-        let chunks_to_load = chunks
-            .par_iter()
-            .filter(|pos| {
+        let (chunks, tasks) = chunks
+            .iter()
+            .map(|pos| {
                 if let Some(entry_bind) = &self.loaded_chunks.get(pos) {
-                    send_chunks(false, entry_bind.value().clone(), &channel, rt);
-                    false
+                    (
+                        None,
+                        Some(send_chunks(
+                            false,
+                            entry_bind.value().clone(),
+                            channel.clone(),
+                        )),
+                    )
                 } else {
-                    true
+                    (Some(*pos), None)
                 }
             })
-            .copied()
-            .collect::<Vec<_>>();
+            .unzip::<_, _, Vec<_>, Vec<_>>();
 
+        let tasks = tasks.into_iter().flatten().collect::<Vec<_>>();
+
+        rt.spawn(async move {
+            for task in tasks {
+                task.await;
+            }
+        });
+
+        let chunks_to_load = chunks.into_iter().flatten().collect::<Vec<_>>();
         if chunks_to_load.is_empty() {
             return;
         }
 
-        self.load_chunks_from_save(&chunks_to_load)
-            .into_par_iter()
-            .for_each(|(pos, chunk)| {
-                let (is_new, entry_bind) = if let Some(entry_bind) = self.loaded_chunks.get(&pos) {
-                    (false, entry_bind)
-                } else {
-                    let entry_bind = self
-                        .loaded_chunks
-                        .entry(pos)
-                        .or_insert_with(|| {
-                            Arc::new(RwLock::new(
-                                chunk.unwrap_or_else(|| self.world_gen.generate_chunk(pos)),
-                            ))
-                        })
-                        .downgrade();
+        let level = self.clone();
+        rt.spawn(async move {
+            let tasks = level
+                .load_chunks_from_save(chunks_to_load)
+                .await
+                .into_iter()
+                .map(async |(pos, chunk)| {
+                    let (is_new, entry_bind) = if let Some(entry_bind) =
+                        level.loaded_chunks.get(&pos)
+                    {
+                        (false, entry_bind)
+                    } else {
+                        let entry_bind = level
+                            .loaded_chunks
+                            .entry(pos)
+                            .or_insert_with(|| {
+                                Arc::new(RwLock::new(
+                                    chunk.unwrap_or_else(|| level.world_gen.generate_chunk(pos)),
+                                ))
+                            })
+                            .downgrade();
 
-                    (true, entry_bind)
-                };
-                send_chunks(is_new, entry_bind.value().clone(), &channel, rt);
-                drop(entry_bind);
-            });
+                        (true, entry_bind)
+                    };
+
+                    send_chunks(is_new, entry_bind.value().clone(), channel.clone()).await
+                })
+                .collect::<Vec<_>>();
+
+            for task in tasks {
+                task.await;
+            }
+        });
     }
 }

@@ -10,6 +10,9 @@ pumpkin-config = { path = "../pumpkin-config" }
 pumpkin-macros = { path = "../pumpkin-macros" }
 pumpkin-data = { path = "../pumpkin-data" }
 
+
+async-trait.workspace = true
+
 bytes.workspace = true
 
 

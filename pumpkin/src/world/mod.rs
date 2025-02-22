@@ -659,7 +659,7 @@ impl World {
             rel_x * rel_x + rel_z * rel_z
         });
 
-        let mut receiver = self.receive_chunks(chunks);
+        let mut receiver = self.receive_chunks(&chunks);
         let level = self.level.clone();
 
         tokio::spawn(async move {
@@ -1023,20 +1023,24 @@ impl World {
     /// handle)
     pub fn receive_chunks(
         &self,
-        chunks: Vec<Vector2<i32>>,
+        chunks: &[Vector2<i32>],
     ) -> Receiver<(Arc<RwLock<ChunkData>>, bool)> {
         let (sender, receive) = mpsc::channel(chunks.len());
         // Put this in another thread so we aren't blocking on it
         let level = self.level.clone();
         let rt = Handle::current();
-        rayon::spawn(move || {
-            level.fetch_chunks(&chunks, sender, &rt);
+
+        // Split the chunks into 64 chunks groups, this helps with the initial loading
+        // of the world where allows to wait less chunks to be retrived before
+        // starting to send them to the player.
+        chunks.chunks(64).for_each(|chunks| {
+            level.fetch_chunks(chunks, sender.clone(), &rt);
         });
         receive
     }
 
     pub async fn receive_chunk(&self, chunk_pos: Vector2<i32>) -> (Arc<RwLock<ChunkData>>, bool) {
-        let mut receiver = self.receive_chunks(vec![chunk_pos]);
+        let mut receiver = self.receive_chunks(&[chunk_pos]);
         let chunk = receiver
             .recv()
             .await
