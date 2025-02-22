@@ -73,9 +73,16 @@ impl Click {
             1 => DropType::FullStack,
             _ => Err(InventoryError::InvalidPacket)?,
         };
+        let slot = match slot {
+            -999 => Slot::OutsideInventory,
+            _ => {
+                let slot = slot.try_into().unwrap_or(0);
+                Slot::Normal(slot)
+            }
+        };
         Ok(Self {
             click_type: ClickType::DropType(drop_type),
-            slot: Slot::Normal(slot.try_into().or(Err(InventoryError::InvalidSlot))?),
+            slot: slot,
         })
     }
 

@@ -23,7 +23,8 @@ use std::sync::Arc;
 impl Player {
     pub async fn open_container(&self, server: &Server, window_type: WindowType) {
         let mut inventory = self.inventory().lock().await;
-        inventory.state_id = 0;
+        //inventory.state_id = 0;
+        inventory.increment_state_id();
         inventory.total_opened_containers += 1;
         let mut container = self.get_open_container(server).await;
         let mut container = match container.as_mut() {
@@ -71,7 +72,7 @@ impl Player {
             .as_ref()
             .map_or_else(Slot::empty, std::convert::Into::into);
 
-        inventory.state_id += 1;
+        inventory.increment_state_id();
         let packet = CSetContainerContent::new(
             id.into(),
             (inventory.state_id).into(),
@@ -298,11 +299,8 @@ impl Player {
                             }
                         }
                     }
-
-                    Ok(())
-                } else {
-                    Err(InventoryError::InvalidPacket)
                 }
+                Ok(())
             }
         }
     }
@@ -369,6 +367,8 @@ impl Player {
 
         match slot {
             container_click::Slot::Normal(slot) => {
+                println!("slot: {:?}", slot);
+
                 let mut all_slots = container.all_slots();
 
                 // Get the item data we need before any mutable operations
@@ -406,7 +406,8 @@ impl Player {
                 } else if inv2_range.contains(&slot) {
                     (inv2_range, inv1_range)
                 } else {
-                    return Ok(());
+                    // When moving from top slots to inventory
+                    ((0..9), (9..45))
                 };
 
                 // If moving to hotbar, reverse the order to fill from right to left
@@ -416,6 +417,29 @@ impl Player {
                     } else {
                         target_inv.collect()
                     };
+
+                //Handle armor slots
+                if !has_container {
+                    let temp_item_stack = ItemStack::new(1, item);
+                    if slot != 5 && temp_item_stack.is_helmet() && all_slots[5].is_none() {
+                        *all_slots[5] = Some(temp_item_stack);
+                        *all_slots[slot] = None;
+                        return Ok(());
+                    } else if slot != 6 && temp_item_stack.is_chestplate() && all_slots[6].is_none()
+                    {
+                        *all_slots[6] = Some(temp_item_stack);
+                        *all_slots[slot] = None;
+                        return Ok(());
+                    } else if slot != 7 && temp_item_stack.is_leggings() && all_slots[7].is_none() {
+                        *all_slots[7] = Some(temp_item_stack);
+                        *all_slots[slot] = None;
+                        return Ok(());
+                    } else if slot != 8 && temp_item_stack.is_boots() && all_slots[8].is_none() {
+                        *all_slots[8] = Some(temp_item_stack);
+                        *all_slots[slot] = None;
+                        return Ok(());
+                    }
+                }
 
                 // First try to stack with existing items
                 for target_idx in &target_slots {
@@ -629,7 +653,7 @@ impl Player {
             let total_opened_containers = inventory.total_opened_containers;
 
             // Returns previous value
-            inventory.state_id += 1;
+            inventory.increment_state_id();
             let packet = CSetContainerSlot::new(
                 total_opened_containers as i8,
                 (inventory.state_id) as i32,
