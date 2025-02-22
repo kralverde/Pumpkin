@@ -1,8 +1,8 @@
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunk::anvil::AnvilChunkFile;
-use crate::chunks_io::{ChunkSerializer, LoadedData};
+use crate::chunks_io::{ChunkSerializer, LoadedData, LockedReadFile, LockedWriteFile};
 use bytes::{Buf, BufMut};
 use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
@@ -157,24 +157,6 @@ impl LinearFile {
 
         Ok(())
     }
-}
-
-impl Default for LinearFile {
-    fn default() -> Self {
-        LinearFile {
-            chunks_headers: [LinearChunkHeader::default(); CHUNK_COUNT],
-            chunks_data: [const { None }; CHUNK_COUNT],
-        }
-    }
-}
-
-impl ChunkSerializer for LinearFile {
-    type Data = ChunkData;
-
-    fn get_chunk_key(chunk: Vector2<i32>) -> String {
-        let (region_x, region_z) = AnvilChunkFile::get_region_coords(chunk);
-        format!("./r.{}.{}.linear", region_x, region_z)
-    }
 
     fn to_bytes(&self) -> Vec<u8> {
         // Parse the headers to a buffer
@@ -301,8 +283,42 @@ impl ChunkSerializer for LinearFile {
             chunks_data: chunks,
         })
     }
+}
 
-    fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
+impl Default for LinearFile {
+    fn default() -> Self {
+        LinearFile {
+            chunks_headers: [LinearChunkHeader::default(); CHUNK_COUNT],
+            chunks_data: [const { None }; CHUNK_COUNT],
+        }
+    }
+}
+
+impl ChunkSerializer for LinearFile {
+    type Data = ChunkData;
+
+    // TODO: Stream file
+    fn read_from_file(file: LockedReadFile) -> Result<Self, ChunkReadingError> {
+        let mut file = file;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+        Self::from_bytes(&buf)
+    }
+
+    fn write_to_file(&self, file: LockedWriteFile) -> Result<(), ChunkWritingError> {
+        let mut file = file;
+        let buf = self.to_bytes();
+        file.write_all(&buf)
+            .map_err(|err| ChunkWritingError::IoError(err.kind()))
+    }
+
+    fn get_chunk_path(chunk: Vector2<i32>) -> String {
+        let (region_x, region_z) = AnvilChunkFile::get_region_coords(chunk);
+        format!("./r.{}.{}.linear", region_x, region_z)
+    }
+
+    fn update_chunks(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
         for chunk_data in chunks_data {
             let index = LinearFile::get_chunk_index(&chunk_data.position);
             let chunk_raw = chunk_to_bytes(chunk_data)
@@ -322,10 +338,10 @@ impl ChunkSerializer for LinearFile {
         Ok(())
     }
 
-    fn get_chunks_data(
+    fn read_chunks(
         &self,
         chunks: &[Vector2<i32>],
-    ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
+    ) -> Box<[LoadedData<Self::Data, ChunkReadingError>]> {
         chunks
             .iter()
             .map(|&at| {
@@ -340,6 +356,7 @@ impl ChunkSerializer for LinearFile {
                 }
             })
             .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 }
 

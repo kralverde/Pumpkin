@@ -5,7 +5,7 @@ use log::trace;
 use num_traits::Zero;
 use pumpkin_config::{ADVANCED_CONFIG, chunk::ChunkFormat};
 use pumpkin_util::math::vector2::Vector2;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tokio::{
     runtime::Handle,
     sync::{RwLock, mpsc},
@@ -13,7 +13,7 @@ use tokio::{
 
 use crate::{
     chunk::{ChunkData, anvil::AnvilChunkFile, linear::LinearFile},
-    chunks_io::{ChunkFileManager, ChunkIO, LoadedData},
+    chunks_io::{ChunkFileManager, ChunkIO, FILE_LOCK_MANAGER, LoadedData},
     generation::{Seed, WorldGenerator, get_world_gen},
     lock::{LevelLocker, anvil::AnvilLevelLocker},
     world_info::{
@@ -129,8 +129,7 @@ impl Level {
         self.write_chunks(&chunks_to_write).await;
 
         // wait for chunks currently saving in other threads
-        // TODO: Make this async but its not a super big issue now since we're shutting down
-        self.chunk_saver.wait_for_lock_releases();
+        FILE_LOCK_MANAGER.await_tasks().await;
 
         // then lets save the world info
         let result = self
@@ -149,8 +148,8 @@ impl Level {
         self.loaded_chunks.len()
     }
 
-    pub fn cached_chunk_saver_count(&self) -> usize {
-        self.chunk_saver.cache_count()
+    pub fn print_log(&self) {
+        self.chunk_saver.print_log();
     }
 
     pub fn list_cached(&self) {
@@ -291,14 +290,18 @@ impl Level {
         let chunk_saver = self.chunk_saver.clone();
         let level_folder = self.level_folder.clone();
 
-        let chunks_to_write = chunks_to_write.to_vec();
-
         let futures = chunks_to_write
             .iter()
-            .map(|chunk| chunk.blocking_read())
+            .map(|chunk| chunk.read())
             .collect::<Vec<_>>();
 
-        let chunks = futures
+        let mut chunks_guards = Vec::new();
+        for guard in futures {
+            let chunk = guard.await;
+            chunks_guards.push(chunk);
+        }
+
+        let chunks = chunks_guards
             .iter()
             .map(|chunk| (chunk.position, chunk.deref()))
             .collect::<Vec<_>>();
@@ -312,15 +315,15 @@ impl Level {
     async fn load_chunks_from_save(
         &self,
         chunks_pos: Vec<Vector2<i32>>,
-    ) -> Vec<(Vector2<i32>, Option<ChunkData>)> {
+    ) -> Box<[(Vector2<i32>, Option<ChunkData>)]> {
         if chunks_pos.is_empty() {
-            return vec![];
+            return Box::new([]);
         }
         trace!("Loading chunks from disk {:}", chunks_pos.len());
         self.chunk_saver
             .load_chunks(&self.level_folder, &chunks_pos)
             .await
-            .into_par_iter()
+            .into_iter()
             .filter_map(|chunk_data| match chunk_data {
                 LoadedData::Loaded(chunk) => Some((chunk.position, Some(chunk))),
                 LoadedData::Missing(pos) => Some((pos, None)),
@@ -330,6 +333,7 @@ impl Level {
                 }
             })
             .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 
     /// Reads/Generates many chunks in a world

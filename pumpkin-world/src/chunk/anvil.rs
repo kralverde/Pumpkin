@@ -11,8 +11,8 @@ use std::{
     io::{Read, Write},
 };
 
-use crate::block::registry::STATE_ID_TO_REGISTRY_ID;
-use crate::chunks_io::{ChunkSerializer, LoadedData};
+use crate::chunks_io::{ChunkSerializer, LoadedData, LockedWriteFile};
+use crate::{block::registry::STATE_ID_TO_REGISTRY_ID, chunks_io::LockedReadFile};
 
 use super::{
     ChunkData, ChunkNbt, ChunkReadingError, ChunkSection, ChunkSectionBlockStates,
@@ -251,24 +251,6 @@ impl AnvilChunkFile {
         let local_z = (pos.z & 31) as usize;
         (local_z << 5) + local_x
     }
-}
-
-impl Default for AnvilChunkFile {
-    fn default() -> Self {
-        Self {
-            timestamp_table: [0; CHUNK_COUNT],
-            chunks_data: [const { None }; CHUNK_COUNT],
-        }
-    }
-}
-
-impl ChunkSerializer for AnvilChunkFile {
-    type Data = ChunkData;
-
-    fn get_chunk_key(chunk: Vector2<i32>) -> String {
-        let (region_x, region_z) = Self::get_region_coords(chunk);
-        format!("./r.{}.{}.mca", region_x, region_z)
-    }
 
     fn to_bytes(&self) -> Vec<u8> {
         let mut chunk_data: Vec<u8> = Vec::new();
@@ -342,8 +324,42 @@ impl ChunkSerializer for AnvilChunkFile {
 
         Ok(chunk_file)
     }
+}
 
-    fn add_chunks_data(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
+impl Default for AnvilChunkFile {
+    fn default() -> Self {
+        Self {
+            timestamp_table: [0; CHUNK_COUNT],
+            chunks_data: [const { None }; CHUNK_COUNT],
+        }
+    }
+}
+
+impl ChunkSerializer for AnvilChunkFile {
+    type Data = ChunkData;
+
+    // TODO: Stream from file
+    fn read_from_file(file: LockedReadFile) -> Result<Self, ChunkReadingError> {
+        let mut file = file;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+        Self::from_bytes(&buf)
+    }
+
+    fn write_to_file(&self, file: LockedWriteFile) -> Result<(), ChunkWritingError> {
+        let mut file = file;
+        let buf = self.to_bytes();
+        file.write_all(&buf)
+            .map_err(|err| ChunkWritingError::IoError(err.kind()))
+    }
+
+    fn get_chunk_path(chunk: Vector2<i32>) -> String {
+        let (region_x, region_z) = Self::get_region_coords(chunk);
+        format!("./r.{}.{}.mca", region_x, region_z)
+    }
+
+    fn update_chunks(&mut self, chunks_data: &[&Self::Data]) -> Result<(), ChunkWritingError> {
         for chunk in chunks_data {
             let index = AnvilChunkFile::get_chunk_index(&chunk.position);
             self.chunks_data[index] = Some(AnvilChunkData::from_chunk(chunk)?);
@@ -352,10 +368,10 @@ impl ChunkSerializer for AnvilChunkFile {
         Ok(())
     }
 
-    fn get_chunks_data(
+    fn read_chunks(
         &self,
         chunks: &[Vector2<i32>],
-    ) -> Vec<LoadedData<Self::Data, ChunkReadingError>> {
+    ) -> Box<[LoadedData<Self::Data, ChunkReadingError>]> {
         chunks
             .iter()
             .map(|&at| {
@@ -371,6 +387,7 @@ impl ChunkSerializer for AnvilChunkFile {
                 }
             })
             .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 }
 
