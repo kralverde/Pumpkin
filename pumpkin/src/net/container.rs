@@ -367,8 +367,6 @@ impl Player {
 
         match slot {
             container_click::Slot::Normal(slot) => {
-                println!("slot: {:?}", slot);
-
                 let mut all_slots = container.all_slots();
 
                 // Get the item data we need before any mutable operations

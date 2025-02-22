@@ -82,7 +82,7 @@ impl Click {
         };
         Ok(Self {
             click_type: ClickType::DropType(drop_type),
-            slot: slot,
+            slot,
         })
     }
 
