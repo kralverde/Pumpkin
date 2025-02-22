@@ -1,4 +1,4 @@
-use std::{fs, ops::Deref, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use dashmap::{DashMap, Entry};
 use log::trace;
@@ -124,13 +124,13 @@ impl Level {
         let chunks_to_write = self
             .loaded_chunks
             .iter()
-            .map(|chunk| chunk.value().clone())
+            .map(|chunk| (*chunk.key(), chunk.value().clone()))
             .collect::<Vec<_>>();
         self.write_chunks(chunks_to_write).await;
 
         // wait for chunks currently saving in other threads
         // TODO: Make this async but its not a super big issue now since we're shutting down
-        self.chunk_saver.wait_for_lock_releases();
+        self.chunk_saver.wait_for_lock_releases().await;
 
         // then lets save the world info
         let result = self
@@ -238,11 +238,14 @@ impl Level {
 
                 if let Some((at, chunk)) = removed_chunk {
                     log::trace!("{:?} is being cleaned", at);
-                    return Some(chunk);
-                } else if let Some(chunk_guard) = &loaded_chunks.get(&at) {
-                    log::trace!("{:?} is not being cleaned but saved", at);
-                    return Some(chunk_guard.value().clone());
+                    return Some((at, chunk));
                 }
+
+                if let Some(chunk_guard) = &loaded_chunks.get(&at) {
+                    log::trace!("{:?} is not being cleaned but saved", at);
+                    return Some((at, chunk_guard.value().clone()));
+                }
+
                 None
             });
         }
@@ -283,7 +286,7 @@ impl Level {
             self.chunk_watchers.shrink_to_fit();
         }
     }
-    pub async fn write_chunks(&self, chunks_to_write: Vec<Arc<RwLock<ChunkData>>>) {
+    pub async fn write_chunks(&self, chunks_to_write: Vec<(Vector2<i32>, Arc<RwLock<ChunkData>>)>) {
         if chunks_to_write.is_empty() {
             return;
         }
@@ -291,29 +294,14 @@ impl Level {
         let chunk_saver = self.chunk_saver.clone();
         let level_folder = self.level_folder.clone();
 
-        tokio::spawn(async move {
-            let futures = chunks_to_write
-                .iter()
-                .map(async |chunk| chunk.read().await)
-                .collect::<Vec<_>>();
+        trace!("Writing chunks to disk {:}", chunks_to_write.len());
 
-            let mut chunks_guards = Vec::new();
-            for guard in futures {
-                let chunk = guard.await;
-                chunks_guards.push(chunk);
-            }
-
-            let chunks = chunks_guards
-                .iter()
-                .map(|chunk| (chunk.position, chunk.deref()))
-                .collect::<Vec<_>>();
-
-            trace!("Writing chunks to disk {:}", chunks_guards.len());
-
-            if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks).await {
-                log::error!("Failed writing Chunk to disk {}", error.to_string());
-            }
-        });
+        if let Err(error) = chunk_saver
+            .save_chunks(&level_folder, chunks_to_write)
+            .await
+        {
+            log::error!("Failed writing Chunk to disk {}", error.to_string());
+        }
     }
 
     async fn load_chunks_from_save(
