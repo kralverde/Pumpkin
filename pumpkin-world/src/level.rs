@@ -291,20 +291,25 @@ impl Level {
         let chunk_saver = self.chunk_saver.clone();
         let level_folder = self.level_folder.clone();
 
-        let chunks_to_write = chunks_to_write.to_vec();
-
         let futures = chunks_to_write
             .iter()
-            .map(|chunk| chunk.blocking_read())
+            .map(|chunk| chunk.read())
             .collect::<Vec<_>>();
 
-        let chunks = futures
+        let mut chunks_guards = Vec::new();
+        for guard in futures {
+            let chunk = guard.await;
+            chunks_guards.push(chunk);
+        }
+
+        let chunks = chunks_guards
             .iter()
             .map(|chunk| (chunk.position, chunk.deref()))
             .collect::<Vec<_>>();
 
-        trace!("Writing chunks to disk {:}", chunks.len());
-        if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks).await {
+        trace!("Writing chunks to disk {:}", chunks_guards.len());
+
+        if let Err(error) = chunk_saver.save_chunks(&level_folder, chunks.as_slice()) {
             log::error!("Failed writing Chunk to disk {}", error.to_string());
         }
     }
