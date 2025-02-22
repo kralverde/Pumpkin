@@ -60,7 +60,7 @@ use tokio::{
     sync::{RwLock, mpsc},
 };
 
-ub mod border;
+pub mod border;
 pub mod bossbar;
 pub mod custom_bossbar;
 pub mod scoreboard;
