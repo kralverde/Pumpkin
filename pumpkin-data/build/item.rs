@@ -333,7 +333,7 @@ pub(crate) fn build() -> TokenStream {
 
             #[inline]
             fn registry_key(&self) -> &str {
-                &self.registry_key
+                self.registry_key
             }
         }
     }
