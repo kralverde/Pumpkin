@@ -1,6 +1,7 @@
 use pumpkin_data::item::Item;
 
 mod categories;
+
 #[derive(serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 /// Item Rarity
