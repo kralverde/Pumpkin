@@ -7,7 +7,7 @@ use pumpkin_world::item::ItemStack;
 use rayon::prelude::*;
 
 #[inline(always)]
-fn check_ingredient_type(ingredient_type: &TagType, input: ItemStack) -> bool {
+fn check_ingredient_type(ingredient_type: &TagType, input: &ItemStack) -> bool {
     match ingredient_type {
         TagType::Tag(tag) => {
             let _items = match get_tag_values(RegistryKey::Item, tag) {
@@ -24,7 +24,7 @@ fn check_ingredient_type(ingredient_type: &TagType, input: ItemStack) -> bool {
     }
 }
 
-pub fn check_if_matches_crafting(input: [[Option<ItemStack>; 3]; 3]) -> Option<ItemStack> {
+pub fn check_if_matches_crafting(input: [[Option<&ItemStack>; 3]; 3]) -> Option<ItemStack> {
     let input = flatten_3x3(input);
     RECIPES
         .par_iter()
@@ -66,7 +66,7 @@ pub fn check_if_matches_crafting(input: [[Option<ItemStack>; 3]; 3]) -> Option<I
         })?
 }
 
-fn ingredient_slot_check(recipe_item: &RegistryEntryList, input: ItemStack) -> bool {
+fn ingredient_slot_check(recipe_item: &RegistryEntryList, input: &ItemStack) -> bool {
     match recipe_item {
         RegistryEntryList::Single(ingredient) => check_ingredient_type(ingredient, input),
         RegistryEntryList::Many(ingredients) => ingredients
@@ -75,7 +75,7 @@ fn ingredient_slot_check(recipe_item: &RegistryEntryList, input: ItemStack) -> b
     }
 }
 fn shapeless_crafting_match(
-    input: [[Option<ItemStack>; 3]; 3],
+    input: [[Option<&ItemStack>; 3]; 3],
     pattern: &[[[Option<RegistryEntryList>; 3]; 3]],
 ) -> bool {
     let mut pattern: Vec<RegistryEntryList> = pattern

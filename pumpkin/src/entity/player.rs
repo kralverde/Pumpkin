@@ -104,7 +104,7 @@ pub struct Player {
     /// The ID of the currently open container (if any).
     pub open_container: AtomicCell<Option<u64>>,
     /// The item currently being held by the player.
-    pub carried_item: AtomicCell<Option<ItemStack>>,
+    pub carried_item: Mutex<Option<ItemStack>>,
     /// send `send_abilities_update` when changed
     /// The player's abilities and special powers.
     ///
@@ -201,7 +201,7 @@ impl Player {
             tick_counter: AtomicI32::new(0),
             packet_sequence: AtomicI32::new(-1),
             start_mining_time: AtomicI32::new(0),
-            carried_item: AtomicCell::new(None),
+            carried_item: Mutex::new(None),
             teleport_id_count: AtomicI32::new(0),
             mining: AtomicBool::new(false),
             mining_pos: Mutex::new(BlockPos(Vector3::new(0, 0, 0))),
@@ -1023,22 +1023,24 @@ impl Player {
             .await;
     }
 
-    pub async fn drop_item(&self, server: &Server, stack: ItemStack) {
+    pub async fn drop_item(&self, server: &Server, item_id: u16, count: u32) {
         let entity = server.add_entity(
             self.living_entity.entity.pos.load(),
             EntityType::ITEM,
             &self.world().await,
         );
-        let item_entity = Arc::new(ItemEntity::new(entity, stack));
+
+        // TODO: Merge stacks together
+        let item_entity = Arc::new(ItemEntity::new(entity, item_id, count));
         self.world().await.spawn_entity(item_entity.clone()).await;
         item_entity.send_meta_packet().await;
     }
 
     pub async fn drop_held_item(&self, server: &Server, drop_stack: bool) {
         let mut inv = self.inventory.lock().await;
-        if let Some(item) = inv.held_item_mut() {
-            let drop_amount = if drop_stack { item.item_count } else { 1 };
-            self.drop_item(server, ItemStack::new(drop_amount, item.item))
+        if let Some(item_stack) = inv.held_item_mut() {
+            let drop_amount = if drop_stack { item_stack.item_count } else { 1 };
+            self.drop_item(server, item_stack.item.id, item_stack.item_count as u32)
                 .await;
             inv.decrease_current_stack(drop_amount);
         }

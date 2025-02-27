@@ -13,9 +13,10 @@ pub enum Rarity {
     Epic,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ItemStack {
     pub item_count: u8,
+    // TODO: Should this be a ref? all of our items are const
     pub item: Item,
 }
 

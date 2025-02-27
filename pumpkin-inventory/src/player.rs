@@ -59,10 +59,10 @@ impl PlayerInventory {
 
     pub fn new() -> Self {
         Self {
-            crafting: [None; 4],
+            crafting: [const { None }; 4],
             crafting_output: None,
-            items: [None; 36],
-            armor: [None; 4],
+            items: [const { None }; 36],
+            armor: [const { None }; 4],
             offhand: None,
             // TODO: What when player spawns in with an different index ?
             selected: 0,
@@ -202,7 +202,7 @@ impl PlayerInventory {
 
     pub fn get_nonfull_slot_with_item(&self, item_id: u16) -> Option<usize> {
         let max_stack = Item::from_id(item_id)
-            .unwrap_or(Item::AIR)
+            .expect("We passed an invalid item id")
             .components
             .max_stack_size;
 
@@ -219,17 +219,28 @@ impl PlayerInventory {
             [SLOT_HOTBAR_START - SLOT_INV_START..=SLOT_HOTBAR_END - SLOT_INV_START]
             .iter()
             .position(|slot| {
-                slot.is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
+                slot.as_ref()
+                    .is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
             })
         {
             return Some(index + SLOT_INV_START);
+        }
+
+        // Check offhand
+        if self
+            .offhand
+            .as_ref()
+            .is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
+        {
+            return Some(SLOT_OFFHAND);
         }
 
         // Then check main inventory slots (0-26)
         if let Some(index) = self.items[0..=SLOT_INV_END - SLOT_INV_START]
             .iter()
             .position(|slot| {
-                slot.is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
+                slot.as_ref()
+                    .is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
             })
         {
             return Some(index + SLOT_INV_START);
@@ -246,7 +257,7 @@ impl PlayerInventory {
             }
         }
 
-        if let Some(stack) = self.offhand {
+        if let Some(stack) = &self.offhand {
             if stack.item.id == item_id {
                 return Some(SLOT_OFFHAND);
             }
@@ -283,22 +294,22 @@ impl PlayerInventory {
             .map(|index| index + SLOT_INV_START)
     }
 
-    pub fn slots(&self) -> Vec<Option<&ItemStack>> {
+    pub fn slots(&self) -> Box<[Option<&ItemStack>]> {
         let mut slots = vec![self.crafting_output.as_ref()];
         slots.extend(self.crafting.iter().map(|c| c.as_ref()));
         slots.extend(self.armor.iter().map(|c| c.as_ref()));
         slots.extend(self.items.iter().map(|c| c.as_ref()));
         slots.push(self.offhand.as_ref());
-        slots
+        slots.into_boxed_slice()
     }
 
-    pub fn slots_mut(&mut self) -> Vec<&mut Option<ItemStack>> {
+    pub fn slots_mut(&mut self) -> Box<[&mut Option<ItemStack>]> {
         let mut slots = vec![&mut self.crafting_output];
         slots.extend(self.crafting.iter_mut());
         slots.extend(self.armor.iter_mut());
         slots.extend(self.items.iter_mut());
         slots.push(&mut self.offhand);
-        slots
+        slots.into_boxed_slice()
     }
 
     pub fn iter_items_mut(&mut self) -> IterMut<Option<ItemStack>> {
@@ -336,40 +347,40 @@ impl Container for PlayerInventory {
             if slot_condition(item) {
                 if invert {
                     handle_item_change(item_slot, carried_slot, mouse_click);
-                    return Ok(());
+                } else {
+                    handle_item_change(carried_slot, item_slot, mouse_click);
                 }
-                handle_item_change(carried_slot, item_slot, mouse_click);
+            } else {
+                return Err(InventoryError::InvalidSlot);
             }
+        } else if invert {
+            handle_item_change(item_slot, carried_slot, mouse_click);
         } else {
-            if invert {
-                handle_item_change(item_slot, carried_slot, mouse_click);
-                return Ok(());
-            }
             handle_item_change(carried_slot, item_slot, mouse_click)
         }
         Ok(())
     }
 
-    fn all_slots(&mut self) -> Vec<&mut Option<ItemStack>> {
+    fn all_slots(&mut self) -> Box<[&mut Option<ItemStack>]> {
         self.slots_mut()
     }
 
-    fn all_slots_ref(&self) -> Vec<Option<&ItemStack>> {
+    fn all_slots_ref(&self) -> Box<[Option<&ItemStack>]> {
         self.slots()
     }
 
-    fn all_combinable_slots(&self) -> Vec<Option<&ItemStack>> {
+    fn all_combinable_slots(&self) -> Box<[Option<&ItemStack>]> {
         self.items.iter().map(|item| item.as_ref()).collect()
     }
 
-    fn all_combinable_slots_mut(&mut self) -> Vec<&mut Option<ItemStack>> {
+    fn all_combinable_slots_mut(&mut self) -> Box<[&mut Option<ItemStack>]> {
         self.items.iter_mut().collect()
     }
 
     fn craft(&mut self) -> bool {
-        let v1 = [self.crafting[0], self.crafting[1], None];
-        let v2 = [self.crafting[2], self.crafting[3], None];
-        let v3 = [None; 3];
+        let v1 = [self.crafting[0].as_ref(), self.crafting[1].as_ref(), None];
+        let v2 = [self.crafting[2].as_ref(), self.crafting[3].as_ref(), None];
+        let v3 = [const { None }; 3];
         let together = [v1, v2, v3];
 
         self.crafting_output = check_if_matches_crafting(together);
