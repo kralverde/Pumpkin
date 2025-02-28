@@ -137,7 +137,7 @@ impl PlayerInventory {
         self.selected = slot;
     }
 
-    pub fn get_selected(&self) -> usize {
+    pub fn get_selected_slot(&self) -> usize {
         self.selected + SLOT_HOTBAR_START
     }
 
@@ -153,13 +153,13 @@ impl PlayerInventory {
     //NOTE: We actually want &mut Option instead of Option<&mut>
     pub fn held_item_mut(&mut self) -> &mut Option<ItemStack> {
         debug_assert!((0..=SLOT_HOTBAR_INDEX).contains(&self.selected));
-        &mut self.items[self.get_selected() - SLOT_INV_START]
+        &mut self.items[self.get_selected_slot() - SLOT_INV_START]
     }
 
     #[inline]
     pub fn held_item(&self) -> Option<&ItemStack> {
         debug_assert!((0..=SLOT_HOTBAR_INDEX).contains(&self.selected));
-        self.items[self.get_selected() - SLOT_INV_START].as_ref()
+        self.items[self.get_selected_slot() - SLOT_INV_START].as_ref()
     }
 
     pub fn decrease_current_stack(&mut self, amount: u8) -> bool {
@@ -172,18 +172,6 @@ impl PlayerInventory {
             return true;
         };
         false
-    }
-
-    /// Checks if we can merge an existing item into an Stack or if a any new Slot is empty
-    pub fn collect_item_slot(&self, item_id: u16) -> Option<usize> {
-        // Lets try to merge first
-        if let Some(stack) = self.get_nonfull_slot_with_item(item_id) {
-            return Some(stack);
-        }
-        if let Some(empty) = self.get_empty_slot() {
-            return Some(empty);
-        }
-        None
     }
 
     pub fn get_empty_hotbar_slot(&self) -> usize {
@@ -200,91 +188,64 @@ impl PlayerInventory {
         self.selected
     }
 
+    pub fn get_slot_filtered<F>(&self, filter: &F) -> Option<usize>
+    where
+        F: Fn(Option<&ItemStack>) -> bool,
+    {
+        // Check selected slot
+        if filter(self.items[self.get_selected_slot() - SLOT_INV_START].as_ref()) {
+            Some(self.get_selected_slot())
+        }
+        // Check hotbar slots (27-35) first
+        else if let Some(index) = self.items
+            [SLOT_HOTBAR_START - SLOT_INV_START..=SLOT_HOTBAR_END - SLOT_INV_START]
+            .iter()
+            .enumerate()
+            .position(|(index, item_stack)| index != self.selected && filter(item_stack.as_ref()))
+        {
+            Some(index + SLOT_HOTBAR_START)
+        }
+        // Check offhand
+        else if filter(self.offhand.as_ref()) {
+            Some(SLOT_OFFHAND)
+        }
+        // Then check main inventory slots (0-26)
+        else {
+            self.items[0..=SLOT_INV_END - SLOT_INV_START]
+                .iter()
+                .position(|item_stack| filter(item_stack.as_ref()))
+                .map(|index| Some(index + SLOT_INV_START))?
+        }
+    }
+
     pub fn get_nonfull_slot_with_item(&self, item_id: u16) -> Option<usize> {
         let max_stack = Item::from_id(item_id)
             .expect("We passed an invalid item id")
             .components
             .max_stack_size;
 
-        // Check selected slot
-        if let Some(item) = &self.items[self.get_selected() - SLOT_INV_START] {
-            if item.item.id == item_id && item.item_count < max_stack {
-                // + 9 - 9 is 0
-                return Some(self.get_selected());
-            }
-        }
-
-        // Check hotbar slots (27-35) first
-        if let Some(index) = self.items
-            [SLOT_HOTBAR_START - SLOT_INV_START..=SLOT_HOTBAR_END - SLOT_INV_START]
-            .iter()
-            .position(|slot| {
-                slot.as_ref()
-                    .is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
+        self.get_slot_filtered(&|item_stack| {
+            item_stack.is_some_and(|item_stack| {
+                item_stack.item.id == item_id && item_stack.item_count < max_stack
             })
-        {
-            return Some(index + SLOT_INV_START);
-        }
+        })
+    }
 
-        // Check offhand
-        if self
-            .offhand
-            .as_ref()
-            .is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
-        {
-            return Some(SLOT_OFFHAND);
-        }
-
-        // Then check main inventory slots (0-26)
-        if let Some(index) = self.items[0..=SLOT_INV_END - SLOT_INV_START]
-            .iter()
-            .position(|slot| {
-                slot.as_ref()
-                    .is_some_and(|item| item.item.id == item_id && item.item_count < max_stack)
-            })
-        {
-            return Some(index + SLOT_INV_START);
-        }
-
-        None
+    /// Returns a slot that has an item with less than the max stack size, if none, returns an empty
+    /// slot, if none, returns None
+    pub fn get_pickup_item_slot(&self, item_id: u16) -> Option<usize> {
+        self.get_nonfull_slot_with_item(item_id)
+            .or_else(|| self.get_empty_slot())
     }
 
     pub fn get_slot_with_item(&self, item_id: u16) -> Option<usize> {
-        for slot in SLOT_INV_START..=SLOT_HOTBAR_END {
-            match &self.items[slot - SLOT_INV_START] {
-                Some(item) if item.item.id == item_id => return Some(slot),
-                _ => continue,
-            }
-        }
-
-        if let Some(stack) = &self.offhand {
-            if stack.item.id == item_id {
-                return Some(SLOT_OFFHAND);
-            }
-        }
-
-        None
+        self.get_slot_filtered(&|item_stack| {
+            item_stack.is_some_and(|item_stack| item_stack.item.id == item_id)
+        })
     }
 
     pub fn get_empty_slot(&self) -> Option<usize> {
-        // Check hotbar slots (27-35) first
-        if let Some(index) = self.items
-            [SLOT_HOTBAR_START - SLOT_INV_START..=SLOT_HOTBAR_END - SLOT_INV_START]
-            .iter()
-            .position(|slot| slot.is_none())
-        {
-            return Some(index + SLOT_HOTBAR_START);
-        }
-
-        // Then check main inventory slots (0-26)
-        if let Some(index) = self.items[0..=SLOT_INV_END - SLOT_INV_START]
-            .iter()
-            .position(|slot| slot.is_none())
-        {
-            return Some(index + SLOT_INV_START);
-        }
-
-        None
+        self.get_slot_filtered(&|item_stack| item_stack.is_none())
     }
 
     pub fn get_empty_slot_no_order(&self) -> Option<usize> {

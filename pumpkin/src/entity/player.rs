@@ -1040,7 +1040,7 @@ impl Player {
         let mut inv = self.inventory.lock().await;
         if let Some(item_stack) = inv.held_item_mut() {
             let drop_amount = if drop_stack { item_stack.item_count } else { 1 };
-            self.drop_item(server, item_stack.item.id, item_stack.item_count as u32)
+            self.drop_item(server, item_stack.item.id, u32::from(drop_amount))
                 .await;
             inv.decrease_current_stack(drop_amount);
         }

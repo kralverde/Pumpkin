@@ -7,7 +7,7 @@ use pumpkin_inventory::container_click::{
     Click, ClickType, DropType, KeyClick, MouseClick, MouseDragState, MouseDragType,
 };
 use pumpkin_inventory::drag_handler::DragHandler;
-use pumpkin_inventory::player::{SLOT_BOOT, SLOT_CHEST, SLOT_HELM, SLOT_LEG};
+use pumpkin_inventory::player::{SLOT_BOOT, SLOT_CHEST, SLOT_HELM, SLOT_HOTBAR_START, SLOT_LEG};
 use pumpkin_inventory::window_property::{WindowProperty, WindowPropertyTrait};
 use pumpkin_inventory::{InventoryError, OptionallyCombinedContainer, container_click};
 use pumpkin_protocol::client::play::{
@@ -290,7 +290,7 @@ impl Player {
                                 self.drop_item(
                                     server,
                                     item_stack.item.id,
-                                    item_stack.item_count as u32,
+                                    u32::from(item_stack.item_count),
                                 )
                                 .await;
                                 *slots[slot] = None;
@@ -332,7 +332,7 @@ impl Player {
                             self.drop_item(
                                 server,
                                 item_stack.item.id,
-                                item_stack.item_count as u32,
+                                u32::from(item_stack.item_count),
                             )
                             .await;
                             *carried_item = None;
@@ -484,11 +484,11 @@ impl Player {
         taking_crafted: bool,
     ) -> Result<(), InventoryError> {
         let changing_slot = match key_click {
-            KeyClick::Slot(slot) => slot,
+            KeyClick::Slot(slot) => slot as usize + SLOT_HOTBAR_START,
             KeyClick::Offhand => 45,
         };
         let mut inventory = self.inventory().lock().await;
-        let mut changing_item_slot = inventory.get_slot(changing_slot as usize)?.to_owned();
+        let mut changing_item_slot = inventory.get_slot(changing_slot)?.clone();
         let mut container = OptionallyCombinedContainer::new(&mut inventory, opened_container);
 
         container.handle_item_change(
@@ -497,7 +497,7 @@ impl Player {
             MouseClick::Left,
             taking_crafted,
         )?;
-        *inventory.get_slot(changing_slot as usize)? = changing_item_slot;
+        *inventory.get_slot(changing_slot)? = changing_item_slot;
         Ok(())
     }
 
@@ -684,38 +684,24 @@ impl Player {
         let max_stack = item.components.max_stack_size;
         let mut inventory = self.inventory().lock().await;
 
-        while let Some(slot) = inventory.get_nonfull_slot_with_item(item.id) {
-            let item_stack = inventory
-                .get_slot(slot)
-                .expect("We just called a method that said this was a valid slot")
-                .as_mut()
-                .expect("We just called a method that said this had an item");
-
-            if amount_left == 0 {
-                return;
-            }
-
-            let amount_to_add = max_stack - item_stack.item_count;
-            if let Some(new_amount_left) = amount_left.checked_sub(amount_to_add as u32) {
-                item_stack.item_count = max_stack;
-                amount_left = new_amount_left;
-            } else {
-                // This is safe because amount left is less than amount_to_add which is a u8
-                item_stack.item_count = max_stack - (amount_to_add - amount_left as u8);
-                return;
-            }
-        }
-
-        while let Some(slot) = inventory.get_empty_slot() {
+        while let Some(slot) = inventory.get_pickup_item_slot(item.id) {
             let item_stack = inventory
                 .get_slot(slot)
                 .expect("We just called a method that said this was a valid slot");
 
-            if amount_left == 0 {
-                return;
-            }
-
-            if let Some(new_amount_left) = amount_left.checked_sub(u32::from(max_stack)) {
+            if let Some(item_stack) = item_stack {
+                let amount_to_add = max_stack - item_stack.item_count;
+                if let Some(new_amount_left) = amount_left.checked_sub(u32::from(amount_to_add)) {
+                    item_stack.item_count = max_stack;
+                    amount_left = new_amount_left;
+                } else {
+                    // This is safe because amount left is less than amount_to_add which is a u8
+                    item_stack.item_count = max_stack - (amount_to_add - amount_left as u8);
+                    // Return here because if we have less than the max amount left then the whole
+                    // stack will be moved
+                    return;
+                }
+            } else if let Some(new_amount_left) = amount_left.checked_sub(u32::from(max_stack)) {
                 *item_stack = Some(ItemStack {
                     item: item.clone(),
                     item_count: max_stack,
@@ -724,11 +710,15 @@ impl Player {
             } else {
                 *item_stack = Some(ItemStack {
                     item: item.clone(),
-                    item_count: amount as u8,
+                    // This is safe because amount left is less than max_stack which is a u8
+                    item_count: amount_left as u8,
                 });
+                // Return here because if we have less than the max amount left then the whole
+                // stack will be moved
                 return;
             }
         }
+
         log::warn!(
             "{amount} items were discarded because dropping them to the ground is not implemented"
         );

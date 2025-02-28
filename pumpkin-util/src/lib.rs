@@ -63,7 +63,7 @@ impl<T> Index<usize> for MutableSplitSlice<'_, T> {
         } else if index == self.start.len() {
             panic!("We tried to index into the element that was removed");
         } else {
-            &self.end[index]
+            &self.end[index - self.start.len() - 1]
         }
     }
 }
@@ -76,7 +76,7 @@ impl<T> IndexMut<usize> for MutableSplitSlice<'_, T> {
         } else if index == self.start.len() {
             panic!("We tried to index into the element that was removed");
         } else {
-            &mut self.end[index]
+            &mut self.end[index - self.start.len() - 1]
         }
     }
 }

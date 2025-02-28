@@ -406,8 +406,12 @@ impl Player {
         if let Err(err) = inventory.set_slot(slot, Some(stack), false) {
             log::error!("Pick item set slot error: {}", err);
         } else {
-            let dest_packet =
-                CSetContainerSlot::new(0, inventory.state_id as i32, slot as i16, &slot_data);
+            let dest_packet = CSetContainerSlot::new(
+                PlayerInventory::CONTAINER_ID,
+                inventory.state_id as i32,
+                slot as i16,
+                &slot_data,
+            );
             self.client.send_packet(&dest_packet).await;
         }
     }
@@ -1013,7 +1017,7 @@ impl Player {
         };
 
         let mut inventory = self.inventory().lock().await;
-        let slot_id = inventory.get_selected();
+        let slot_id = inventory.get_selected_slot();
         let mut state_id = inventory.state_id;
         let held_item = inventory.held_item_mut();
 
@@ -1057,7 +1061,7 @@ impl Player {
             let block_state = world.get_block_state(&location).await?;
             let new_state = server
                 .block_properties_manager
-                .on_interact(block, block_state, &stack)
+                .on_interact(block, block_state, stack)
                 .await;
             world.set_block_state(&location, new_state).await;
             match action_result {
@@ -1167,7 +1171,7 @@ impl Player {
                 .set_slot(packet.slot as usize, item_stack, true)?;
         } else if let Some(item_stack) = item_stack {
             // Item drop
-            self.drop_item(server, item_stack.item.id, item_stack.item_count as u32)
+            self.drop_item(server, item_stack.item.id, u32::from(item_stack.item_count))
                 .await;
         };
         Ok(())
