@@ -307,6 +307,10 @@ impl Container for PlayerInventory {
         let slot_condition = self.slot_condition(slot)?;
         let item_slot = self.get_slot(slot)?;
         if let Some(item) = carried_slot {
+            debug_assert!(
+                item.item_count > 0,
+                "We aren't setting the stack to None somewhere"
+            );
             if slot_condition(item) {
                 if invert {
                     handle_item_change(item_slot, carried_slot, mouse_click);

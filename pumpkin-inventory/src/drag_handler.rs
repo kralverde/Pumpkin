@@ -96,9 +96,10 @@ impl DragHandler {
                                 carried_item.item_count += 1;
                             }
                         } else {
-                            let mut single_item = carried_item.clone();
-                            single_item.item_count = 1;
-                            *slots[slot] = Some(single_item)
+                            *slots[slot] = Some(ItemStack {
+                                item: carried_item.item.clone(),
+                                item_count: 1,
+                            })
                         }
                     }
                 });

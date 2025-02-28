@@ -136,8 +136,11 @@ pub fn handle_item_take(
         }
         MouseClick::Right => {
             let half = item_stack.item_count / 2;
-            item_stack.item_count -= half;
             new_item.item_count = half;
+            item_stack.item_count -= half;
+            if item_stack.item_count == 0 {
+                *item_slot = None;
+            }
         }
     }
     *carried_item = Some(new_item);
@@ -162,10 +165,15 @@ pub fn handle_item_change(
                 std::mem::swap(carried_slot, current_slot);
             }
             MouseClick::Right => {
+                let new_stack = ItemStack {
+                    item: carried_item_stack.item.clone(),
+                    item_count: 1,
+                };
+                *current_slot = Some(new_stack);
                 carried_item_stack.item_count -= 1;
-                let mut new = carried_item_stack.clone();
-                new.item_count = 1;
-                *current_slot = Some(new);
+                if carried_item_stack.item_count == 0 {
+                    *carried_slot = None;
+                }
             }
         },
         // Take stack into carried
