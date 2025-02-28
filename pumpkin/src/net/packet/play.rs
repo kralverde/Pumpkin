@@ -1016,10 +1016,10 @@ impl Player {
             return Err(BlockPlacingError::InvalidBlockFace.into());
         };
 
-        let mut inventory = self.inventory().lock().await;
+        let inventory = self.inventory().lock().await;
         let slot_id = inventory.get_selected_slot();
-        let mut state_id = inventory.state_id;
-        let held_item = inventory.held_item_mut();
+        let held_item = inventory.held_item().cloned();
+        drop(inventory);
 
         let entity = &self.living_entity.entity;
         let world = &entity.world.read().await;
@@ -1061,7 +1061,7 @@ impl Player {
             let block_state = world.get_block_state(&location).await?;
             let new_state = server
                 .block_properties_manager
-                .on_interact(block, block_state, stack)
+                .on_interact(block, block_state, &stack)
                 .await;
             world.set_block_state(&location, new_state).await;
             match action_result {
@@ -1088,6 +1088,8 @@ impl Player {
             // TODO: Config
             // Decrease Block count
             if self.gamemode.load() != GameMode::Creative {
+                let mut inventory = self.inventory().lock().await;
+
                 if !inventory.decrease_current_stack(1) {
                     return Err(BlockPlacingError::InventoryInvalid.into());
                 }
@@ -1096,8 +1098,8 @@ impl Player {
                     .handle_decrease_item(
                         server,
                         slot_id as i16,
-                        inventory.held_item(),
-                        &mut state_id,
+                        inventory.held_item().cloned().as_ref(),
+                        &mut inventory.state_id,
                     )
                     .await;
             }
