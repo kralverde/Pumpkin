@@ -205,16 +205,18 @@ impl PlayerInventory {
         {
             Some(index + SLOT_HOTBAR_START)
         }
+        // Then check main inventory slots (0-26)
+        else if let Some(index) = self.items[0..=SLOT_INV_END - SLOT_INV_START]
+            .iter()
+            .position(|item_stack| filter(item_stack.as_ref()))
+        {
+            Some(index + SLOT_INV_START)
+        }
         // Check offhand
         else if filter(self.offhand.as_ref()) {
             Some(SLOT_OFFHAND)
-        }
-        // Then check main inventory slots (0-26)
-        else {
-            self.items[0..=SLOT_INV_END - SLOT_INV_START]
-                .iter()
-                .position(|item_stack| filter(item_stack.as_ref()))
-                .map(|index| Some(index + SLOT_INV_START))?
+        } else {
+            None
         }
     }
 
