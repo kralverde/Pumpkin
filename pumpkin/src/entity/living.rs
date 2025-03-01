@@ -1,20 +1,24 @@
+use std::sync::atomic::AtomicU8;
 use std::{collections::HashMap, sync::atomic::AtomicI32};
 
+use crate::server::Server;
 use async_trait::async_trait;
 use crossbeam::atomic::AtomicCell;
-use pumpkin_data::entity::EffectType;
+use pumpkin_config::ADVANCED_CONFIG;
+use pumpkin_data::entity::{EffectType, EntityStatus};
 use pumpkin_data::{damage::DamageType, sound::Sound};
 use pumpkin_nbt::tag::NbtTag;
+use pumpkin_protocol::client::play::{CHurtAnimation, CTakeItemEntity};
+use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::{
-    client::play::{
-        CDamageEvent, CEntityStatus, CSetEquipment, EquipmentSlot, MetaDataType, Metadata,
-    },
+    client::play::{CDamageEvent, CSetEquipment, EquipmentSlot, MetaDataType, Metadata},
     codec::slot::Slot,
 };
 use pumpkin_util::math::vector3::Vector3;
 use pumpkin_world::item::ItemStack;
 use tokio::sync::Mutex;
 
+use super::EntityBase;
 use super::{Entity, EntityId, NBTStorage, effect::Effect};
 
 /// Represents a living entity within the game world.
@@ -31,6 +35,7 @@ pub struct LivingEntity {
     pub last_damage_taken: AtomicCell<f32>,
     /// The current health level of the entity.
     pub health: AtomicCell<f32>,
+    pub death_time: AtomicU8,
     /// The distance the entity has been falling
     pub fall_distance: AtomicCell<f32>,
     pub active_effects: Mutex<HashMap<EffectType, Effect>>,
@@ -44,18 +49,8 @@ impl LivingEntity {
             last_damage_taken: AtomicCell::new(0.0),
             health: AtomicCell::new(20.0),
             fall_distance: AtomicCell::new(0.0),
+            death_time: AtomicU8::new(0),
             active_effects: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn tick(&self) {
-        if self
-            .time_until_regen
-            .load(std::sync::atomic::Ordering::Relaxed)
-            > 0
-        {
-            self.time_until_regen
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -75,6 +70,21 @@ impl LivingEntity {
             .await;
     }
 
+    /// Picks up and Item entity or XP Orb
+    pub async fn pickup(&self, item: &Entity, stack_amount: u32) {
+        // TODO: Only nearby
+        self.entity
+            .world
+            .read()
+            .await
+            .broadcast_packet_all(&CTakeItemEntity::new(
+                item.entity_id.into(),
+                self.entity.entity_id.into(),
+                stack_amount.into(),
+            ))
+            .await;
+    }
+
     pub fn set_pos(&self, position: Vector3<f64>) {
         self.last_pos.store(self.entity.pos.load());
         self.entity.set_pos(position);
@@ -90,7 +100,7 @@ impl LivingEntity {
         self.health.store(health);
         // tell everyone entities health changed
         self.entity
-            .send_meta_data(Metadata::new(9, MetaDataType::Float, health))
+            .send_meta_data(&[Metadata::new(9, MetaDataType::Float, health)])
             .await;
     }
 
@@ -149,11 +159,6 @@ impl LivingEntity {
     pub async fn get_effect(&self, effect: EffectType) -> Option<Effect> {
         let effects = self.active_effects.lock().await;
         effects.get(&effect).cloned()
-    }
-
-    pub async fn damage(&self, amount: f32, damage_type: DamageType) -> bool {
-        self.damage_with_context(amount, damage_type, None, None, None)
-            .await
     }
 
     /// Returns if the entity was damaged or not
@@ -222,22 +227,77 @@ impl LivingEntity {
     pub async fn kill(&self) {
         self.set_health(0.0).await;
 
-        // Spawns death smoke particles
+        // Plays the death sound
         self.entity
             .world
             .read()
             .await
-            .broadcast_packet_all(&CEntityStatus::new(self.entity.entity_id, 60))
-            .await;
-        // Plays the death sound and death animation
-        self.entity
-            .world
-            .read()
-            .await
-            .broadcast_packet_all(&CEntityStatus::new(self.entity.entity_id, 3))
+            .send_entity_status(
+                &self.entity,
+                EntityStatus::PlayDeathSoundOrAddProjectileHitParticles,
+            )
             .await;
     }
 }
+
+#[async_trait]
+impl EntityBase for LivingEntity {
+    async fn tick(&self, _server: &Server) {
+        if self
+            .time_until_regen
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+        {
+            self.time_until_regen
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        if self.health.load() <= 0.0 {
+            let time = self
+                .death_time
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if time >= 20 {
+                // Spawn Death particles
+                self.entity
+                    .world
+                    .read()
+                    .await
+                    .send_entity_status(&self.entity, EntityStatus::AddDeathParticles)
+                    .await;
+                self.entity.remove().await;
+            }
+        }
+    }
+    async fn damage(&self, amount: f32, damage_type: DamageType) -> bool {
+        let world = self.entity.world.read().await;
+        if !self.check_damage(amount) {
+            return false;
+        }
+        let config = &ADVANCED_CONFIG.pvp;
+
+        if !self
+            .damage_with_context(amount, damage_type, None, None, None)
+            .await
+        {
+            return false;
+        }
+
+        if config.hurt_animation {
+            let entity_id = VarInt(self.entity.entity_id);
+            world
+                .broadcast_packet_all(&CHurtAnimation::new(entity_id, self.entity.yaw.load()))
+                .await;
+        }
+        true
+    }
+    fn get_entity(&self) -> &Entity {
+        &self.entity
+    }
+
+    fn get_living_entity(&self) -> Option<&LivingEntity> {
+        Some(self)
+    }
+}
+
 #[async_trait]
 impl NBTStorage for LivingEntity {
     async fn write_nbt(&self, nbt: &mut pumpkin_nbt::compound::NbtCompound) {

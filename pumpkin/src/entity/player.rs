@@ -13,7 +13,7 @@ use crossbeam::atomic::AtomicCell;
 use pumpkin_config::{ADVANCED_CONFIG, BASIC_CONFIG};
 use pumpkin_data::{
     damage::DamageType,
-    entity::{EffectType, EntityType},
+    entity::{EffectType, EntityStatus, EntityType},
     item::Operation,
     particle::Particle,
     sound::{Sound, SoundCategory},
@@ -24,11 +24,10 @@ use pumpkin_protocol::{
     RawPacket, ServerPacket,
     bytebuf::packet::Packet,
     client::play::{
-        CAcknowledgeBlockChange, CActionBar, CCombatDeath, CDisguisedChatMessage, CEntityStatus,
-        CGameEvent, CHurtAnimation, CKeepAlive, CParticle, CPlayDisconnect, CPlayerAbilities,
-        CPlayerInfoUpdate, CPlayerPosition, CRespawn, CSetExperience, CSetHealth, CSubtitle,
-        CSystemChatMessage, CTitleText, CUnloadChunk, CUpdateMobEffect, GameEvent, MetaDataType,
-        PlayerAction,
+        CAcknowledgeBlockChange, CActionBar, CCombatDeath, CDisguisedChatMessage, CGameEvent,
+        CKeepAlive, CParticle, CPlayDisconnect, CPlayerAbilities, CPlayerInfoUpdate,
+        CPlayerPosition, CRespawn, CSetExperience, CSetHealth, CSubtitle, CSystemChatMessage,
+        CTitleText, CUnloadChunk, CUpdateMobEffect, GameEvent, MetaDataType, PlayerAction,
     },
     server::play::{
         SChatCommand, SChatMessage, SClientCommand, SClientInformationPlay, SClientTickEnd,
@@ -148,6 +147,7 @@ pub struct Player {
     pub experience_progress: AtomicCell<f32>,
     /// The player's total experience points
     pub experience_points: AtomicI32,
+    pub experience_pick_up_delay: Mutex<u32>,
 }
 
 impl Player {
@@ -202,6 +202,7 @@ impl Player {
             packet_sequence: AtomicI32::new(-1),
             start_mining_time: AtomicI32::new(0),
             carried_item: Mutex::new(None),
+            experience_pick_up_delay: Mutex::new(0),
             teleport_id_count: AtomicI32::new(0),
             mining: AtomicBool::new(false),
             mining_pos: Mutex::new(BlockPos(Vector3::new(0, 0, 0))),
@@ -288,7 +289,6 @@ impl Player {
     pub async fn attack(&self, victim: Arc<dyn EntityBase>) {
         let world = self.world().await;
         let victim_entity = victim.get_entity();
-        let victim_living_entity = victim.get_living_entity();
         let attacker_entity = &self.living_entity.entity;
         let config = &ADVANCED_CONFIG.pvp;
 
@@ -336,56 +336,45 @@ impl Player {
 
         let pos = victim_entity.pos.load();
 
-        if let Some(living) = victim_living_entity {
-            if !living.check_damage(damage as f32) {
-                world
-                    .play_sound(
-                        Sound::EntityPlayerAttackNodamage,
-                        SoundCategory::Players,
-                        &pos,
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        world
-            .play_sound(Sound::EntityPlayerHurt, SoundCategory::Players, &pos)
-            .await;
-
         let attack_type = AttackType::new(self, attack_cooldown_progress as f32).await;
-
-        player_attack_sound(&pos, &world, attack_type).await;
 
         if matches!(attack_type, AttackType::Critical) {
             damage *= 1.5;
         }
 
-        if let Some(living) = victim_living_entity {
-            living
-                .damage(damage as f32, DamageType::PLAYER_ATTACK)
-                .await;
-        }
-
-        let mut knockback_strength = 1.0;
-        match attack_type {
-            AttackType::Knockback => knockback_strength += 1.0,
-            AttackType::Sweeping => {
-                combat::spawn_sweep_particle(attacker_entity, &world, &pos).await;
-            }
-            _ => {}
-        };
-
-        if config.knockback {
-            combat::handle_knockback(attacker_entity, &world, victim_entity, knockback_strength)
-                .await;
-        }
-
-        if config.hurt_animation {
-            let entity_id = VarInt(victim_entity.entity_id);
+        if !victim
+            .damage(damage as f32, DamageType::PLAYER_ATTACK)
+            .await
+        {
             world
-                .broadcast_packet_all(&CHurtAnimation::new(entity_id, attacker_entity.yaw.load()))
+                .play_sound(
+                    Sound::EntityPlayerAttackNodamage,
+                    SoundCategory::Players,
+                    &self.living_entity.entity.pos.load(),
+                )
                 .await;
+            return;
+        }
+
+        if victim.get_living_entity().is_some() {
+            let mut knockback_strength = 1.0;
+            player_attack_sound(&pos, &world, attack_type).await;
+            match attack_type {
+                AttackType::Knockback => knockback_strength += 1.0,
+                AttackType::Sweeping => {
+                    combat::spawn_sweep_particle(attacker_entity, &world, &pos).await;
+                }
+                _ => {}
+            };
+            if config.knockback {
+                combat::handle_knockback(
+                    attacker_entity,
+                    &world,
+                    victim_entity,
+                    knockback_strength,
+                )
+                .await;
+            }
         }
 
         if config.swing {}
@@ -447,7 +436,7 @@ impl Player {
         self.cancel_tasks.notified().await;
     }
 
-    pub async fn tick(&self) {
+    pub async fn tick(&self, server: &Server) {
         if self
             .client
             .closed
@@ -461,6 +450,12 @@ impl Player {
                     self.packet_sequence.swap(-1, Ordering::Relaxed).into(),
                 ))
                 .await;
+        }
+        {
+            let mut xp = self.experience_pick_up_delay.lock().await;
+            if *xp > 0 {
+                *xp -= 1;
+            }
         }
 
         self.tick_counter.fetch_add(1, Ordering::Relaxed);
@@ -493,7 +488,7 @@ impl Player {
         self.last_attacked_ticks
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        self.living_entity.tick();
+        self.living_entity.tick(server).await;
         self.hunger_manager.tick(self).await;
 
         // timeout/keep alive handling
@@ -626,11 +621,16 @@ impl Player {
 
     /// syncs the players permission level with the client
     pub async fn send_permission_lvl_update(&self) {
-        self.client
-            .send_packet(&CEntityStatus::new(
-                self.entity_id(),
-                24 + self.permission_lvl.load() as i8,
-            ))
+        let status = match self.permission_lvl.load() {
+            PermissionLvl::Zero => EntityStatus::SetOpLevel0,
+            PermissionLvl::One => EntityStatus::SetOpLevel1,
+            PermissionLvl::Two => EntityStatus::SetOpLevel2,
+            PermissionLvl::Three => EntityStatus::SetOpLevel3,
+            PermissionLvl::Four => EntityStatus::SetOpLevel4,
+        };
+        self.world()
+            .await
+            .send_entity_status(&self.living_entity.entity, status)
             .await;
     }
 
@@ -931,15 +931,10 @@ impl Player {
         let config = self.config.lock().await;
         self.living_entity
             .entity
-            .send_meta_data(Metadata::new(17, MetaDataType::Byte, config.skin_parts))
-            .await;
-        self.living_entity
-            .entity
-            .send_meta_data(Metadata::new(
-                18,
-                MetaDataType::Byte,
-                config.main_hand as u8,
-            ))
+            .send_meta_data(&[
+                Metadata::new(17, MetaDataType::Byte, config.skin_parts),
+                Metadata::new(18, MetaDataType::Byte, config.main_hand as u8),
+            ])
             .await;
     }
 
@@ -1065,8 +1060,8 @@ impl Player {
         self.client
             .send_packet(&CSetExperience::new(
                 progress.clamp(0.0, 1.0),
-                level.into(),
                 points.into(),
+                level.into(),
             ))
             .await;
     }
@@ -1155,7 +1150,7 @@ impl Player {
         let total_exp = experience::points_to_level(current_level) + current_points;
         let new_total_exp = total_exp + added_points;
         let (new_level, new_points) = experience::total_to_level_and_points(new_total_exp);
-        let progress = experience::progress_in_level(new_level, new_points);
+        let progress = experience::progress_in_level(new_points, new_level);
         self.set_experience(new_level, progress, new_points).await;
     }
 }
@@ -1194,6 +1189,18 @@ impl NBTStorage for Player {
 
 #[async_trait]
 impl EntityBase for Player {
+    async fn damage(&self, amount: f32, damage_type: DamageType) -> bool {
+        self.world()
+            .await
+            .play_sound(
+                Sound::EntityPlayerHurt,
+                SoundCategory::Players,
+                &self.living_entity.entity.pos.load(),
+            )
+            .await;
+        self.living_entity.damage(amount, damage_type).await
+    }
+
     fn get_entity(&self) -> &Entity {
         &self.living_entity.entity
     }
@@ -1338,7 +1345,7 @@ impl Player {
                     .await;
             }
             SPCookieResponse::PACKET_ID => {
-                self.handle_cookie_response(SPCookieResponse::read(bytebuf)?);
+                self.handle_cookie_response(&SPCookieResponse::read(bytebuf)?);
             }
             SCloseContainer::PACKET_ID => {
                 self.handle_close_container(server, SCloseContainer::read(bytebuf)?)

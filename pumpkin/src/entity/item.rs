@@ -1,13 +1,15 @@
 use std::sync::{Arc, atomic::AtomicU32};
 
 use async_trait::async_trait;
-use pumpkin_data::item::Item;
+use pumpkin_data::{damage::DamageType, item::Item};
 use pumpkin_protocol::{
     client::play::{CTakeItemEntity, MetaDataType, Metadata},
     codec::slot::Slot,
 };
 use pumpkin_world::item::ItemStack;
 use tokio::sync::Mutex;
+
+use crate::server::Server;
 
 use super::{Entity, EntityBase, living::LivingEntity, player::Player};
 
@@ -23,6 +25,7 @@ pub struct ItemEntity {
 
 impl ItemEntity {
     pub fn new(entity: Entity, item_id: u16, count: u32) -> Self {
+        entity.yaw.store(rand::random::<f32>() * 360.0);
         Self {
             entity,
             item: Item::from_id(item_id).expect("We passed a bad item id into ItemEntity"),
@@ -34,14 +37,14 @@ impl ItemEntity {
     pub async fn send_meta_packet(&self) {
         let slot = Slot::new(self.item.id, *self.item_count.lock().await);
         self.entity
-            .send_meta_data(Metadata::new(8, MetaDataType::ItemStack, &slot))
+            .send_meta_data(&[Metadata::new(8, MetaDataType::ItemStack, &slot)])
             .await;
     }
 }
 
 #[async_trait]
 impl EntityBase for ItemEntity {
-    async fn tick(&self) {
+    async fn tick(&self, _server: &Server) {
         {
             let mut delay = self.pickup_delay.lock().await;
             *delay = delay.saturating_sub(1);
@@ -54,6 +57,10 @@ impl EntityBase for ItemEntity {
             self.entity.remove().await;
         }
     }
+    async fn damage(&self, _amount: f32, _damage_type: DamageType) -> bool {
+        false
+    }
+
     async fn on_player_collision(&self, player: Arc<Player>) {
         let can_pickup = {
             let delay = self.pickup_delay.lock().await;

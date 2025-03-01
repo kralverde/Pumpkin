@@ -306,7 +306,7 @@ impl Client {
         Err(AuthError::MissingAuthClient)
     }
 
-    pub fn handle_login_cookie_response(&self, packet: SLoginCookieResponse) {
+    pub fn handle_login_cookie_response(&self, packet: &SLoginCookieResponse) {
         // TODO: allow plugins to access this
         log::debug!(
             "Received cookie_response[login]: key: \"{}\", has_payload: \"{}\", payload_length: \"{}\"",
@@ -358,14 +358,11 @@ impl Client {
 
         let resource_config = &ADVANCED_CONFIG.resource_pack;
         if resource_config.enabled {
-            let uuid = Uuid::new_v3(
-                &uuid::Uuid::NAMESPACE_DNS,
-                resource_config.resource_pack_url.as_bytes(),
-            );
+            let uuid = Uuid::new_v3(&uuid::Uuid::NAMESPACE_DNS, resource_config.url.as_bytes());
             let resource_pack = CConfigAddResourcePack::new(
                 &uuid,
-                &resource_config.resource_pack_url,
-                &resource_config.resource_pack_sha1,
+                &resource_config.url,
+                &resource_config.sha1,
                 resource_config.force,
                 if resource_config.prompt_message.is_empty() {
                     None
