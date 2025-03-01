@@ -48,7 +48,7 @@ impl EntityBase for ItemEntity {
         {
             let mut delay = self.pickup_delay.lock().await;
             *delay = delay.saturating_sub(1);
-        }
+        };
 
         let age = self
             .item_age
