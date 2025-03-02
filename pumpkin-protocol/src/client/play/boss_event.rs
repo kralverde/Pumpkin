@@ -1,5 +1,5 @@
-use crate::bytebuf::ByteBufMut;
 use crate::client::play::bossevent_action::BosseventAction;
+use crate::ser::ByteBufMut;
 use crate::{ClientPacket, VarInt};
 use bytes::BufMut;
 use pumpkin_data::packet::clientbound::PLAY_BOSS_EVENT;

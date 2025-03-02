@@ -3,7 +3,7 @@ use pumpkin_data::packet::clientbound::PLAY_TELEPORT_ENTITY;
 use pumpkin_macros::packet;
 use pumpkin_util::math::vector3::Vector3;
 
-use crate::{ClientPacket, PositionFlag, VarInt, bytebuf::ByteBufMut};
+use crate::{ClientPacket, PositionFlag, VarInt, ser::ByteBufMut};
 
 #[packet(PLAY_TELEPORT_ENTITY)]
 pub struct CTeleportEntity<'a> {

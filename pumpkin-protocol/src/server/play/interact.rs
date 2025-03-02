@@ -5,7 +5,7 @@ use pumpkin_util::math::vector3::Vector3;
 
 use crate::{
     ServerPacket, VarInt,
-    bytebuf::{ByteBuf, ReadingError},
+    ser::{ByteBuf, ReadingError},
 };
 
 #[packet(PLAY_INTERACT)]

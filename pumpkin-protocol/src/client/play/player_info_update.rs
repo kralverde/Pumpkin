@@ -2,7 +2,7 @@ use bytes::BufMut;
 use pumpkin_data::packet::clientbound::PLAY_PLAYER_INFO_UPDATE;
 use pumpkin_macros::packet;
 
-use crate::{ClientPacket, Property, bytebuf::ByteBufMut};
+use crate::{ClientPacket, Property, ser::ByteBufMut};
 
 use super::PlayerAction;
 

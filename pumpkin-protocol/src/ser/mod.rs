@@ -280,7 +280,7 @@ mod test {
 
     use crate::{
         VarInt,
-        bytebuf::{deserializer, serializer},
+        ser::{deserializer, serializer},
     };
 
     #[test]

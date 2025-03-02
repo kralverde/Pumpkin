@@ -2,7 +2,7 @@ use bytes::BufMut;
 use pumpkin_data::packet::clientbound::LOGIN_LOGIN_FINISHED;
 use pumpkin_macros::packet;
 
-use crate::{ClientPacket, Property, bytebuf::ByteBufMut};
+use crate::{ClientPacket, Property, ser::ByteBufMut};
 
 #[packet(LOGIN_LOGIN_FINISHED)]
 pub struct CLoginSuccess<'a> {

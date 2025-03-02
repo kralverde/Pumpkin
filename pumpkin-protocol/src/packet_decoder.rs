@@ -188,7 +188,7 @@ impl From<DecompressionError> for PacketDecodeError {
 
 #[cfg(test)]
 mod tests {
-    use crate::bytebuf::ByteBufMut;
+    use crate::ser::ByteBufMut;
 
     use super::*;
     use aes::Aes128;

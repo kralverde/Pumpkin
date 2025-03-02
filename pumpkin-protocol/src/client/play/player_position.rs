@@ -3,9 +3,7 @@ use pumpkin_data::packet::clientbound::PLAY_PLAYER_POSITION;
 use pumpkin_macros::packet;
 use pumpkin_util::math::vector3::Vector3;
 
-use crate::{
-    ClientPacket, PositionFlag, ServerPacket, VarInt, bytebuf::ByteBuf, bytebuf::ByteBufMut,
-};
+use crate::{ClientPacket, PositionFlag, ServerPacket, VarInt, ser::ByteBuf, ser::ByteBufMut};
 
 #[packet(PLAY_PLAYER_POSITION)]
 pub struct CPlayerPosition<'a> {
@@ -38,10 +36,10 @@ impl<'a> CPlayerPosition<'a> {
 }
 
 impl ServerPacket for CPlayerPosition<'_> {
-    fn read(bytebuf: &mut impl bytes::Buf) -> Result<Self, crate::bytebuf::ReadingError> {
+    fn read(bytebuf: &mut impl bytes::Buf) -> Result<Self, crate::ser::ReadingError> {
         fn get_vec(
             bytebuf: &mut impl bytes::Buf,
-        ) -> Result<Vector3<f64>, crate::bytebuf::ReadingError> {
+        ) -> Result<Vector3<f64>, crate::ser::ReadingError> {
             Ok(Vector3::new(
                 bytebuf.try_get_f64()?,
                 bytebuf.try_get_f64()?,

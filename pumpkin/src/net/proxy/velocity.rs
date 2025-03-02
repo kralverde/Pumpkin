@@ -7,8 +7,7 @@ use bytes::{BufMut, BytesMut};
 use hmac::{Hmac, Mac};
 use pumpkin_config::networking::proxy::VelocityConfig;
 use pumpkin_protocol::{
-    Property, bytebuf::ByteBuf, client::login::CLoginPluginRequest,
-    server::login::SLoginPluginResponse,
+    Property, client::login::CLoginPluginRequest, ser::ByteBuf, server::login::SLoginPluginResponse,
 };
 use rand::Rng;
 use sha2::Sha256;

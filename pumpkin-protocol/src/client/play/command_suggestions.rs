@@ -3,7 +3,7 @@ use pumpkin_data::packet::clientbound::PLAY_COMMAND_SUGGESTIONS;
 use pumpkin_macros::packet;
 use pumpkin_util::text::TextComponent;
 
-use crate::{ClientPacket, VarInt, bytebuf::ByteBufMut};
+use crate::{ClientPacket, VarInt, ser::ByteBufMut};
 
 #[packet(PLAY_COMMAND_SUGGESTIONS)]
 pub struct CCommandSuggestions {

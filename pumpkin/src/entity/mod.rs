@@ -12,12 +12,12 @@ use pumpkin_data::{
 };
 use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
 use pumpkin_protocol::{
-    bytebuf::serializer::Serializer,
     client::play::{
         CEntityVelocity, CHeadRot, CSetEntityMetadata, CSpawnEntity, CTeleportEntity,
         CUpdateEntityRot, MetaDataType, Metadata,
     },
     codec::var_int::VarInt,
+    ser::serializer::Serializer,
 };
 use pumpkin_util::math::{
     boundingbox::{BoundingBox, EntityDimensions},

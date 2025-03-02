@@ -3,8 +3,8 @@ use std::num::NonZeroUsize;
 use bytes::{Buf, BufMut};
 use serde::{Serialize, Serializer};
 
-use crate::bytebuf::ByteBuf;
-use crate::bytebuf::ByteBufMut;
+use crate::ser::ByteBuf;
+use crate::ser::ByteBufMut;
 
 use super::{Codec, DecodeError, var_int::VarInt};
 

@@ -4,8 +4,8 @@ use pumpkin_macros::packet;
 
 use crate::{
     ServerPacket,
-    bytebuf::{ByteBuf, ReadingError},
     codec::identifier::Identifier,
+    ser::{ByteBuf, ReadingError},
 };
 const MAX_PAYLOAD_SIZE: usize = 1048576;
 

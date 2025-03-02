@@ -3,7 +3,7 @@ use pumpkin_data::packet::clientbound::CONFIG_REGISTRY_DATA;
 use pumpkin_macros::packet;
 use serde::Serialize;
 
-use crate::{ClientPacket, bytebuf::ByteBufMut, codec::identifier::Identifier};
+use crate::{ClientPacket, codec::identifier::Identifier, ser::ByteBufMut};
 
 #[packet(CONFIG_REGISTRY_DATA)]
 pub struct CRegistryData<'a> {

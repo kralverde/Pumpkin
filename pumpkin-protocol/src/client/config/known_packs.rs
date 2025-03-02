@@ -2,7 +2,7 @@ use bytes::BufMut;
 use pumpkin_data::packet::clientbound::CONFIG_SELECT_KNOWN_PACKS;
 use pumpkin_macros::packet;
 
-use crate::{ClientPacket, KnownPack, bytebuf::ByteBufMut};
+use crate::{ClientPacket, KnownPack, ser::ByteBufMut};
 
 #[packet(CONFIG_SELECT_KNOWN_PACKS)]
 pub struct CKnownPacks<'a> {

@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use bytes::{Buf, BufMut};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor};
 
-use crate::bytebuf::{ByteBuf, ByteBufMut};
+use crate::ser::{ByteBuf, ByteBufMut};
 
 use super::{Codec, DecodeError};
 

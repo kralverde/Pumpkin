@@ -1,12 +1,11 @@
 use std::num::NonZeroU16;
 
-use bytebuf::{ByteBufMut, ReadingError, packet::Packet};
 use bytes::{Buf, BufMut, Bytes};
 use codec::{identifier::Identifier, var_int::VarInt};
 use pumpkin_util::text::{TextComponent, style::Style};
+use ser::{ByteBufMut, ReadingError, packet::Packet};
 use serde::{Deserialize, Serialize, Serializer};
 
-pub mod bytebuf;
 #[cfg(feature = "clientbound")]
 pub mod client;
 pub mod codec;
@@ -14,6 +13,7 @@ pub mod packet_decoder;
 pub mod packet_encoder;
 #[cfg(feature = "query")]
 pub mod query;
+pub mod ser;
 #[cfg(feature = "serverbound")]
 pub mod server;
 

@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::{
     ServerPacket, VarInt,
-    bytebuf::{ByteBuf, ReadingError},
+    ser::{ByteBuf, ReadingError},
 };
 
 #[derive(Serialize)]

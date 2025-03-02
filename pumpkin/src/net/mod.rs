@@ -19,10 +19,10 @@ use pumpkin_config::networking::compression::CompressionInfo;
 use pumpkin_protocol::{
     ClientPacket, CompressionLevel, CompressionThreshold, ConnectionState, Property, RawPacket,
     ServerPacket,
-    bytebuf::{ReadingError, packet::Packet},
     client::{config::CConfigDisconnect, login::CLoginDisconnect, play::CPlayDisconnect},
     packet_decoder::PacketDecoder,
     packet_encoder::{PacketEncodeError, PacketEncoder},
+    ser::{ReadingError, packet::Packet},
     server::{
         config::{
             SAcknowledgeFinishConfig, SClientInformationConfig, SConfigCookieResponse,

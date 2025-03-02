@@ -9,8 +9,8 @@ use pumpkin_world::block::registry;
 
 use crate::{
     ClientPacket,
-    bytebuf::ByteBufMut,
     codec::{identifier::Identifier, var_int::VarInt},
+    ser::ByteBufMut,
 };
 
 #[packet(CONFIG_UPDATE_TAGS)]

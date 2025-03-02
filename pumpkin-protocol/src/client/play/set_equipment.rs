@@ -1,4 +1,4 @@
-use crate::bytebuf::{ByteBufMut, serializer::Serializer};
+use crate::ser::{ByteBufMut, serializer::Serializer};
 use bytes::BytesMut;
 use pumpkin_data::packet::clientbound::PLAY_SET_EQUIPMENT;
 use pumpkin_macros::packet;

@@ -4,8 +4,8 @@ use pumpkin_macros::packet;
 
 use crate::{
     ServerPacket, VarInt,
-    bytebuf::{ByteBuf, ReadingError},
     codec::identifier::Identifier,
+    ser::{ByteBuf, ReadingError},
 };
 
 #[packet(CONFIG_COOKIE_RESPONSE)]

@@ -2,7 +2,7 @@ use bytes::BufMut;
 use pumpkin_data::packet::clientbound::PLAY_COMMANDS;
 use pumpkin_macros::packet;
 
-use crate::{ClientPacket, VarInt, bytebuf::ByteBufMut};
+use crate::{ClientPacket, VarInt, ser::ByteBufMut};
 
 #[packet(PLAY_COMMANDS)]
 pub struct CCommands<'a> {

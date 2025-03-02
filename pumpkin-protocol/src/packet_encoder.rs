@@ -216,7 +216,7 @@ pub enum PacketEncodeError {
 mod tests {
     use super::*;
     use crate::client::status::CStatusResponse;
-    use crate::{bytebuf::packet::Packet, codec::DecodeError};
+    use crate::{codec::DecodeError, ser::packet::Packet};
     use aes::Aes128;
     use cfb8::Decryptor as Cfb8Decryptor;
     use cfb8::cipher::AsyncStreamCipher;

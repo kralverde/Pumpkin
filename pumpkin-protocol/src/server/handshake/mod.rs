@@ -1,7 +1,7 @@
-use crate::bytebuf::ByteBufMut;
+use crate::ser::ByteBufMut;
 use crate::{
     ClientPacket, ConnectionState, ServerPacket, VarInt,
-    bytebuf::{ByteBuf, ReadingError},
+    ser::{ByteBuf, ReadingError},
 };
 use bytes::Buf;
 use pumpkin_data::packet::serverbound::HANDSHAKE_INTENTION;

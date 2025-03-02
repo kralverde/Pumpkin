@@ -2,7 +2,7 @@ use bytes::BufMut;
 use pumpkin_data::{packet::clientbound::PLAY_SOUND_ENTITY, sound::SoundCategory};
 use pumpkin_macros::packet;
 
-use crate::{ClientPacket, IDOrSoundEvent, SoundEvent, VarInt, bytebuf::ByteBufMut};
+use crate::{ClientPacket, IDOrSoundEvent, SoundEvent, VarInt, ser::ByteBufMut};
 
 #[packet(PLAY_SOUND_ENTITY)]
 pub struct CEntitySoundEffect {

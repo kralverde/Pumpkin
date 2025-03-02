@@ -1,4 +1,4 @@
-use crate::{ClientPacket, VarInt, bytebuf::ByteBufMut, codec::bit_set::BitSet};
+use crate::{ClientPacket, VarInt, codec::bit_set::BitSet, ser::ByteBufMut};
 
 use bytes::{BufMut, BytesMut};
 use pumpkin_data::packet::clientbound::PLAY_LEVEL_CHUNK_WITH_LIGHT;

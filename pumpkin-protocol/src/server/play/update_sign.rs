@@ -5,7 +5,7 @@ use pumpkin_util::math::position::BlockPos;
 
 use crate::{
     ServerPacket,
-    bytebuf::{ByteBuf, ReadingError},
+    ser::{ByteBuf, ReadingError},
 };
 
 #[packet(PLAY_SIGN_UPDATE)]

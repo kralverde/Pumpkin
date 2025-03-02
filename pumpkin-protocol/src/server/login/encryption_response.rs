@@ -4,7 +4,7 @@ use pumpkin_macros::packet;
 
 use crate::{
     ServerPacket, VarInt,
-    bytebuf::{ByteBuf, ReadingError},
+    ser::{ByteBuf, ReadingError},
 };
 
 #[packet(LOGIN_KEY)]
