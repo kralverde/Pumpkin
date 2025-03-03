@@ -18,7 +18,6 @@ type Cipher = cfb8::Decryptor<aes::Aes128>;
 /// Supports Aes128 Encryption
 #[derive(Default)]
 pub struct PacketDecoder {
-    // This will grow infinitely if we don't make a new one
     buf: BytesMut,
     cipher: Option<Cipher>,
     expect_compression: bool,
@@ -47,8 +46,8 @@ impl PacketDecoder {
         let total_packet_len = packet_len_byte_len + packet_len;
         let mut data = self.buf.split_to(total_packet_len).freeze();
 
-        // TODO: How to handle this?
-        // We don't want to own `data`, so create a new `BytesMut`
+        // TODO: Create a new buffer so we don't hold ownership of all the bytes we returned
+        // preventing them from being dropped
         /*
         let mut new_buf = BytesMut::with_capacity(self.buf.len());
         new_buf.extend(&self.buf);
