@@ -1,12 +1,8 @@
-use crate::ser::ByteBufMut;
-use bytes::Buf;
+use crate::ser::{ByteBufMut, NetworkRead};
 use pumpkin_data::packet::serverbound::LOGIN_HELLO;
 use pumpkin_macros::packet;
 
-use crate::{
-    ClientPacket, ServerPacket,
-    ser::{ByteBuf, ReadingError},
-};
+use crate::{ClientPacket, ServerPacket, ser::ReadingError};
 
 #[packet(LOGIN_HELLO)]
 pub struct SLoginStart {
@@ -22,10 +18,12 @@ impl ClientPacket for SLoginStart {
 }
 
 impl ServerPacket for SLoginStart {
-    fn read(bytebuf: &mut impl Buf) -> Result<Self, ReadingError> {
+    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+        let mut read = read;
+
         Ok(Self {
-            name: bytebuf.try_get_string_len(16)?,
-            uuid: bytebuf.try_get_uuid()?,
+            name: read.get_string_bounded(16)?,
+            uuid: read.get_uuid()?,
         })
     }
 }

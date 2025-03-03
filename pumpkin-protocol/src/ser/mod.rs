@@ -1,13 +1,11 @@
 use core::str;
+use std::io::Read;
 
 use crate::{
     FixedBitSet,
-    codec::{
-        Codec, DecodeError, bit_set::BitSet, identifier::Identifier, var_int::VarInt,
-        var_long::VarLong,
-    },
+    codec::{Codec, bit_set::BitSet, identifier::Identifier, var_int::VarInt, var_long::VarLong},
 };
-use bytes::{Buf, BufMut};
+use bytes::BufMut;
 
 mod deserializer;
 use thiserror::Error;
@@ -27,122 +25,302 @@ pub enum ReadingError {
     Message(String),
 }
 
-impl From<bytes::TryGetError> for ReadingError {
-    fn from(error: bytes::TryGetError) -> Self {
-        Self::EOF(error.requested.to_string())
-    }
-}
+pub trait NetworkRead {
+    fn get_i8_be(&mut self) -> Result<i8, ReadingError>;
+    fn get_u8_be(&mut self) -> Result<u8, ReadingError>;
+    fn get_i16_be(&mut self) -> Result<i16, ReadingError>;
+    fn get_u16_be(&mut self) -> Result<u16, ReadingError>;
+    fn get_i32_be(&mut self) -> Result<i32, ReadingError>;
+    fn get_u32_be(&mut self) -> Result<u32, ReadingError>;
+    fn get_i64_be(&mut self) -> Result<i64, ReadingError>;
+    fn get_u64_be(&mut self) -> Result<u64, ReadingError>;
+    fn get_f32_be(&mut self) -> Result<f32, ReadingError>;
+    fn get_f64_be(&mut self) -> Result<f64, ReadingError>;
+    fn read_boxed_slice(&mut self, count: usize) -> Result<Box<[u8]>, ReadingError>;
 
-pub trait ByteBuf: Buf {
-    fn try_get_bool(&mut self) -> Result<bool, ReadingError>;
+    fn read_remaining_to_boxed_slice(&mut self, bound: usize) -> Result<Box<[u8]>, ReadingError>;
 
-    fn try_copy_to_bytes(&mut self, len: usize) -> Result<bytes::Bytes, ReadingError>;
+    fn get_bool(&mut self) -> Result<bool, ReadingError>;
+    fn get_var_int(&mut self) -> Result<VarInt, ReadingError>;
+    fn get_var_long(&mut self) -> Result<VarLong, ReadingError>;
+    fn get_string_bounded(&mut self, bound: usize) -> Result<String, ReadingError>;
+    fn get_string(&mut self) -> Result<String, ReadingError>;
+    fn get_identifier(&mut self) -> Result<Identifier, ReadingError>;
+    fn get_uuid(&mut self) -> Result<uuid::Uuid, ReadingError>;
+    fn get_fixed_bitset(&mut self, bits: usize) -> Result<FixedBitSet, ReadingError>;
 
-    fn try_copy_to_bytes_len(
+    fn get_option<G>(
         &mut self,
-        len: usize,
-        max_length: usize,
-    ) -> Result<bytes::Bytes, ReadingError>;
-
-    fn try_get_var_int(&mut self) -> Result<VarInt, ReadingError>;
-
-    fn try_get_var_long(&mut self) -> Result<VarLong, ReadingError>;
-
-    fn try_get_identifier(&mut self) -> Result<Identifier, ReadingError>;
-
-    fn try_get_string(&mut self) -> Result<String, ReadingError>;
-
-    fn try_get_string_len(&mut self, max_size: usize) -> Result<String, ReadingError>;
-
-    /// Reads a boolean. If true, the closure is called, and the returned value is
-    /// wrapped in Some. Otherwise, this returns None.
-    fn try_get_option<G>(
-        &mut self,
-        val: impl FnOnce(&mut Self) -> Result<G, ReadingError>,
+        parse: impl FnOnce(&mut Self) -> Result<G, ReadingError>,
     ) -> Result<Option<G>, ReadingError>;
 
     fn get_list<G>(
         &mut self,
-        val: impl Fn(&mut Self) -> Result<G, ReadingError>,
+        parse: impl Fn(&mut Self) -> Result<G, ReadingError>,
     ) -> Result<Vec<G>, ReadingError>;
-
-    fn try_get_uuid(&mut self) -> Result<uuid::Uuid, ReadingError>;
-
-    fn try_get_fixed_bitset(&mut self, bits: usize) -> Result<FixedBitSet, ReadingError>;
 }
 
-impl<T: Buf> ByteBuf for T {
-    fn try_get_bool(&mut self) -> Result<bool, ReadingError> {
-        Ok(self.try_get_u8()? != 0)
+/*
+impl<R: NetworkRead> NetworkRead for &mut R {
+    fn get_i8_be(&mut self) -> Result<i8, ReadingError> {
+        (*self).get_i8_be()
     }
 
-    fn try_copy_to_bytes(&mut self, len: usize) -> Result<bytes::Bytes, ReadingError> {
-        if self.remaining() >= len {
-            Ok(self.copy_to_bytes(len))
-        } else {
-            Err(ReadingError::Message("Unable to copy bytes".to_string()))
-        }
+    fn get_u8_be(&mut self) -> Result<u8, ReadingError> {
+        (*self).get_u8_be()
     }
 
-    fn try_copy_to_bytes_len(
+    fn get_i16_be(&mut self) -> Result<i16, ReadingError> {
+        (*self).get_i16_be()
+    }
+
+    fn get_u16_be(&mut self) -> Result<u16, ReadingError> {
+        (*self).get_u16_be()
+    }
+
+    fn get_i32_be(&mut self) -> Result<i32, ReadingError> {
+        (*self).get_i32_be()
+    }
+
+    fn get_u32_be(&mut self) -> Result<u32, ReadingError> {
+        (*self).get_u32_be()
+    }
+
+    fn get_i64_be(&mut self) -> Result<i64, ReadingError> {
+        (*self).get_i64_be()
+    }
+
+    fn get_u64_be(&mut self) -> Result<u64, ReadingError> {
+        (*self).get_u64_be()
+    }
+
+    fn get_f32_be(&mut self) -> Result<f32, ReadingError> {
+        (*self).get_f32_be()
+    }
+
+    fn get_f64_be(&mut self) -> Result<f64, ReadingError> {
+        (*self).get_f64_be()
+    }
+
+    fn read_boxed_slice(&mut self, count: usize) -> Result<Box<[u8]>, ReadingError> {
+        (*self).read_boxed_slice(count)
+    }
+
+    fn read_remaining_to_boxed_slice(&mut self, bound: usize) -> Result<Box<[u8]>, ReadingError> {
+        (*self).read_remaining_to_boxed_slice(bound)
+    }
+
+    fn get_bool(&mut self) -> Result<bool, ReadingError> {
+        (*self).get_bool()
+    }
+
+    fn get_var_int(&mut self) -> Result<VarInt, ReadingError> {
+        (*self).get_var_int()
+    }
+
+    fn get_var_long(&mut self) -> Result<VarLong, ReadingError> {
+        (*self).get_var_long()
+    }
+
+    fn get_string_bounded(&mut self, bound: usize) -> Result<String, ReadingError> {
+        (*self).get_string_bounded(bound)
+    }
+
+    fn get_string(&mut self) -> Result<String, ReadingError> {
+        (*self).get_string()
+    }
+
+    fn get_identifier(&mut self) -> Result<Identifier, ReadingError> {
+        (*self).get_identifier()
+    }
+
+    fn get_uuid(&mut self) -> Result<uuid::Uuid, ReadingError> {
+        (*self).get_uuid()
+    }
+
+    fn get_fixed_bitset(&mut self, bits: usize) -> Result<FixedBitSet, ReadingError> {
+        (*self).get_fixed_bitset(bits)
+    }
+
+    fn get_option<G>(
         &mut self,
-        len: usize,
-        max_size: usize,
-    ) -> Result<bytes::Bytes, ReadingError> {
-        if len > max_size {
-            return Err(ReadingError::Message(
-                "Tried to copy bytes but length exceeds maximum length".to_string(),
-            ));
-        }
-        if self.remaining() >= len {
-            Ok(self.copy_to_bytes(len))
-        } else {
-            Err(ReadingError::Message("Unable to copy bytes".to_string()))
-        }
-    }
-
-    fn try_get_var_int(&mut self) -> Result<VarInt, ReadingError> {
-        match VarInt::decode(self) {
-            Ok(var_int) => Ok(var_int),
-            Err(error) => match error {
-                DecodeError::Incomplete => Err(ReadingError::Incomplete("varint".to_string())),
-                DecodeError::TooLarge => Err(ReadingError::TooLarge("varint".to_string())),
-            },
-        }
-    }
-    fn try_get_var_long(&mut self) -> Result<VarLong, ReadingError> {
-        match VarLong::decode(self) {
-            Ok(var_long) => Ok(var_long),
-            Err(error) => match error {
-                DecodeError::Incomplete => Err(ReadingError::Incomplete("varint".to_string())),
-                DecodeError::TooLarge => Err(ReadingError::TooLarge("varlong".to_string())),
-            },
-        }
-    }
-
-    fn try_get_string(&mut self) -> Result<String, ReadingError> {
-        self.try_get_string_len(i16::MAX as usize)
-    }
-
-    fn try_get_string_len(&mut self, max_size: usize) -> Result<String, ReadingError> {
-        let size = self.try_get_var_int()?.0;
-        if size as usize > max_size {
-            return Err(ReadingError::TooLarge("string".to_string()));
-        }
-
-        let data = self.try_copy_to_bytes(size as usize)?;
-        if data.len() > max_size {
-            return Err(ReadingError::TooLarge("string".to_string()));
-        }
-        String::from_utf8(data.to_vec()).map_err(|e| ReadingError::Message(e.to_string()))
-    }
-
-    fn try_get_option<G>(
-        &mut self,
-        val: impl FnOnce(&mut Self) -> Result<G, ReadingError>,
+        parse: impl FnOnce(&mut Self) -> Result<G, ReadingError>,
     ) -> Result<Option<G>, ReadingError> {
-        if self.try_get_bool()? {
-            Ok(Some(val(self)?))
+        (*self).get_option(parse)
+    }
+
+    fn get_list<G>(
+        &mut self,
+        parse: impl Fn(&mut Self) -> Result<G, ReadingError>,
+    ) -> Result<Vec<G>, ReadingError> {
+        (*self).get_list(parse)
+    }
+}
+*/
+
+impl<R: Read> NetworkRead for R {
+    //TODO: Macroize this
+    fn get_i8_be(&mut self) -> Result<i8, ReadingError> {
+        let mut buf = [0u8];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(i8::from_be_bytes(buf))
+    }
+
+    fn get_u8_be(&mut self) -> Result<u8, ReadingError> {
+        let mut buf = [0u8];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(u8::from_be_bytes(buf))
+    }
+
+    fn get_i16_be(&mut self) -> Result<i16, ReadingError> {
+        let mut buf = [0u8; 2];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(i16::from_be_bytes(buf))
+    }
+
+    fn get_u16_be(&mut self) -> Result<u16, ReadingError> {
+        let mut buf = [0u8; 2];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(u16::from_be_bytes(buf))
+    }
+
+    fn get_i32_be(&mut self) -> Result<i32, ReadingError> {
+        let mut buf = [0u8; 4];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(i32::from_be_bytes(buf))
+    }
+
+    fn get_u32_be(&mut self) -> Result<u32, ReadingError> {
+        let mut buf = [0u8; 4];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(u32::from_be_bytes(buf))
+    }
+
+    fn get_i64_be(&mut self) -> Result<i64, ReadingError> {
+        let mut buf = [0u8; 8];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(i64::from_be_bytes(buf))
+    }
+
+    fn get_u64_be(&mut self) -> Result<u64, ReadingError> {
+        let mut buf = [0u8; 8];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(u64::from_be_bytes(buf))
+    }
+    fn get_f32_be(&mut self) -> Result<f32, ReadingError> {
+        let mut buf = [0u8; 4];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(f32::from_be_bytes(buf))
+    }
+
+    fn get_f64_be(&mut self) -> Result<f64, ReadingError> {
+        let mut buf = [0u8; 8];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(f64::from_be_bytes(buf))
+    }
+
+    fn read_boxed_slice(&mut self, count: usize) -> Result<Box<[u8]>, ReadingError> {
+        let mut buf = vec![0u8; count];
+        self.read_exact(&mut buf)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+        Ok(buf.into())
+    }
+
+    fn read_remaining_to_boxed_slice(&mut self, bound: usize) -> Result<Box<[u8]>, ReadingError> {
+        let mut return_buf = Vec::new();
+
+        // TODO: We can probably remove the temp buffer somehow
+        let mut temp_buf = [0; 1024];
+        loop {
+            let bytes_read = self
+                .read(&mut temp_buf)
+                .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            if return_buf.len() + bytes_read > bound {
+                return Err(ReadingError::TooLarge(
+                    "Read remaining too long".to_string(),
+                ));
+            }
+
+            return_buf.extend(&temp_buf[..bytes_read]);
+        }
+        Ok(return_buf.into_boxed_slice())
+    }
+
+    fn get_bool(&mut self) -> Result<bool, ReadingError> {
+        let byte = self.get_u8_be()?;
+        Ok(byte != 0)
+    }
+
+    fn get_var_int(&mut self) -> Result<VarInt, ReadingError> {
+        VarInt::decode(self)
+    }
+
+    fn get_var_long(&mut self) -> Result<VarLong, ReadingError> {
+        VarLong::decode(self)
+    }
+
+    fn get_string_bounded(&mut self, bound: usize) -> Result<String, ReadingError> {
+        let size = self.get_var_int()?.0 as usize;
+        if size > bound {
+            return Err(ReadingError::TooLarge("string".to_string()));
+        }
+
+        let data = self.read_boxed_slice(size)?;
+        String::from_utf8(data.into()).map_err(|e| ReadingError::Message(e.to_string()))
+    }
+
+    fn get_string(&mut self) -> Result<String, ReadingError> {
+        self.get_string_bounded(i16::MAX as usize)
+    }
+
+    fn get_identifier(&mut self) -> Result<Identifier, ReadingError> {
+        Identifier::decode(self)
+    }
+
+    fn get_uuid(&mut self) -> Result<uuid::Uuid, ReadingError> {
+        let mut bytes = [0u8; 16];
+        self.read_exact(&mut bytes)
+            .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
+        Ok(uuid::Uuid::from_slice(&bytes).expect("Failed to parse UUID"))
+    }
+
+    fn get_fixed_bitset(&mut self, bits: usize) -> Result<FixedBitSet, ReadingError> {
+        let bytes = self.read_boxed_slice(bits.div_ceil(8))?;
+        Ok(bytes)
+    }
+
+    fn get_option<G>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<G, ReadingError>,
+    ) -> Result<Option<G>, ReadingError> {
+        if self.get_bool()? {
+            Ok(Some(parse(self)?))
         } else {
             Ok(None)
         }
@@ -150,34 +328,14 @@ impl<T: Buf> ByteBuf for T {
 
     fn get_list<G>(
         &mut self,
-        val: impl Fn(&mut Self) -> Result<G, ReadingError>,
+        parse: impl Fn(&mut Self) -> Result<G, ReadingError>,
     ) -> Result<Vec<G>, ReadingError> {
-        let len = self.try_get_var_int()?.0 as usize;
+        let len = self.get_var_int()?.0 as usize;
         let mut list = Vec::with_capacity(len);
         for _ in 0..len {
-            list.push(val(self)?);
+            list.push(parse(self)?);
         }
         Ok(list)
-    }
-
-    fn try_get_uuid(&mut self) -> Result<uuid::Uuid, ReadingError> {
-        let mut bytes = [0u8; 16];
-        self.try_copy_to_slice(&mut bytes)?;
-        Ok(uuid::Uuid::from_slice(&bytes).expect("Failed to parse UUID"))
-    }
-
-    fn try_get_fixed_bitset(&mut self, bits: usize) -> Result<FixedBitSet, ReadingError> {
-        self.try_copy_to_bytes(bits.div_ceil(8))
-    }
-
-    fn try_get_identifier(&mut self) -> Result<Identifier, ReadingError> {
-        match Identifier::decode(self) {
-            Ok(identifier) => Ok(identifier),
-            Err(error) => match error {
-                DecodeError::Incomplete => Err(ReadingError::Incomplete("identifier".to_string())),
-                DecodeError::TooLarge => Err(ReadingError::TooLarge("identifier".to_string())),
-            },
-        }
     }
 }
 
@@ -275,7 +433,9 @@ impl<T: BufMut> ByteBufMut for T {
 
 #[cfg(test)]
 mod test {
-    use bytes::{Bytes, BytesMut};
+    use std::io::Cursor;
+
+    use bytes::BytesMut;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -294,8 +454,9 @@ mod test {
         let mut serializer = serializer::Serializer::new(&mut bytes);
         foo.serialize(&mut serializer).unwrap();
 
+        let cursor = Cursor::new(bytes);
         let deserialized: Foo =
-            Foo::deserialize(deserializer::Deserializer::new(&mut Bytes::from(bytes))).unwrap();
+            Foo::deserialize(&mut deserializer::Deserializer::new(cursor)).unwrap();
 
         assert_eq!(foo, deserialized);
     }
@@ -311,8 +472,9 @@ mod test {
         let mut serializer = serializer::Serializer::new(&mut bytes);
         foo.serialize(&mut serializer).unwrap();
 
+        let cursor = Cursor::new(bytes);
         let deserialized: Foo =
-            Foo::deserialize(deserializer::Deserializer::new(&mut Bytes::from(bytes))).unwrap();
+            Foo::deserialize(&mut deserializer::Deserializer::new(cursor)).unwrap();
 
         assert_eq!(foo, deserialized);
     }

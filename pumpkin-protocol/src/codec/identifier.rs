@@ -1,11 +1,11 @@
 use std::num::NonZeroUsize;
 
-use bytes::{Buf, BufMut};
+use bytes::BufMut;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor};
 
-use crate::ser::{ByteBuf, ByteBufMut};
+use crate::ser::{ByteBufMut, NetworkRead, ReadingError};
 
-use super::{Codec, DecodeError};
+use super::Codec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Identifier {
@@ -33,16 +33,14 @@ impl Codec<Self> for Identifier {
         write.put_string_len(&self.to_string(), Self::MAX_SIZE.get());
     }
 
-    fn decode(read: &mut impl Buf) -> Result<Self, DecodeError> {
-        let identifier = read
-            .try_get_string_len(Self::MAX_SIZE.get())
-            .map_err(|_| DecodeError::Incomplete)?;
+    fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {
+        let identifier = read.get_string_bounded(Self::MAX_SIZE.get())?;
         match identifier.split_once(":") {
             Some((namespace, path)) => Ok(Identifier {
                 namespace: namespace.to_string(),
                 path: path.to_string(),
             }),
-            None => Err(DecodeError::Incomplete),
+            None => Err(ReadingError::Incomplete("Identifier".to_string())),
         }
     }
 }

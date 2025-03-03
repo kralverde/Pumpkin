@@ -1,7 +1,8 @@
 use std::num::NonZeroUsize;
 
-use bytes::{Buf, BufMut};
-use thiserror::Error;
+use bytes::BufMut;
+
+use crate::ser::{NetworkRead, ReadingError};
 
 pub mod bit_set;
 pub mod identifier;
@@ -16,13 +17,5 @@ pub trait Codec<T> {
 
     fn encode(&self, write: &mut impl BufMut);
 
-    fn decode(read: &mut impl Buf) -> Result<T, DecodeError>;
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Error)]
-pub enum DecodeError {
-    #[error("Incomplete VarInt decode")]
-    Incomplete,
-    #[error("VarInt is too large")]
-    TooLarge,
+    fn decode(read: &mut impl NetworkRead) -> Result<T, ReadingError>;
 }

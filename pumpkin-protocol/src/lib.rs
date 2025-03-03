@@ -1,9 +1,10 @@
-use std::num::NonZeroU16;
+use std::{io::Read, num::NonZeroU16};
 
-use bytes::{Buf, BufMut, Bytes};
+use bytes::BufMut;
 use codec::{identifier::Identifier, var_int::VarInt};
+use flate2::read::ZlibDecoder;
 use pumpkin_util::text::{TextComponent, style::Style};
-use ser::{ByteBufMut, ReadingError, packet::Packet};
+use ser::{ByteBufMut, NetworkRead, ReadingError, packet::Packet};
 use serde::{Deserialize, Serialize, Serializer};
 
 #[cfg(feature = "clientbound")]
@@ -23,22 +24,20 @@ pub const CURRENT_MC_PROTOCOL: NonZeroU16 = unsafe { NonZeroU16::new_unchecked(7
 
 pub const MAX_PACKET_SIZE: usize = 2097152;
 
-pub type FixedBitSet = bytes::Bytes;
+pub type FixedBitSet = Box<[u8]>;
 
 /// Represents a compression threshold.
 ///
 /// The threshold determines the minimum size of data that should be compressed.
 /// Data smaller than the threshold will not be compressed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompressionThreshold(pub u32);
+pub type CompressionThreshold = usize;
 
 /// Represents a compression level.
 ///
 /// The level controls the amount of compression applied to the data.
 /// Higher levels generally result in higher compression ratios but also
 /// increase CPU usage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompressionLevel(pub u32);
+pub type CompressionLevel = u32;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ConnectionState {
@@ -97,9 +96,23 @@ pub struct SoundEvent {
     pub range: Option<f32>,
 }
 
-pub struct RawPacket {
-    pub id: VarInt,
-    pub bytebuf: Bytes,
+pub struct RawPacket<R: Read> {
+    pub id: i32,
+    pub payload: RawPacketPayload<R>,
+}
+
+pub enum RawPacketPayload<R: Read> {
+    Decompress(ZlibDecoder<R>),
+    Standard(R),
+}
+
+impl<R: Read> Read for RawPacketPayload<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Decompress(decoder) => decoder.read(buf),
+            Self::Standard(raw) => raw.read(buf),
+        }
+    }
 }
 
 // TODO: Have the input be `impl Write`
@@ -107,9 +120,8 @@ pub trait ClientPacket: Packet {
     fn write(&self, bytebuf: &mut impl BufMut);
 }
 
-// TODO: Have the input be `impl Read`
 pub trait ServerPacket: Packet + Sized {
-    fn read(bytebuf: &mut impl Buf) -> Result<Self, ReadingError>;
+    fn read(read: impl NetworkRead) -> Result<Self, ReadingError>;
 }
 
 #[derive(Serialize)]

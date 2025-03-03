@@ -1,7 +1,9 @@
 use std::{num::NonZeroUsize, ops::Deref};
 
-use super::{Codec, DecodeError};
-use bytes::{Buf, BufMut};
+use crate::ser::{NetworkRead, ReadingError};
+
+use super::Codec;
+use bytes::BufMut;
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{SeqAccess, Visitor},
@@ -40,19 +42,16 @@ impl Codec<Self> for VarInt {
         }
     }
 
-    fn decode(read: &mut impl Buf) -> Result<Self, DecodeError> {
+    fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {
         let mut val = 0;
         for i in 0..Self::MAX_SIZE.get() {
-            if !read.has_remaining() {
-                return Err(DecodeError::Incomplete);
-            }
-            let byte = read.get_u8();
+            let byte = read.get_u8_be()?;
             val |= (i32::from(byte) & 0x7F) << (i * 7);
             if byte & 0x80 == 0 {
                 return Ok(VarInt(val));
             }
         }
-        Err(DecodeError::TooLarge)
+        Err(ReadingError::TooLarge("VarInt".to_string()))
     }
 }
 

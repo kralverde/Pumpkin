@@ -1,8 +1,9 @@
+use std::io::Write;
+
 use aes::cipher::{BlockEncryptMut, BlockSizeUser, KeyIvInit, generic_array::GenericArray};
 use bytes::{BufMut, BytesMut};
+use flate2::{Compression, write::ZlibEncoder};
 use thiserror::Error;
-
-use libdeflater::{CompressionLvl, Compressor};
 
 use crate::{
     ClientPacket, CompressionLevel, CompressionThreshold, MAX_PACKET_SIZE, VarInt, codec::Codec,
@@ -19,7 +20,7 @@ pub struct PacketEncoder {
     compress_buf: Vec<u8>,
     cipher: Option<Cipher>,
     // compression and compression threshold
-    compression: Option<(Compressor, CompressionThreshold)>,
+    compression: Option<(CompressionThreshold, CompressionLevel)>,
 }
 
 impl PacketEncoder {
@@ -61,31 +62,21 @@ impl PacketEncoder {
         packet.write(&mut self.buf);
         let data_len = self.buf.len() - start_len;
 
-        if let Some((compressor, compression_threshold)) = &mut self.compression {
-            if data_len > compression_threshold.0 as usize {
+        if let Some((compression_threshold, compression_level)) = self.compression {
+            if data_len > compression_threshold {
                 // Get the data to compress
                 let data_to_compress = &self.buf[start_len..];
 
                 // Clear the compression buffer
                 self.compress_buf.clear();
 
-                // Compute the maximum size of compressed data
-                let max_compressed_size = compressor.zlib_compress_bound(data_to_compress.len());
-
-                // Ensure compress_buf has enough capacity
-                self.compress_buf.resize(max_compressed_size, 0);
-
-                // Compress the data
-                let compressed_size = compressor
-                    .zlib_compress(data_to_compress, &mut self.compress_buf)
+                ZlibEncoder::new(&mut self.compress_buf, Compression::new(compression_level))
+                    .write_all(data_to_compress)
                     .map_err(|e| PacketEncodeError::CompressionFailed(e.to_string()))?;
-
-                // Resize compress_buf to actual compressed size
-                self.compress_buf.resize(compressed_size, 0);
 
                 let data_len_size = VarInt(data_len as i32).written_size();
 
-                let packet_len = data_len_size + compressed_size;
+                let packet_len = data_len_size + self.compress_buf.len();
 
                 if packet_len >= MAX_PACKET_SIZE {
                     return Err(PacketEncodeError::TooLong(packet_len));
@@ -164,18 +155,8 @@ impl PacketEncoder {
     pub fn set_compression(
         &mut self,
         compression: Option<(CompressionThreshold, CompressionLevel)>,
-    ) -> Result<(), CompressionLevelError> {
-        match compression {
-            Some((threshold, level)) => {
-                let level =
-                    CompressionLvl::new(level.0 as i32).map_err(|_| CompressionLevelError)?;
-                self.compression = Some((Compressor::new(level), threshold));
-            }
-            None => {
-                self.compression = None;
-            }
-        }
-        Ok(())
+    ) {
+        self.compression = compression;
     }
 
     /// Encrypts the data in the internal buffer and returns it as a `BytesMut`.
@@ -214,13 +195,16 @@ pub enum PacketEncodeError {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
     use super::*;
     use crate::client::status::CStatusResponse;
-    use crate::{codec::DecodeError, ser::packet::Packet};
+    use crate::ser::packet::Packet;
+    use crate::ser::{NetworkRead, ReadingError};
     use aes::Aes128;
     use cfb8::Decryptor as Cfb8Decryptor;
     use cfb8::cipher::AsyncStreamCipher;
-    use libdeflater::{DecompressionError, Decompressor};
+    use flate2::read::ZlibDecoder;
     use pumpkin_data::packet::clientbound::STATUS_STATUS_RESPONSE;
     use pumpkin_macros::packet;
     use serde::Serialize;
@@ -241,16 +225,14 @@ mod tests {
     }
 
     /// Helper function to decode a VarInt from bytes
-    fn decode_varint(buffer: &mut &[u8]) -> Result<i32, DecodeError> {
-        VarInt::decode(buffer).map(|varint| varint.0)
+    fn decode_varint(buffer: &mut &[u8]) -> Result<i32, ReadingError> {
+        Ok(buffer.get_var_int()?.0)
     }
 
     /// Helper function to decompress data using libdeflater's Zlib decompressor
-    fn decompress_zlib(data: &[u8], expected_size: usize) -> Result<Vec<u8>, DecompressionError> {
-        let mut decompressor = Decompressor::new();
+    fn decompress_zlib(data: &[u8], expected_size: usize) -> Result<Vec<u8>, std::io::Error> {
         let mut decompressed = vec![0u8; expected_size];
-        let actual_size = decompressor.zlib_decompress(data, &mut decompressed)?;
-        decompressed.truncate(actual_size);
+        ZlibDecoder::new(data).read_exact(&mut decompressed)?;
         Ok(decompressed)
     }
 
@@ -269,9 +251,9 @@ mod tests {
         let mut encoder = PacketEncoder::default();
 
         if let Some(compression) = compression_info {
-            encoder.set_compression(Some(compression)).unwrap();
+            encoder.set_compression(Some(compression));
         } else {
-            encoder.set_compression(None).unwrap();
+            encoder.set_compression(None);
         }
 
         if let Some(key) = key {
@@ -324,11 +306,7 @@ mod tests {
         let packet = CStatusResponse::new("{\"description\": \"A Minecraft Server\"}");
 
         // Build the packet with compression enabled
-        let packet_bytes = build_packet_with_encoder(
-            &packet,
-            Some((CompressionThreshold(0), CompressionLevel(6))),
-            None,
-        );
+        let packet_bytes = build_packet_with_encoder(&packet, Some((0, 6)), None);
 
         // Decode the packet manually to verify correctness
         let mut buffer = &packet_bytes[..];
@@ -416,11 +394,7 @@ mod tests {
 
         // Build the packet with both compression and encryption enabled
         // Compression threshold is set to 0 to force compression
-        let mut packet_bytes = build_packet_with_encoder(
-            &packet,
-            Some((CompressionThreshold(0), CompressionLevel(6))),
-            Some(&key),
-        );
+        let mut packet_bytes = build_packet_with_encoder(&packet, Some((0, 6)), Some(&key));
 
         // Decrypt the packet
         decrypt_aes128(&mut packet_bytes, &key, &key);
@@ -560,11 +534,7 @@ mod tests {
 
         // Build the packet with compression enabled
         // Compression threshold is set to a value higher than payload length
-        let packet_bytes = build_packet_with_encoder(
-            &packet,
-            Some((CompressionThreshold(10), CompressionLevel(6))),
-            None,
-        );
+        let packet_bytes = build_packet_with_encoder(&packet, Some((10, 6)), None);
 
         // Decode the packet manually to verify that it was not compressed
         let mut buffer = &packet_bytes[..];

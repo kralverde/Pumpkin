@@ -1,9 +1,9 @@
-use bytes::{Buf, BufMut};
+use bytes::BufMut;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{ClientPacket, ServerPacket, codec::var_int::VarIntType};
 
-use super::{ReadingError, deserializer, serializer};
+use super::{NetworkRead, ReadingError, deserializer, serializer};
 
 pub trait Packet {
     const PACKET_ID: VarIntType;
@@ -24,8 +24,8 @@ impl<P> ServerPacket for P
 where
     P: Packet + DeserializeOwned,
 {
-    fn read(bytebuf: &mut impl Buf) -> Result<P, ReadingError> {
-        let deserializer = deserializer::Deserializer::new(bytebuf);
-        P::deserialize(deserializer)
+    fn read(read: impl NetworkRead) -> Result<P, ReadingError> {
+        let mut deserializer = deserializer::Deserializer::new(read);
+        P::deserialize(&mut deserializer)
     }
 }
