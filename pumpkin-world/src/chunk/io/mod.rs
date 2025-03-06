@@ -1,7 +1,6 @@
-use std::error;
+use std::{error, path::Path};
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use pumpkin_util::math::vector2::Vector2;
 use tokio::io::AsyncWrite;
 
@@ -86,7 +85,7 @@ pub trait ChunkSerializer: Send + Sync + Default {
     async fn write(&self, w: &mut (impl AsyncWrite + Unpin + Send)) -> Result<(), std::io::Error>;
 
     /// Create a new instance from bytes
-    fn read(r: Bytes) -> Result<Self, ChunkReadingError>;
+    async fn read(path: &Path) -> Result<Self, ChunkReadingError>;
 
     /// Add the chunks data to the serializer
     async fn update_chunks(&mut self, chunk_data: &[Self::Data]) -> Result<(), ChunkWritingError>;

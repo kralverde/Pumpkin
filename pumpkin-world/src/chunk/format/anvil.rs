@@ -9,12 +9,13 @@ use pumpkin_util::math::ceil_log2;
 use pumpkin_util::math::vector2::Vector2;
 use std::{
     collections::HashSet,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
+    path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    io::{AsyncWrite, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::RwLock,
 };
 
@@ -46,8 +47,17 @@ const SECTOR_BYTES: usize = 4096;
 // 1.21.4
 const WORLD_DATA_VERSION: i32 = 4189;
 
-#[derive(Clone, Default)]
-pub struct AnvilChunkFormat;
+pub const fn get_region_coords(at: &Vector2<i32>) -> (i32, i32) {
+    // Divide by 32 for the region coordinates
+    (at.x >> SUBREGION_BITS, at.z >> SUBREGION_BITS)
+}
+
+pub const fn get_chunk_index(pos: &Vector2<i32>) -> usize {
+    let local_x = pos.x & SUBREGION_AND;
+    let local_z = pos.z & SUBREGION_AND;
+    let index = (local_z << SUBREGION_BITS) + local_x;
+    index as usize
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -76,19 +86,6 @@ impl<R: Read> Read for CompressionRead<R> {
             Self::LZ4(lz4) => lz4.read(buf),
         }
     }
-}
-
-#[derive(Default, Clone)]
-pub struct AnvilChunkData {
-    compression: Option<Compression>,
-    // Length is always the length of this + compression byte (1) so we dont need to save a length
-    compressed_data: Bytes,
-}
-
-pub struct AnvilChunkFile {
-    timestamp_table: [u32; CHUNK_COUNT],
-    // TODO: Only save mutated chunks (chunks that are unchanged do not need to be re-written)
-    chunks_data: [Option<AnvilChunkData>; CHUNK_COUNT],
 }
 
 impl Compression {
@@ -204,6 +201,19 @@ impl From<pumpkin_config::chunk::Compression> for Compression {
     }
 }
 
+pub struct FastAnvilChunkFile {
+    timestamp_table: [u32; CHUNK_COUNT],
+    // TODO: Only save mutated chunks (chunks that are unchanged do not need to be re-written)
+    chunks_data: [Option<AnvilChunkData>; CHUNK_COUNT],
+}
+
+#[derive(Default, Clone)]
+pub struct AnvilChunkData {
+    compression: Option<Compression>,
+    // Length is always the length of this + compression byte (1) so we dont need to save a length
+    compressed_data: Bytes,
+}
+
 impl AnvilChunkData {
     /// Raw size of serialized chunk
     #[inline]
@@ -287,21 +297,9 @@ impl AnvilChunkData {
     }
 }
 
-impl AnvilChunkFile {
-    pub const fn get_region_coords(at: &Vector2<i32>) -> (i32, i32) {
-        // Divide by 32 for the region coordinates
-        (at.x >> SUBREGION_BITS, at.z >> SUBREGION_BITS)
-    }
+impl FastAnvilChunkFile {}
 
-    pub const fn get_chunk_index(pos: &Vector2<i32>) -> usize {
-        let local_x = pos.x & SUBREGION_AND;
-        let local_z = pos.z & SUBREGION_AND;
-        let index = (local_z << SUBREGION_BITS) + local_x;
-        index as usize
-    }
-}
-
-impl Default for AnvilChunkFile {
+impl Default for FastAnvilChunkFile {
     fn default() -> Self {
         Self {
             timestamp_table: [0; CHUNK_COUNT],
@@ -311,11 +309,11 @@ impl Default for AnvilChunkFile {
 }
 
 #[async_trait]
-impl ChunkSerializer for AnvilChunkFile {
+impl ChunkSerializer for FastAnvilChunkFile {
     type Data = SyncChunk;
 
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
-        let (region_x, region_z) = Self::get_region_coords(chunk);
+        let (region_x, region_z) = get_region_coords(chunk);
         format!("./r.{}.{}.mca", region_x, region_z)
     }
 
@@ -350,8 +348,29 @@ impl ChunkSerializer for AnvilChunkFile {
         Ok(())
     }
 
-    fn read(r: Bytes) -> Result<Self, ChunkReadingError> {
-        let mut raw_file_bytes = r;
+    async fn read(path: &Path) -> Result<Self, ChunkReadingError> {
+        let mut file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(false)
+            .create(false)
+            .truncate(false)
+            .open(path)
+            .await
+            .map_err(|err| match err.kind() {
+                ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                kind => ChunkReadingError::IoError(kind),
+            })?;
+
+        let capacity = match file.metadata().await {
+            Ok(metadata) => metadata.len() as usize,
+            Err(_) => 4096, // A sane default
+        };
+
+        let mut file_bytes = Vec::with_capacity(capacity);
+        file.read_to_end(&mut file_bytes)
+            .await
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+        let mut raw_file_bytes: Bytes = file_bytes.into();
 
         if raw_file_bytes.len() < SECTOR_BYTES * 2 {
             return Err(ChunkReadingError::InvalidHeader);
@@ -360,7 +379,7 @@ impl ChunkSerializer for AnvilChunkFile {
         let headers = raw_file_bytes.split_to(SECTOR_BYTES * 2);
         let (mut location_bytes, mut timestamp_bytes) = headers.split_at(SECTOR_BYTES);
 
-        let mut chunk_file = AnvilChunkFile::default();
+        let mut chunk_file = FastAnvilChunkFile::default();
 
         for i in 0..CHUNK_COUNT {
             chunk_file.timestamp_table[i] = timestamp_bytes.get_u32();
@@ -395,7 +414,7 @@ impl ChunkSerializer for AnvilChunkFile {
 
         for chunk in chunks_data {
             let chunk = chunk.read().await;
-            let index = AnvilChunkFile::get_chunk_index(&chunk.position);
+            let index = get_chunk_index(&chunk.position);
             self.chunks_data[index] = Some(AnvilChunkData::from_chunk(&chunk)?);
             self.timestamp_table[index] = epoch;
         }
@@ -414,7 +433,7 @@ impl ChunkSerializer for AnvilChunkFile {
         // Don't par iter here so we can prevent backpressure with the await in the async
         // runtime
         for chunk in chunks.iter().cloned() {
-            let index = AnvilChunkFile::get_chunk_index(&chunk);
+            let index = get_chunk_index(&chunk);
             let anvil_chunk = self.chunks_data[index].clone();
 
             let send = bridge_send.clone();
@@ -551,7 +570,7 @@ mod tests {
     use temp_dir::TempDir;
     use tokio::sync::RwLock;
 
-    use crate::chunk::format::anvil::AnvilChunkFile;
+    use crate::chunk::format::anvil::FastAnvilChunkFile;
     use crate::chunk::io::chunk_file_manager::ChunkFileManager;
     use crate::chunk::io::{ChunkIO, LoadedData};
     use crate::generation::{Seed, get_world_gen};
@@ -560,7 +579,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn not_existing() {
         let region_path = PathBuf::from("not_existing");
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile>::default();
+        let chunk_saver = ChunkFileManager::<FastAnvilChunkFile>::default();
 
         let mut chunks = Vec::new();
         let (send, mut recv) = tokio::sync::mpsc::channel(1);
@@ -593,7 +612,7 @@ mod tests {
             region_folder: temp_dir.path().join("region"),
         };
         fs::create_dir(&level_folder.region_folder).expect("couldn't create region folder");
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile>::default();
+        let chunk_saver = ChunkFileManager::<FastAnvilChunkFile>::default();
 
         // Generate chunks
         let mut chunks = vec![];

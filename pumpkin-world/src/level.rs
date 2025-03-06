@@ -3,7 +3,10 @@ use std::{fs, path::PathBuf, sync::Arc};
 use dashmap::{DashMap, Entry};
 use log::trace;
 use num_traits::Zero;
-use pumpkin_config::{ADVANCED_CONFIG, chunk::ChunkFormat};
+use pumpkin_config::{
+    ADVANCED_CONFIG,
+    chunk::{ChunkFormat, ChunkPriority},
+};
 use pumpkin_util::math::vector2::Vector2;
 use tokio::{
     sync::{RwLock, mpsc},
@@ -13,7 +16,7 @@ use tokio::{
 use crate::{
     chunk::{
         ChunkData, ChunkParsingError, ChunkReadingError,
-        format::{anvil::AnvilChunkFile, linear::LinearFile},
+        format::{anvil::FastAnvilChunkFile, linear::LinearFile},
         io::{ChunkIO, LoadedData, chunk_file_manager::ChunkFileManager},
     },
     generation::{Seed, WorldGenerator, get_world_gen},
@@ -103,10 +106,14 @@ impl Level {
         let seed = Seed(level_info.world_gen_settings.seed as u64);
         let world_gen = get_world_gen(seed).into();
 
-        let chunk_saver: Arc<dyn ChunkIO<SyncChunk>> = match ADVANCED_CONFIG.chunk.format {
-            //ChunkFormat::Anvil => (Arc::new(AnvilChunkFormat), Arc::new(AnvilChunkFormat)),
+        let chunk_saver: Arc<dyn ChunkIO<SyncChunk>> = match &ADVANCED_CONFIG.chunk.format {
             ChunkFormat::Linear => Arc::new(ChunkFileManager::<LinearFile>::default()),
-            ChunkFormat::Anvil => Arc::new(ChunkFileManager::<AnvilChunkFile>::default()),
+            ChunkFormat::Anvil => match &ADVANCED_CONFIG.chunk.priority {
+                ChunkPriority::Speed => Arc::new(ChunkFileManager::<FastAnvilChunkFile>::default()),
+                ChunkPriority::Memory => {
+                    todo!()
+                }
+            },
         };
 
         Self {

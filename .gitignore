@@ -110,8 +110,8 @@ world/*
 data/*
 
 # project's configurations
-configuration.toml
-features.toml
+*/configuration.toml
+*/features.toml
 
 
 *.local.nbt

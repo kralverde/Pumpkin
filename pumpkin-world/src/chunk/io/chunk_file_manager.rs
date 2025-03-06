@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    io::ErrorKind,
     ops::{AddAssign, Deref, SubAssign},
     path::{Path, PathBuf},
     sync::Arc,
@@ -12,7 +11,7 @@ use log::{error, trace};
 use num_traits::Zero;
 use pumpkin_util::math::vector2::Vector2;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
+    io::{AsyncWriteExt, BufWriter},
     sync::{OnceCell, RwLock},
 };
 
@@ -59,31 +58,9 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
             path: &Path,
         ) -> Result<Arc<RwLock<S>>, ChunkReadingError> {
             trace!("Opening file from Disk: {:?}", path);
-            let file = tokio::fs::OpenOptions::new()
-                .read(true)
-                .write(false)
-                .create(false)
-                .truncate(false)
-                .open(path)
-                .await
-                .map_err(|err| match err.kind() {
-                    ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
-                    kind => ChunkReadingError::IoError(kind),
-                });
-
-            let value = match file {
-                Ok(mut file) => {
-                    let capacity = match file.metadata().await {
-                        Ok(metadata) => metadata.len() as usize,
-                        Err(_) => 4096, // A sane default
-                    };
-
-                    let mut file_bytes = Vec::with_capacity(capacity);
-                    file.read_to_end(&mut file_bytes)
-                        .await
-                        .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
-                    S::read(file_bytes.into())?
-                }
+            let value = S::read(path).await;
+            let value = match value {
+                Ok(value) => value,
                 Err(ChunkReadingError::ChunkNotExist) => S::default(),
                 Err(err) => return Err(err),
             };

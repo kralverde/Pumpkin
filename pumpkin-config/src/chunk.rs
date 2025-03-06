@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct ChunkConfig {
     pub compression: ChunkCompression,
     pub format: ChunkFormat,
+    pub priority: ChunkPriority,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -34,6 +35,13 @@ pub enum Compression {
     LZ4,
     /// Custom compression algorithm (since 24w05a)
     Custom,
+}
+
+#[derive(Deserialize, Serialize, Clone, Default)]
+pub enum ChunkPriority {
+    #[default]
+    Speed,
+    Memory,
 }
 
 #[derive(Deserialize, Serialize, Clone, Default)]

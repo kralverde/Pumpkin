@@ -1,8 +1,8 @@
 use std::io::ErrorKind;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::chunk::format::anvil::AnvilChunkFile;
 use crate::chunk::io::{ChunkSerializer, LoadedData};
 use crate::chunk::{ChunkData, ChunkReadingError, ChunkWritingError};
 use crate::level::SyncChunk;
@@ -11,10 +11,10 @@ use bytes::{Buf, BufMut, Bytes};
 use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::RwLock;
 
-use super::anvil::{CHUNK_COUNT, chunk_to_bytes};
+use super::anvil::{self, CHUNK_COUNT, chunk_to_bytes};
 
 /// The signature of the linear file format
 /// used as a header and footer described in https://gist.github.com/Aaron2550/5701519671253d4c6190bde6706f9f98
@@ -138,7 +138,7 @@ impl LinearFileHeader {
 
 impl LinearFile {
     const fn get_chunk_index(at: &Vector2<i32>) -> usize {
-        AnvilChunkFile::get_chunk_index(at)
+        anvil::get_chunk_index(at)
     }
 
     fn check_signature(bytes: &[u8]) -> Result<(), ChunkReadingError> {
@@ -165,7 +165,7 @@ impl ChunkSerializer for LinearFile {
     type Data = SyncChunk;
 
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
-        let (region_x, region_z) = AnvilChunkFile::get_region_coords(chunk);
+        let (region_x, region_z) = anvil::get_region_coords(chunk);
         format!("./r.{}.{}.linear", region_x, region_z)
     }
 
@@ -219,8 +219,32 @@ impl ChunkSerializer for LinearFile {
         Ok(())
     }
 
-    fn read(raw_file: Bytes) -> Result<Self, ChunkReadingError> {
-        let Some((signature, raw_file_bytes)) = raw_file.split_at_checked(SIGNATURE.len()) else {
+    async fn read(path: &Path) -> Result<Self, ChunkReadingError> {
+        let mut file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(false)
+            .create(false)
+            .truncate(false)
+            .open(path)
+            .await
+            .map_err(|err| match err.kind() {
+                ErrorKind::NotFound => ChunkReadingError::ChunkNotExist,
+                kind => ChunkReadingError::IoError(kind),
+            })?;
+
+        let capacity = match file.metadata().await {
+            Ok(metadata) => metadata.len() as usize,
+            Err(_) => 4096, // A sane default
+        };
+
+        let mut file_bytes = Vec::with_capacity(capacity);
+        file.read_to_end(&mut file_bytes)
+            .await
+            .map_err(|err| ChunkReadingError::IoError(err.kind()))?;
+        let raw_file_bytes: Bytes = file_bytes.into();
+
+        let Some((signature, raw_file_bytes)) = raw_file_bytes.split_at_checked(SIGNATURE.len())
+        else {
             return Err(ChunkReadingError::IoError(ErrorKind::UnexpectedEof));
         };
 
