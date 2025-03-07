@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    ops::{AddAssign, Deref, SubAssign},
+    ops::{AddAssign, SubAssign},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -261,27 +261,25 @@ where
 
                 let mut serializer = chunk_serializer.write().await;
                 serializer.update_chunks(&chunk_locks).await?;
+                // With the modification done, we can drop the write lock but keep the read lock
+                // to avoid other threads to write/modify the data, but allow other threads to read it
+                let serializer = serializer.downgrade();
                 log::trace!("Updated data for file {:?}", path);
 
-                // Only write the file if no chunks are being used
-                if self
+                let is_watched = self
                     .watchers
                     .read()
                     .await
                     .get(&path)
-                    .is_none_or(|count| count.is_zero())
-                {
-                    // With the modification done, we can drop the write lock but keep the read lock
-                    // to avoid other threads to write/modify the data, but allow other threads to read it
-                    let serializer = serializer.downgrade();
-                    let serializer_ref = serializer.deref();
-                    Self::write_file(&path, serializer_ref).await?;
+                    .is_some_and(|count| !count.is_zero());
+
+                if S::should_write(is_watched) {
+                    Self::write_file(&path, &serializer).await?;
                     log::trace!("Saved file {:?}", path);
                     drop(serializer);
 
                     // If there are still no watchers, drop from the locks
                     let mut locks = self.file_locks.write().await;
-
                     if self
                         .watchers
                         .read()

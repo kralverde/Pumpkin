@@ -81,6 +81,8 @@ pub trait ChunkSerializer: Send + Sync + Default {
     /// Get the key for the chunk (like the file name)
     fn get_chunk_key(chunk: &Vector2<i32>) -> String;
 
+    fn should_write(is_watched: bool) -> bool;
+
     /// Serialize the data to bytes.
     async fn write(&self, w: &mut (impl AsyncWrite + Unpin + Send)) -> Result<(), std::io::Error>;
 

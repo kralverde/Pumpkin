@@ -164,6 +164,10 @@ impl Default for LinearFile {
 impl ChunkSerializer for LinearFile {
     type Data = SyncChunk;
 
+    fn should_write(is_watched: bool) -> bool {
+        !is_watched
+    }
+
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
         let (region_x, region_z) = anvil::get_region_coords(chunk);
         format!("./r.{}.{}.linear", region_x, region_z)

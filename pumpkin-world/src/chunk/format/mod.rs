@@ -16,6 +16,7 @@ use super::{
 };
 
 pub mod anvil;
+pub mod anvil_efficient;
 pub mod linear;
 
 // I can't use an tag because it will break ChunkNBT, but status need to have a big S, so "Status"

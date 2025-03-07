@@ -16,7 +16,9 @@ use tokio::{
 use crate::{
     chunk::{
         ChunkData, ChunkParsingError, ChunkReadingError,
-        format::{anvil::FastAnvilChunkFile, linear::LinearFile},
+        format::{
+            anvil::FastAnvilChunkFile, anvil_efficient::EfficientAnvilChunkFile, linear::LinearFile,
+        },
         io::{ChunkIO, LoadedData, chunk_file_manager::ChunkFileManager},
     },
     generation::{Seed, WorldGenerator, get_world_gen},
@@ -111,7 +113,7 @@ impl Level {
             ChunkFormat::Anvil => match &ADVANCED_CONFIG.chunk.priority {
                 ChunkPriority::Speed => Arc::new(ChunkFileManager::<FastAnvilChunkFile>::default()),
                 ChunkPriority::Memory => {
-                    todo!()
+                    Arc::new(ChunkFileManager::<EfficientAnvilChunkFile>::default())
                 }
             },
         };

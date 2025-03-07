@@ -42,7 +42,7 @@ pub const SUBREGION_AND: i32 = i32::pow(2, SUBREGION_BITS as u32) - 1;
 pub const CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
 
 /// The number of bytes in a sector (4 KiB)
-const SECTOR_BYTES: usize = 4096;
+pub const SECTOR_BYTES: usize = 4096;
 
 // 1.21.4
 const WORLD_DATA_VERSION: i32 = 4189;
@@ -201,12 +201,6 @@ impl From<pumpkin_config::chunk::Compression> for Compression {
     }
 }
 
-pub struct FastAnvilChunkFile {
-    timestamp_table: [u32; CHUNK_COUNT],
-    // TODO: Only save mutated chunks (chunks that are unchanged do not need to be re-written)
-    chunks_data: [Option<AnvilChunkData>; CHUNK_COUNT],
-}
-
 #[derive(Default, Clone)]
 pub struct AnvilChunkData {
     compression: Option<Compression>,
@@ -217,7 +211,7 @@ pub struct AnvilChunkData {
 impl AnvilChunkData {
     /// Raw size of serialized chunk
     #[inline]
-    fn raw_write_size(&self) -> usize {
+    pub fn raw_write_size(&self) -> usize {
         // 4 bytes for the *length* and 1 byte for the *compression* method
         self.compressed_data.remaining() + 4 + 1
     }
@@ -230,7 +224,7 @@ impl AnvilChunkData {
         sector_count * SECTOR_BYTES
     }
 
-    fn from_bytes(bytes: Bytes) -> Result<Self, ChunkReadingError> {
+    pub fn from_bytes(bytes: Bytes) -> Result<Self, ChunkReadingError> {
         let mut bytes = bytes;
         // Minus one for the compression byte
         let length = bytes.get_u32() as usize - 1;
@@ -246,7 +240,10 @@ impl AnvilChunkData {
         })
     }
 
-    async fn write(&self, w: &mut (impl AsyncWrite + Unpin + Send)) -> Result<(), std::io::Error> {
+    pub async fn write(
+        &self,
+        w: &mut (impl AsyncWrite + Unpin + Send),
+    ) -> Result<(), std::io::Error> {
         let padded_size = self.padded_size();
 
         w.write_u32((self.compressed_data.remaining() + 1) as u32)
@@ -265,7 +262,7 @@ impl AnvilChunkData {
         Ok(())
     }
 
-    fn to_chunk(&self, pos: Vector2<i32>) -> Result<ChunkData, ChunkReadingError> {
+    pub fn to_chunk(&self, pos: Vector2<i32>) -> Result<ChunkData, ChunkReadingError> {
         let chunk = if let Some(compression) = self.compression {
             let decompress_bytes = compression
                 .decompress_data(&self.compressed_data)
@@ -280,7 +277,7 @@ impl AnvilChunkData {
         Ok(chunk)
     }
 
-    fn from_chunk(chunk: &ChunkData) -> Result<Self, ChunkWritingError> {
+    pub fn from_chunk(chunk: &ChunkData) -> Result<Self, ChunkWritingError> {
         let raw_bytes = chunk_to_bytes(chunk)
             .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
@@ -297,7 +294,10 @@ impl AnvilChunkData {
     }
 }
 
-impl FastAnvilChunkFile {}
+pub struct FastAnvilChunkFile {
+    timestamp_table: [u32; CHUNK_COUNT],
+    chunks_data: [Option<AnvilChunkData>; CHUNK_COUNT],
+}
 
 impl Default for FastAnvilChunkFile {
     fn default() -> Self {
@@ -311,6 +311,10 @@ impl Default for FastAnvilChunkFile {
 #[async_trait]
 impl ChunkSerializer for FastAnvilChunkFile {
     type Data = SyncChunk;
+
+    fn should_write(is_watched: bool) -> bool {
+        !is_watched
+    }
 
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
         let (region_x, region_z) = get_region_coords(chunk);
