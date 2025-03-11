@@ -9,4 +9,7 @@ serde.workspace = true
 log.workspace = true
 uuid.workspace = true
 
+# So we don't read/write to disk when testing
+tempdir = "0.3.7"
+
 toml = "0.8"

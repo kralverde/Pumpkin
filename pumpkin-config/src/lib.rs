@@ -9,7 +9,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     num::NonZeroU8,
     path::Path,
-    sync::LazyLock,
+    sync::{LazyLock, Mutex},
 };
 pub mod logging;
 pub mod networking;
@@ -36,10 +36,30 @@ use resource_pack::ResourcePackConfig;
 
 const CONFIG_ROOT_FOLDER: &str = "config/";
 
-pub static ADVANCED_CONFIG: LazyLock<AdvancedConfiguration> =
-    LazyLock::new(AdvancedConfiguration::load);
+#[cfg(not(test))]
+pub static ADVANCED_CONFIG: LazyLock<AdvancedConfiguration> = LazyLock::new(|| {
+    let exec_dir = env::current_dir().unwrap();
+    AdvancedConfiguration::load(&exec_dir)
+});
 
-pub static BASIC_CONFIG: LazyLock<BasicConfiguration> = LazyLock::new(BasicConfiguration::load);
+// If we are testing, don't use the config from disk and make a way to override config options in
+// tests
+#[cfg(test)]
+pub static ADVANCED_CONFIG: LazyLock<AdvancedConfiguration> = LazyLock::new(|| {
+    if let Some(config) = ADVANCED_CONFIG_OVERRIDE.lock().unwrap().take() {
+        config
+    } else {
+        let temp_dir = tempdir::TempDir::new("config").unwrap();
+        AdvancedConfiguration::load(temp_dir.path())
+    }
+});
+
+pub static ADVANCED_CONFIG_OVERRIDE: Mutex<Option<AdvancedConfiguration>> = Mutex::new(None);
+
+pub static BASIC_CONFIG: LazyLock<BasicConfiguration> = LazyLock::new(|| {
+    let exec_dir = env::current_dir().unwrap();
+    BasicConfiguration::load(&exec_dir)
+});
 
 /// The idea is that Pumpkin should very customizable.
 /// You can Enable or Disable Features depending on your needs.
@@ -125,12 +145,11 @@ impl Default for BasicConfiguration {
 }
 
 trait LoadConfiguration {
-    fn load() -> Self
+    fn load(exec_dir: &Path) -> Self
     where
         Self: Sized + Default + Serialize + DeserializeOwned,
     {
-        let exe_dir = env::current_dir().unwrap();
-        let config_dir = exe_dir.join(CONFIG_ROOT_FOLDER);
+        let config_dir = exec_dir.join(CONFIG_ROOT_FOLDER);
         if !config_dir.exists() {
             log::debug!("creating new config root folder");
             fs::create_dir(&config_dir).expect("Failed to create Config root folder");

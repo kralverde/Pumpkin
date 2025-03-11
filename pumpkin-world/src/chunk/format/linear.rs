@@ -299,7 +299,7 @@ impl ChunkSerializer for LinearFile {
         })
     }
 
-    fn update_chunk(&mut self, chunk: &ChunkData) -> Result<(), ChunkWritingError> {
+    async fn update_chunk(&mut self, chunk: &ChunkData) -> Result<(), ChunkWritingError> {
         let index = LinearFile::get_chunk_index(&chunk.position);
         let chunk_raw: Bytes = chunk_to_bytes(chunk)
             .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?

@@ -273,7 +273,7 @@ where
                     // It is important that we keep the lock after we mark the chunk as clean so no one else
                     // can modify it
                     let chunk = chunk.downgrade();
-                    serializer.update_chunk(&*chunk)?;
+                    serializer.update_chunk(&*chunk).await?;
                 }
                 log::trace!("Updated data for file {:?}", path);
 

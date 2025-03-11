@@ -102,7 +102,7 @@ pub trait ChunkSerializer: Send + Sync + Default {
     fn read(r: Bytes) -> Result<Self, ChunkReadingError>;
 
     /// Add the chunk data to the serializer
-    fn update_chunk(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkWritingError>;
+    async fn update_chunk(&mut self, chunk_data: &Self::Data) -> Result<(), ChunkWritingError>;
 
     /// Get the chunks data from the serializer
     async fn get_chunks(

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use bytes::*;
 use flate2::read::{GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_data::{block::Block, chunk::ChunkStatus};
 use pumpkin_nbt::serializer::to_bytes;
@@ -13,7 +14,10 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::io::{AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufWriter};
+use tokio::{
+    io::{AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufWriter},
+    sync::Mutex,
+};
 
 use crate::chunk::{
     ChunkData, ChunkReadingError, ChunkSerializingError, ChunkWritingError, CompressionError,
@@ -105,13 +109,13 @@ struct AnvilChunkMetadata {
     timestamp: u32,
 
     // NOTE: This is only valid if our WriteAction is `Parts`
-    sector_offset: u32,
+    file_sector_offset: u32,
 }
 
 pub struct AnvilChunkFile {
     chunks_data: [Option<AnvilChunkMetadata>; CHUNK_COUNT],
-    write_action: WriteAction,
     end_sector: u32,
+    write_action: Mutex<WriteAction>,
 }
 
 impl Compression {
@@ -336,6 +340,7 @@ impl AnvilChunkFile {
             .write(true)
             .create(true)
             .truncate(false)
+            .append(false)
             .open(path)
             .await?;
 
@@ -375,13 +380,23 @@ impl AnvilChunkFile {
             .collect::<Vec<_>>();
 
         // Sort such that writes are in order
-        chunks.sort_by_key(|chunk| chunk.sector_offset);
+        chunks.sort_by_key(|chunk| chunk.file_sector_offset);
+
+        let mut current_sector = 2;
         for chunk in chunks {
-            let _ = write
-                .seek(SeekFrom::Start(
-                    chunk.sector_offset as u64 * SECTOR_BYTES as u64,
-                ))
-                .await?;
+            debug_assert!(chunk.file_sector_offset <= current_sector);
+
+            // Seek only if we need to
+            if chunk.file_sector_offset != current_sector {
+                let _ = write
+                    .seek(SeekFrom::Start(
+                        chunk.file_sector_offset as u64 * SECTOR_BYTES as u64,
+                    ))
+                    .await?;
+                current_sector = chunk.file_sector_offset;
+            }
+            current_sector += chunk.serialized_data.sector_count();
+
             chunk.serialized_data.write(&mut write).await?;
         }
 
@@ -446,7 +461,7 @@ impl Default for AnvilChunkFile {
     fn default() -> Self {
         Self {
             chunks_data: [const { None }; CHUNK_COUNT],
-            write_action: WriteAction::Pass,
+            write_action: Mutex::new(WriteAction::Pass),
             // Two sectors for offset + timestamp
             end_sector: 2,
         }
@@ -468,7 +483,8 @@ impl ChunkSerializer for AnvilChunkFile {
     }
 
     async fn write(&self, path: PathBuf) -> Result<(), std::io::Error> {
-        match &self.write_action {
+        let mut write_action = self.write_action.lock().await;
+        match &*write_action {
             WriteAction::Pass => {
                 log::debug!(
                     "Skipping write for {:?} as there were no dirty chunks",
@@ -478,7 +494,11 @@ impl ChunkSerializer for AnvilChunkFile {
             }
             WriteAction::All => self.write_all(&path).await,
             WriteAction::Parts(parts) => self.write_indices(&path, parts).await,
-        }
+        }?;
+
+        // If we still are in memory after this, we don't need to write again!
+        *write_action = WriteAction::Pass;
+        Ok(())
     }
 
     fn read(r: Bytes) -> Result<Self, ChunkReadingError> {
@@ -523,7 +543,7 @@ impl ChunkSerializer for AnvilChunkFile {
             chunk_file.chunks_data[i] = Some(AnvilChunkMetadata {
                 serialized_data,
                 timestamp,
-                sector_offset: sector_offset as u32,
+                file_sector_offset: sector_offset as u32,
             });
         }
 
@@ -531,7 +551,7 @@ impl ChunkSerializer for AnvilChunkFile {
         Ok(chunk_file)
     }
 
-    fn update_chunk(&mut self, chunk: &ChunkData) -> Result<(), ChunkWritingError> {
+    async fn update_chunk(&mut self, chunk: &ChunkData) -> Result<(), ChunkWritingError> {
         if !chunk.dirty {
             return Ok(());
         }
@@ -544,13 +564,18 @@ impl ChunkSerializer for AnvilChunkFile {
         let index = AnvilChunkFile::get_chunk_index(&chunk.position);
         let new_chunk_data = AnvilChunkData::from_chunk(chunk)?;
 
-        match &self.write_action {
+        let mut write_action = self.write_action.lock().await;
+        if ADVANCED_CONFIG.chunk.copy_on_write {
+            *write_action = WriteAction::All;
+        }
+
+        match &*write_action {
             WriteAction::All => {
                 // Doesn't matter, just add the data
                 self.chunks_data[index] = Some(AnvilChunkMetadata {
                     serialized_data: new_chunk_data,
                     timestamp: epoch,
-                    sector_offset: 0,
+                    file_sector_offset: 0,
                 });
             }
             _ => {
@@ -561,10 +586,10 @@ impl ChunkSerializer for AnvilChunkFile {
                         self.chunks_data[index] = Some(AnvilChunkMetadata {
                             serialized_data: new_chunk_data,
                             timestamp: epoch,
-                            sector_offset: self.end_sector,
+                            file_sector_offset: self.end_sector,
                         });
                         self.end_sector = new_eof;
-                        self.write_action.maybe_update(index);
+                        write_action.maybe_update(index);
                     }
                     Some(old_chunk) => {
                         if old_chunk.serialized_data.sector_count() == new_chunk_data.sector_count()
@@ -573,9 +598,9 @@ impl ChunkSerializer for AnvilChunkFile {
                             self.chunks_data[index] = Some(AnvilChunkMetadata {
                                 serialized_data: new_chunk_data,
                                 timestamp: epoch,
-                                sector_offset: old_chunk.sector_offset,
+                                file_sector_offset: old_chunk.file_sector_offset,
                             });
-                            self.write_action.maybe_update(index);
+                            write_action.maybe_update(index);
                         } else {
                             // Walk back the end of the list; seeing if theres something that can fit
                             // in our spot. Here we play a game between is it worth it to do all
@@ -598,13 +623,13 @@ impl ChunkSerializer for AnvilChunkFile {
                                     chunk.as_ref().map(|chunk| (index, chunk))
                                 })
                                 .collect::<Vec<_>>();
-                            chunks.sort_by_key(|chunk| chunk.1.sector_offset);
+                            chunks.sort_by_key(|chunk| chunk.1.file_sector_offset);
 
                             let mut chunks_to_shift = chunks
                                 .into_iter()
                                 .rev()
                                 .take(64)
-                                .take_while(|chunk| {
+                                .take_while_inclusive(|chunk| {
                                     chunk.1.serialized_data.sector_count()
                                         != old_chunk.serialized_data.sector_count()
                                 })
@@ -615,11 +640,11 @@ impl ChunkSerializer for AnvilChunkFile {
                                     != old_chunk.serialized_data.sector_count()
                             }) {
                                 // give up...
-                                self.write_action = WriteAction::All;
+                                *write_action = WriteAction::All;
                                 self.chunks_data[index] = Some(AnvilChunkMetadata {
                                     serialized_data: new_chunk_data,
                                     timestamp: epoch,
-                                    sector_offset: 0,
+                                    file_sector_offset: 0,
                                 });
                             } else {
                                 // swap last element of the chunks to shift (the first because we
@@ -636,19 +661,19 @@ impl ChunkSerializer for AnvilChunkFile {
                                 let swaped_sectors = swap.1.serialized_data.sector_count();
                                 let new_sectors = new_chunk_data.sector_count();
                                 let swaped_index = swap.0;
-                                let old_offset = old_chunk.sector_offset;
+                                let old_offset = old_chunk.file_sector_offset;
                                 self.chunks_data[index] = Some(AnvilChunkMetadata {
                                     serialized_data: new_chunk_data,
                                     timestamp: epoch,
-                                    sector_offset: swap.1.sector_offset,
+                                    file_sector_offset: swap.1.file_sector_offset,
                                 });
-                                self.write_action.maybe_update(index);
+                                write_action.maybe_update(index);
 
                                 self.chunks_data[swaped_index]
                                     .as_mut()
                                     .expect("We checked if this was none")
-                                    .sector_offset = old_offset;
-                                self.write_action.maybe_update(swaped_index);
+                                    .file_sector_offset = old_offset;
+                                write_action.maybe_update(swaped_index);
 
                                 // Then offset everything else
 
@@ -658,13 +683,16 @@ impl ChunkSerializer for AnvilChunkFile {
                                     let chunk_data = self.chunks_data[shift_index]
                                         .as_mut()
                                         .expect("We checked if this was none");
-                                    let new_offset = chunk_data.sector_offset as i64 + offset;
-                                    chunk_data.sector_offset = new_offset as u32;
-                                    self.write_action.maybe_update(shift_index);
+                                    let new_offset = chunk_data.file_sector_offset as i64 + offset;
+                                    chunk_data.file_sector_offset = new_offset as u32;
+                                    write_action.maybe_update(shift_index);
                                 }
 
                                 // If the shift is negative then there will be trailing data, but i
                                 // think thats fine
+
+                                let new_end = self.end_sector as i64 + offset;
+                                self.end_sector = new_end as u32;
                             }
                         }
                     }
