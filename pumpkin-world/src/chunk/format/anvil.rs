@@ -9,10 +9,11 @@ use pumpkin_util::math::ceil_log2;
 use pumpkin_util::math::vector2::Vector2;
 use std::{
     collections::{HashMap, HashSet},
-    io::{Read, Write},
+    io::{Read, SeekFrom, Write},
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufWriter};
 
 use crate::chunk::{
     ChunkData, ChunkReadingError, ChunkSerializingError, ChunkWritingError, CompressionError,
@@ -77,10 +78,40 @@ pub struct AnvilChunkData {
     compressed_data: Bytes,
 }
 
+enum WriteAction {
+    // Don't write anything
+    Pass,
+    // Write the entire file
+    All,
+    // Only write certain indices
+    Parts(Vec<usize>),
+}
+
+impl WriteAction {
+    /// If we are currently not writing, sets to new Parts enum,
+    /// If we have parts enum, add to it,
+    /// If we have All enum, do nothing
+    fn maybe_update(&mut self, index: usize) {
+        match self {
+            Self::Pass => *self = Self::Parts(vec![index]),
+            Self::Parts(parts) => parts.push(index),
+            Self::All => {}
+        }
+    }
+}
+
+struct AnvilChunkMetadata {
+    serialized_data: AnvilChunkData,
+    timestamp: u32,
+
+    // NOTE: This is only valid if our WriteAction is `Parts`
+    sector_offset: u32,
+}
+
 pub struct AnvilChunkFile {
-    timestamp_table: [u32; CHUNK_COUNT],
-    // TODO: Only save mutated chunks (chunks that are unchanged do not need to be re-written)
-    chunks_data: [Option<AnvilChunkData>; CHUNK_COUNT],
+    chunks_data: [Option<AnvilChunkMetadata>; CHUNK_COUNT],
+    write_action: WriteAction,
+    end_sector: u32,
 }
 
 impl Compression {
@@ -207,9 +238,14 @@ impl AnvilChunkData {
     /// Size of serialized chunk with padding
     #[inline]
     fn padded_size(&self) -> usize {
-        let total_size = self.raw_write_size();
-        let sector_count = total_size.div_ceil(SECTOR_BYTES);
+        let sector_count = self.sector_count() as usize;
         sector_count * SECTOR_BYTES
+    }
+
+    #[inline]
+    fn sector_count(&self) -> u32 {
+        let total_size = self.raw_write_size();
+        total_size.div_ceil(SECTOR_BYTES) as u32
     }
 
     fn from_bytes(bytes: Bytes) -> Result<Self, ChunkReadingError> {
@@ -291,36 +327,25 @@ impl AnvilChunkFile {
         let index = (local_z << SUBREGION_BITS) + local_x;
         index as usize
     }
-}
 
-impl Default for AnvilChunkFile {
-    fn default() -> Self {
-        Self {
-            timestamp_table: [0; CHUNK_COUNT],
-            chunks_data: [const { None }; CHUNK_COUNT],
-        }
-    }
-}
+    async fn write_indices(&self, path: &Path, indices: &[usize]) -> Result<(), std::io::Error> {
+        log::trace!("Writing in file: {:?}", path);
 
-#[async_trait]
-impl ChunkSerializer for AnvilChunkFile {
-    type Data = ChunkData;
+        let file = tokio::fs::OpenOptions::new()
+            .read(false)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .await?;
 
-    fn get_chunk_key(chunk: &Vector2<i32>) -> String {
-        let (region_x, region_z) = Self::get_region_coords(chunk);
-        format!("./r.{}.{}.mca", region_x, region_z)
-    }
-
-    async fn write(
-        &self,
-        write: &mut (impl AsyncWrite + Unpin + Send),
-    ) -> Result<(), std::io::Error> {
+        let mut write = BufWriter::new(file);
         // The first two sectors are reserved for the location table
         let mut current_sector: u32 = 2;
-        for i in 0..CHUNK_COUNT {
-            if let Some(chunk) = &self.chunks_data[i] {
-                let chunk_bytes = chunk.padded_size();
-                let sector_count = (chunk_bytes / SECTOR_BYTES) as u32;
+        for metadata in &self.chunks_data {
+            if let Some(chunk) = metadata {
+                let chunk = &chunk.serialized_data;
+                let sector_count = chunk.sector_count();
                 write
                     .write_u32((current_sector << 8) | sector_count)
                     .await?;
@@ -331,15 +356,129 @@ impl ChunkSerializer for AnvilChunkFile {
             };
         }
 
-        for timestamp in self.timestamp_table {
-            write.write_u32(timestamp).await?;
+        for metadata in &self.chunks_data {
+            if let Some(chunk) = metadata {
+                write.write_u32(chunk.timestamp).await?;
+            } else {
+                // If the chunk is not present, we write 0 to the location and timestamp tables
+                write.write_u32(0).await?;
+            }
         }
 
-        for chunk in self.chunks_data.iter().flatten() {
-            chunk.write(write).await?;
+        let mut chunks = indices
+            .iter()
+            .map(|index| {
+                self.chunks_data[*index]
+                    .as_ref()
+                    .expect("We are trying to write a chunk, but it does not exist!")
+            })
+            .collect::<Vec<_>>();
+
+        // Sort such that writes are in order
+        chunks.sort_by_key(|chunk| chunk.sector_offset);
+        for chunk in chunks {
+            let _ = write
+                .seek(SeekFrom::Start(
+                    chunk.sector_offset as u64 * SECTOR_BYTES as u64,
+                ))
+                .await?;
+            chunk.serialized_data.write(&mut write).await?;
         }
 
         Ok(())
+    }
+
+    /// Write entire file, disregarding saved offsets
+    async fn write_all(&self, path: &Path) -> Result<(), std::io::Error> {
+        let temp_path = path.with_extension("tmp");
+        log::trace!("Writing tmp file to disk: {:?}", temp_path);
+
+        let file = tokio::fs::OpenOptions::new()
+            .read(false)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temp_path)
+            .await?;
+
+        let mut write = BufWriter::new(file);
+
+        // The first two sectors are reserved for the location table
+        let mut current_sector: u32 = 2;
+        for metadata in &self.chunks_data {
+            if let Some(chunk) = metadata {
+                let chunk = &chunk.serialized_data;
+                let sector_count = chunk.sector_count();
+                write
+                    .write_u32((current_sector << 8) | sector_count)
+                    .await?;
+                current_sector += sector_count;
+            } else {
+                // If the chunk is not present, we write 0 to the location and timestamp tables
+                write.write_u32(0).await?;
+            };
+        }
+
+        for metadata in &self.chunks_data {
+            if let Some(chunk) = metadata {
+                write.write_u32(chunk.timestamp).await?;
+            } else {
+                // If the chunk is not present, we write 0 to the location and timestamp tables
+                write.write_u32(0).await?;
+            }
+        }
+
+        for chunk in self.chunks_data.iter().flatten() {
+            chunk.serialized_data.write(&mut write).await?;
+        }
+
+        write.flush().await?;
+        // The rename of the file works like an atomic operation ensuring
+        // that the data is not corrupted before the rename is completed
+        tokio::fs::rename(temp_path, path).await?;
+
+        log::trace!("Wrote file to Disk: {:?}", path);
+        Ok(())
+    }
+}
+
+impl Default for AnvilChunkFile {
+    fn default() -> Self {
+        Self {
+            chunks_data: [const { None }; CHUNK_COUNT],
+            write_action: WriteAction::Pass,
+            // Two sectors for offset + timestamp
+            end_sector: 2,
+        }
+    }
+}
+
+#[async_trait]
+impl ChunkSerializer for AnvilChunkFile {
+    type Data = ChunkData;
+    type WriteBackend = PathBuf;
+
+    fn should_write(&self, is_watched: bool) -> bool {
+        !is_watched
+    }
+
+    fn get_chunk_key(chunk: &Vector2<i32>) -> String {
+        let (region_x, region_z) = Self::get_region_coords(chunk);
+        format!("./r.{}.{}.mca", region_x, region_z)
+    }
+
+    async fn write(&self, path: PathBuf) -> Result<(), std::io::Error> {
+        match &self.write_action {
+            WriteAction::Pass => {
+                log::debug!(
+                    "Skipping write for {:?} as there were no dirty chunks",
+                    path
+                );
+                Ok(())
+            }
+            WriteAction::All => self.write_all(&path).await,
+            WriteAction::Parts(parts) => self.write_indices(&path, parts).await,
+        }
     }
 
     fn read(r: Bytes) -> Result<Self, ChunkReadingError> {
@@ -354,16 +493,22 @@ impl ChunkSerializer for AnvilChunkFile {
 
         let mut chunk_file = AnvilChunkFile::default();
 
+        let mut last_offset = 2;
         for i in 0..CHUNK_COUNT {
-            chunk_file.timestamp_table[i] = timestamp_bytes.get_u32();
+            let timestamp = timestamp_bytes.get_u32();
             let location = location_bytes.get_u32();
 
             let sector_count = (location & 0xFF) as usize;
             let sector_offset = (location >> 8) as usize;
+            let end_offset = sector_offset + sector_count;
 
             // If the sector offset or count is 0, the chunk is not present (we should not parse empty chunks)
             if sector_offset == 0 || sector_count == 0 {
                 continue;
+            }
+
+            if end_offset > last_offset {
+                last_offset = end_offset;
             }
 
             // We always subtract 2 for the first two sectors for the timestamp and location tables
@@ -371,23 +516,161 @@ impl ChunkSerializer for AnvilChunkFile {
             let bytes_offset = (sector_offset - 2) * SECTOR_BYTES;
             let bytes_count = sector_count * SECTOR_BYTES;
 
-            chunk_file.chunks_data[i] = Some(AnvilChunkData::from_bytes(
+            let serialized_data = AnvilChunkData::from_bytes(
                 raw_file_bytes.slice(bytes_offset..bytes_offset + bytes_count),
-            )?);
+            )?;
+
+            chunk_file.chunks_data[i] = Some(AnvilChunkMetadata {
+                serialized_data,
+                timestamp,
+                sector_offset: sector_offset as u32,
+            });
         }
 
+        chunk_file.end_sector = last_offset as u32;
         Ok(chunk_file)
     }
 
     fn update_chunk(&mut self, chunk: &ChunkData) -> Result<(), ChunkWritingError> {
+        if !chunk.dirty {
+            return Ok(());
+        }
+
         let epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as u32;
 
         let index = AnvilChunkFile::get_chunk_index(&chunk.position);
-        self.chunks_data[index] = Some(AnvilChunkData::from_chunk(chunk)?);
-        self.timestamp_table[index] = epoch;
+        let new_chunk_data = AnvilChunkData::from_chunk(chunk)?;
+
+        match &self.write_action {
+            WriteAction::All => {
+                // Doesn't matter, just add the data
+                self.chunks_data[index] = Some(AnvilChunkMetadata {
+                    serialized_data: new_chunk_data,
+                    timestamp: epoch,
+                    sector_offset: 0,
+                });
+            }
+            _ => {
+                match self.chunks_data[index].as_ref() {
+                    None => {
+                        // This chunk didn't exist before; append to EOF
+                        let new_eof = self.end_sector + new_chunk_data.sector_count();
+                        self.chunks_data[index] = Some(AnvilChunkMetadata {
+                            serialized_data: new_chunk_data,
+                            timestamp: epoch,
+                            sector_offset: self.end_sector,
+                        });
+                        self.end_sector = new_eof;
+                        self.write_action.maybe_update(index);
+                    }
+                    Some(old_chunk) => {
+                        if old_chunk.serialized_data.sector_count() == new_chunk_data.sector_count()
+                        {
+                            // We can just add it
+                            self.chunks_data[index] = Some(AnvilChunkMetadata {
+                                serialized_data: new_chunk_data,
+                                timestamp: epoch,
+                                sector_offset: old_chunk.sector_offset,
+                            });
+                            self.write_action.maybe_update(index);
+                        } else {
+                            // Walk back the end of the list; seeing if theres something that can fit
+                            // in our spot. Here we play a game between is it worth it to do all
+                            // this swapping. I figure if we don't find it after 64 chunks, just
+                            // re-write the whole file instead
+                            // The number is a guestimation and no rigorious thought when into it.
+                            // The more we leapfrog like this, there is a higher
+                            // (abiet still small) of these chunks being corrupted if we are doing a
+                            // write operation when there is an un-clean shutdown
+                            //
+                            // Writing all is "safer" in the sense that no chunks will corrupt,
+                            // but will still roll back the entire region if
+                            // there is an unclean shutdown
+
+                            let mut chunks = self
+                                .chunks_data
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, chunk)| {
+                                    chunk.as_ref().map(|chunk| (index, chunk))
+                                })
+                                .collect::<Vec<_>>();
+                            chunks.sort_by_key(|chunk| chunk.1.sector_offset);
+
+                            let mut chunks_to_shift = chunks
+                                .into_iter()
+                                .rev()
+                                .take(64)
+                                .take_while(|chunk| {
+                                    chunk.1.serialized_data.sector_count()
+                                        != old_chunk.serialized_data.sector_count()
+                                })
+                                .collect::<Vec<_>>();
+
+                            if chunks_to_shift.last().is_none_or(|chunk| {
+                                chunk.1.serialized_data.sector_count()
+                                    != old_chunk.serialized_data.sector_count()
+                            }) {
+                                // give up...
+                                self.write_action = WriteAction::All;
+                                self.chunks_data[index] = Some(AnvilChunkMetadata {
+                                    serialized_data: new_chunk_data,
+                                    timestamp: epoch,
+                                    sector_offset: 0,
+                                });
+                            } else {
+                                // swap last element of the chunks to shift (the first because we
+                                // reversed it) and shift the rest down
+                                let swap = chunks_to_shift
+                                    .pop()
+                                    .expect("We just checked that this exists");
+
+                                let indexs_to_shift = chunks_to_shift
+                                    .iter()
+                                    .map(|(index, _)| index)
+                                    .copied()
+                                    .collect::<Vec<_>>();
+                                let swaped_sectors = swap.1.serialized_data.sector_count();
+                                let new_sectors = new_chunk_data.sector_count();
+                                let swaped_index = swap.0;
+                                let old_offset = old_chunk.sector_offset;
+                                self.chunks_data[index] = Some(AnvilChunkMetadata {
+                                    serialized_data: new_chunk_data,
+                                    timestamp: epoch,
+                                    sector_offset: swap.1.sector_offset,
+                                });
+                                self.write_action.maybe_update(index);
+
+                                self.chunks_data[swaped_index]
+                                    .as_mut()
+                                    .expect("We checked if this was none")
+                                    .sector_offset = old_offset;
+                                self.write_action.maybe_update(swaped_index);
+
+                                // Then offset everything else
+
+                                // If positive, now larger -> shift right, else shift left
+                                let offset = new_sectors as i64 - swaped_sectors as i64;
+                                for shift_index in indexs_to_shift {
+                                    let chunk_data = self.chunks_data[shift_index]
+                                        .as_mut()
+                                        .expect("We checked if this was none");
+                                    let new_offset = chunk_data.sector_offset as i64 + offset;
+                                    chunk_data.sector_offset = new_offset as u32;
+                                    self.write_action.maybe_update(shift_index);
+                                }
+
+                                // If the shift is negative then there will be trailing data, but i
+                                // think thats fine
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -404,22 +687,25 @@ impl ChunkSerializer for AnvilChunkFile {
         // runtime
         for chunk in chunks.iter().cloned() {
             let index = AnvilChunkFile::get_chunk_index(&chunk);
-            let anvil_chunk = self.chunks_data[index].clone();
+            match &self.chunks_data[index] {
+                None => stream
+                    .send(LoadedData::Missing(chunk))
+                    .await
+                    .expect("Failed to send chunk"),
+                Some(chunk_metadata) => {
+                    let send = bridge_send.clone();
+                    let chunk_data = chunk_metadata.serialized_data.clone();
+                    rayon::spawn(move || {
+                        let result = match chunk_data.to_chunk(chunk) {
+                            Ok(chunk) => LoadedData::Loaded(chunk),
+                            Err(err) => LoadedData::Error((chunk, err)),
+                        };
 
-            let send = bridge_send.clone();
-            rayon::spawn(move || {
-                let result = if let Some(data) = anvil_chunk {
-                    match data.to_chunk(chunk) {
-                        Ok(chunk) => LoadedData::Loaded(chunk),
-                        Err(err) => LoadedData::Error((chunk, err)),
-                    }
-                } else {
-                    LoadedData::Missing(chunk)
-                };
-
-                send.send(result)
-                    .expect("Failed to send anvil chunks from rayon thread");
-            });
+                        send.send(result)
+                            .expect("Failed to send anvil chunks from rayon thread");
+                    });
+                }
+            }
         }
         // Drop the original so streams clean-up
         drop(bridge_send);

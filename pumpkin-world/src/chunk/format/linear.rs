@@ -1,4 +1,5 @@
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunk::format::anvil::AnvilChunkFile;
@@ -9,7 +10,7 @@ use bytes::{Buf, BufMut, Bytes};
 use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 use super::anvil::{CHUNK_COUNT, chunk_to_bytes};
 
@@ -160,16 +161,31 @@ impl Default for LinearFile {
 #[async_trait]
 impl ChunkSerializer for LinearFile {
     type Data = ChunkData;
+    type WriteBackend = PathBuf;
+
+    fn should_write(&self, is_watched: bool) -> bool {
+        !is_watched
+    }
 
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
         let (region_x, region_z) = AnvilChunkFile::get_region_coords(chunk);
         format!("./r.{}.{}.linear", region_x, region_z)
     }
 
-    async fn write(
-        &self,
-        write: &mut (impl AsyncWrite + Unpin + Send),
-    ) -> Result<(), std::io::Error> {
+    async fn write(&self, path: PathBuf) -> Result<(), std::io::Error> {
+        let temp_path = path.with_extension("tmp");
+        log::trace!("Writing tmp file to disk: {:?}", temp_path);
+
+        let file = tokio::fs::OpenOptions::new()
+            .read(false)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temp_path)
+            .await?;
+
+        let mut write = BufWriter::new(file);
+
         // Parse the headers to a buffer
         let mut data_buffer: Vec<u8> = self
             .chunks_headers
@@ -213,7 +229,7 @@ impl ChunkSerializer for LinearFile {
         write.write_all(&compressed_buffer).await?;
         write.write_all(&SIGNATURE).await?;
 
-        Ok(())
+        write.flush().await
     }
 
     fn read(raw_file: Bytes) -> Result<Self, ChunkReadingError> {

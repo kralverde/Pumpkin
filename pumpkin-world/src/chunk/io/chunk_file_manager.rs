@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     io::ErrorKind,
-    ops::{AddAssign, Deref, SubAssign},
+    ops::{AddAssign, SubAssign},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -12,7 +12,7 @@ use log::{error, trace};
 use num_traits::Zero;
 use pumpkin_util::math::vector2::Vector2;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
+    io::AsyncReadExt,
     join,
     sync::{OnceCell, RwLock, mpsc},
 };
@@ -30,7 +30,7 @@ use super::{ChunkIO, ChunkSerializer, LoadedData};
 ///
 /// It also avoid IO operations that could produce dataraces thanks to the
 /// custom *DashMap* like implementation.
-pub struct ChunkFileManager<S: ChunkSerializer> {
+pub struct ChunkFileManager<S: ChunkSerializer<WriteBackend = PathBuf>> {
     // Dashmap has rw-locks on shards, but we want per-serializer
     file_locks: RwLock<BTreeMap<PathBuf, SerializerCacheEntry<S>>>,
     watchers: RwLock<BTreeMap<PathBuf, usize>>,
@@ -38,7 +38,7 @@ pub struct ChunkFileManager<S: ChunkSerializer> {
 //to avoid clippy warnings we extract the type alias
 type SerializerCacheEntry<S> = OnceCell<Arc<RwLock<S>>>;
 
-impl<S: ChunkSerializer> Default for ChunkFileManager<S> {
+impl<S: ChunkSerializer<WriteBackend = PathBuf>> Default for ChunkFileManager<S> {
     fn default() -> Self {
         Self {
             file_locks: RwLock::new(BTreeMap::new()),
@@ -47,12 +47,12 @@ impl<S: ChunkSerializer> Default for ChunkFileManager<S> {
     }
 }
 
-impl<S: ChunkSerializer> ChunkFileManager<S> {
+impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
     fn map_key(folder: &LevelFolder, file_name: &str) -> PathBuf {
         folder.region_folder.join(file_name)
     }
 
-    pub async fn read_file(&self, path: &Path) -> Result<Arc<RwLock<S>>, ChunkReadingError> {
+    async fn read_file(&self, path: &Path) -> Result<Arc<RwLock<S>>, ChunkReadingError> {
         // We get the entry from the DashMap and try to insert a new lock if it doesn't exist
         // using dead-lock safe methods like `or_try_insert_with`
 
@@ -117,47 +117,12 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
 
         Ok(serializer)
     }
-
-    pub async fn write_file(path: &Path, serializer: &S) -> Result<(), ChunkWritingError> {
-        // We use tmp files to avoid corruption of the data if the process is abruptly interrupted.
-        let tmp_path = &path.with_extension("tmp");
-        trace!("Writing tmp file to disk: {:?}", tmp_path);
-
-        let file = tokio::fs::OpenOptions::new()
-            .read(false)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(tmp_path)
-            .await
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-        let mut buf_writer = BufWriter::new(file);
-
-        serializer
-            .write(&mut buf_writer)
-            .await
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-
-        buf_writer
-            .flush()
-            .await
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-
-        // The rename of the file works like an atomic operation ensuring
-        // that the data is not corrupted before the rename is completed
-        tokio::fs::rename(tmp_path, path)
-            .await
-            .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
-
-        trace!("Wrote file to Disk: {:?}", path);
-        Ok(())
-    }
 }
 
 #[async_trait]
 impl<S> ChunkIO for ChunkFileManager<S>
 where
-    S: ChunkSerializer<Data = ChunkData>,
+    S: ChunkSerializer<Data = ChunkData, WriteBackend = PathBuf>,
 {
     type Data = SyncChunk;
 
@@ -312,20 +277,21 @@ where
                 }
                 log::trace!("Updated data for file {:?}", path);
 
-                // Only write the file if no chunks are being used
-                if self
+                let is_watched = self
                     .watchers
                     .read()
                     .await
                     .get(&path)
-                    .is_none_or(|count| count.is_zero())
-                {
+                    .is_some_and(|count| !count.is_zero());
+
+                if serializer.should_write(is_watched) {
                     // With the modification done, we can drop the write lock but keep the read lock
                     // to avoid other threads to write/modify the data, but allow other threads to read it
                     let serializer = serializer.downgrade();
-                    let serializer_ref = serializer.deref();
-                    Self::write_file(&path, serializer_ref).await?;
-                    log::trace!("Saved file {:?}", path);
+                    serializer
+                        .write(path.clone())
+                        .await
+                        .map_err(|err| ChunkWritingError::IoError(err.kind()))?;
                     drop(serializer);
 
                     // If there are still no watchers, drop from the locks

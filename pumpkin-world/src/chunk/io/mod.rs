@@ -3,7 +3,6 @@ use std::error;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pumpkin_util::math::vector2::Vector2;
-use tokio::io::AsyncWrite;
 
 use super::{ChunkReadingError, ChunkWritingError};
 use crate::level::LevelFolder;
@@ -89,12 +88,15 @@ where
 #[async_trait]
 pub trait ChunkSerializer: Send + Sync + Default {
     type Data: Send + Sync + Sized;
+    type WriteBackend;
 
     /// Get the key for the chunk (like the file name)
     fn get_chunk_key(chunk: &Vector2<i32>) -> String;
 
+    fn should_write(&self, is_watched: bool) -> bool;
+
     /// Serialize the data to bytes.
-    async fn write(&self, w: &mut (impl AsyncWrite + Unpin + Send)) -> Result<(), std::io::Error>;
+    async fn write(&self, backend: Self::WriteBackend) -> Result<(), std::io::Error>;
 
     /// Create a new instance from bytes
     fn read(r: Bytes) -> Result<Self, ChunkReadingError>;
