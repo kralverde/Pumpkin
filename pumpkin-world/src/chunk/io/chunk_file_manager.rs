@@ -13,12 +13,13 @@ use num_traits::Zero;
 use pumpkin_util::math::vector2::Vector2;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufWriter},
-    sync::{OnceCell, RwLock},
+    join,
+    sync::{OnceCell, RwLock, mpsc},
 };
 
 use crate::{
-    chunk::{ChunkReadingError, ChunkWritingError},
-    level::LevelFolder,
+    chunk::{ChunkData, ChunkReadingError, ChunkWritingError},
+    level::{LevelFolder, SyncChunk},
 };
 
 use super::{ChunkIO, ChunkSerializer, LoadedData};
@@ -154,11 +155,12 @@ impl<S: ChunkSerializer> ChunkFileManager<S> {
 }
 
 #[async_trait]
-impl<S, D> ChunkIO<D> for ChunkFileManager<S>
+impl<S> ChunkIO for ChunkFileManager<S>
 where
-    D: 'static + Send + Sync + Sized,
-    S: ChunkSerializer<Data = D>,
+    S: ChunkSerializer<Data = ChunkData>,
 {
+    type Data = SyncChunk;
+
     async fn watch_chunks(&self, folder: &LevelFolder, chunks: &[Vector2<i32>]) {
         // It is intentional that regions are watched multiple times (once per chunk)
         let mut watchers = self.watchers.write().await;
@@ -201,7 +203,7 @@ where
         &self,
         folder: &LevelFolder,
         chunk_coords: &[Vector2<i32>],
-        stream: tokio::sync::mpsc::Sender<LoadedData<D, ChunkReadingError>>,
+        stream: tokio::sync::mpsc::Sender<LoadedData<SyncChunk, ChunkReadingError>>,
     ) {
         let mut regions_chunks: BTreeMap<String, Vec<Vector2<i32>>> = BTreeMap::new();
 
@@ -214,9 +216,9 @@ where
                 .or_insert(vec![*at]);
         }
 
-        // we use a Sync Closure with an Async Block to execute the tasks in parallel
-        // with out waiting the future. Also it improve we File Cache utilizations.
-        let tasks = regions_chunks.into_iter().map(async |(file_name, chunks)| {
+        // we use a Sync Closure with an Async Block to execute the tasks concurrently
+        // Also improves File Cache utilizations.
+        let region_read_tasks = regions_chunks.into_iter().map(async |(file_name, chunks)| {
             let path = Self::map_key(folder, &file_name);
             let chunk_serializer = match self.read_file(&path).await {
                 Ok(chunk_serializer) => chunk_serializer,
@@ -231,20 +233,35 @@ where
                 }
             };
 
+            // Intermediate channel for wrapping the data with the Arc<RwLock>
+            let (send, mut recv) = mpsc::channel::<LoadedData<ChunkData, ChunkReadingError>>(1);
+
+            let intermediary = async {
+                while let Some(data) = recv.recv().await {
+                    let wrapped_data = data.map_loaded(|data| Arc::new(RwLock::new(data)));
+                    stream
+                        .send(wrapped_data)
+                        .await
+                        .expect("Failed chunk wrapper intermediary");
+                }
+            };
+
             // We need to block the read to avoid other threads to write/modify the data
             let serializer = chunk_serializer.read().await;
-            serializer.get_chunks(&chunks, stream.clone()).await;
+            let reader = serializer.get_chunks(&chunks, send);
+
+            join!(intermediary, reader);
         });
 
-        let _ = join_all(tasks).await;
+        let _ = join_all(region_read_tasks).await;
     }
 
     async fn save_chunks(
         &self,
         folder: &LevelFolder,
-        chunks_data: Vec<(Vector2<i32>, D)>,
+        chunks_data: Vec<(Vector2<i32>, SyncChunk)>,
     ) -> Result<(), ChunkWritingError> {
-        let mut regions_chunks: BTreeMap<String, Vec<D>> = BTreeMap::new();
+        let mut regions_chunks: BTreeMap<String, Vec<SyncChunk>> = BTreeMap::new();
 
         for (at, chunk) in chunks_data {
             let key = S::get_chunk_key(&at);
@@ -283,7 +300,16 @@ where
                 }?;
 
                 let mut serializer = chunk_serializer.write().await;
-                serializer.update_chunks(&chunk_locks).await?;
+                for chunk_lock in chunk_locks {
+                    let mut chunk = chunk_lock.write().await;
+                    // Edge case: this chunk is loaded while we were saving, mark it as cleaned since we are
+                    // updating what we will write here
+                    chunk.dirty = false;
+                    // It is important that we keep the lock after we mark the chunk as clean so no one else
+                    // can modify it
+                    let chunk = chunk.downgrade();
+                    serializer.update_chunk(&*chunk)?;
+                }
                 log::trace!("Updated data for file {:?}", path);
 
                 // Only write the file if no chunks are being used

@@ -1055,12 +1055,11 @@ impl World {
         let relative = ChunkRelativeBlockCoordinates::from(relative_coordinates);
 
         let chunk = self.receive_chunk(chunk_coordinate).await.0;
-        let replaced_block_state_id = chunk.read().await.subchunks.get_block(relative).unwrap();
-        chunk
-            .write()
-            .await
-            .subchunks
-            .set_block(relative, block_state_id);
+        let mut chunk = chunk.write().await;
+        chunk.dirty = true;
+        let replaced_block_state_id = chunk.subchunks.get_block(relative).unwrap();
+        chunk.subchunks.set_block(relative, block_state_id);
+        drop(chunk);
 
         self.broadcast_packet_all(&CBlockUpdate::new(
             position,

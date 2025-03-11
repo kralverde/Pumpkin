@@ -10,20 +10,13 @@ use pumpkin_util::math::vector2::Vector2;
 use std::{
     collections::{HashMap, HashSet},
     io::{Read, Write},
-    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::{
-    io::{AsyncWrite, AsyncWriteExt},
-    sync::RwLock,
-};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use crate::{
-    chunk::{
-        ChunkData, ChunkReadingError, ChunkSerializingError, ChunkWritingError, CompressionError,
-        io::{ChunkSerializer, LoadedData},
-    },
-    level::SyncChunk,
+use crate::chunk::{
+    ChunkData, ChunkReadingError, ChunkSerializingError, ChunkWritingError, CompressionError,
+    io::{ChunkSerializer, LoadedData},
 };
 
 use super::{ChunkNbt, ChunkSection, ChunkSectionBlockStates, PaletteEntry};
@@ -311,7 +304,7 @@ impl Default for AnvilChunkFile {
 
 #[async_trait]
 impl ChunkSerializer for AnvilChunkFile {
-    type Data = SyncChunk;
+    type Data = ChunkData;
 
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
         let (region_x, region_z) = Self::get_region_coords(chunk);
@@ -386,18 +379,15 @@ impl ChunkSerializer for AnvilChunkFile {
         Ok(chunk_file)
     }
 
-    async fn update_chunks(&mut self, chunks_data: &[Self::Data]) -> Result<(), ChunkWritingError> {
+    fn update_chunk(&mut self, chunk: &ChunkData) -> Result<(), ChunkWritingError> {
         let epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as u32;
 
-        for chunk in chunks_data {
-            let chunk = chunk.read().await;
-            let index = AnvilChunkFile::get_chunk_index(&chunk.position);
-            self.chunks_data[index] = Some(AnvilChunkData::from_chunk(&chunk)?);
-            self.timestamp_table[index] = epoch;
-        }
+        let index = AnvilChunkFile::get_chunk_index(&chunk.position);
+        self.chunks_data[index] = Some(AnvilChunkData::from_chunk(chunk)?);
+        self.timestamp_table[index] = epoch;
 
         Ok(())
     }
@@ -405,7 +395,7 @@ impl ChunkSerializer for AnvilChunkFile {
     async fn get_chunks(
         &self,
         chunks: &[Vector2<i32>],
-        stream: tokio::sync::mpsc::Sender<LoadedData<SyncChunk, ChunkReadingError>>,
+        stream: tokio::sync::mpsc::Sender<LoadedData<ChunkData, ChunkReadingError>>,
     ) {
         // Create an unbounded buffer so we don't block the rayon thread pool
         let (bridge_send, mut bridge_recv) = tokio::sync::mpsc::unbounded_channel();
@@ -420,7 +410,7 @@ impl ChunkSerializer for AnvilChunkFile {
             rayon::spawn(move || {
                 let result = if let Some(data) = anvil_chunk {
                     match data.to_chunk(chunk) {
-                        Ok(chunk) => LoadedData::Loaded(Arc::new(RwLock::new(chunk))),
+                        Ok(chunk) => LoadedData::Loaded(chunk),
                         Err(err) => LoadedData::Error((chunk, err)),
                     }
                 } else {

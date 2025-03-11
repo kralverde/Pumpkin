@@ -1,18 +1,15 @@
 use std::io::ErrorKind;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunk::format::anvil::AnvilChunkFile;
 use crate::chunk::io::{ChunkSerializer, LoadedData};
 use crate::chunk::{ChunkData, ChunkReadingError, ChunkWritingError};
-use crate::level::SyncChunk;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes};
 use log::error;
 use pumpkin_config::ADVANCED_CONFIG;
 use pumpkin_util::math::vector2::Vector2;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::RwLock;
 
 use super::anvil::{CHUNK_COUNT, chunk_to_bytes};
 
@@ -162,7 +159,7 @@ impl Default for LinearFile {
 
 #[async_trait]
 impl ChunkSerializer for LinearFile {
-    type Data = SyncChunk;
+    type Data = ChunkData;
 
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
         let (region_x, region_z) = AnvilChunkFile::get_region_coords(chunk);
@@ -286,25 +283,21 @@ impl ChunkSerializer for LinearFile {
         })
     }
 
-    async fn update_chunks(&mut self, chunks_data: &[Self::Data]) -> Result<(), ChunkWritingError> {
-        for chunk_data in chunks_data {
-            let chunk_data = chunk_data.read().await;
-            let index = LinearFile::get_chunk_index(&chunk_data.position);
-            let chunk_raw: Bytes = chunk_to_bytes(&chunk_data)
-                .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?
-                .into();
-            drop(chunk_data);
+    fn update_chunk(&mut self, chunk: &ChunkData) -> Result<(), ChunkWritingError> {
+        let index = LinearFile::get_chunk_index(&chunk.position);
+        let chunk_raw: Bytes = chunk_to_bytes(chunk)
+            .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?
+            .into();
 
-            let header = &mut self.chunks_headers[index];
-            header.size = chunk_raw.len() as u32;
-            header.timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as u32;
+        let header = &mut self.chunks_headers[index];
+        header.size = chunk_raw.len() as u32;
+        header.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
 
-            // We update the data buffer
-            self.chunks_data[index] = Some(chunk_raw);
-        }
+        // We update the data buffer
+        self.chunks_data[index] = Some(chunk_raw);
 
         Ok(())
     }
@@ -312,7 +305,7 @@ impl ChunkSerializer for LinearFile {
     async fn get_chunks(
         &self,
         chunks: &[Vector2<i32>],
-        stream: tokio::sync::mpsc::Sender<LoadedData<SyncChunk, ChunkReadingError>>,
+        stream: tokio::sync::mpsc::Sender<LoadedData<ChunkData, ChunkReadingError>>,
     ) {
         // Create an unbounded buffer so we don't block the rayon thread pool
         let (bridge_send, mut bridge_recv) = tokio::sync::mpsc::unbounded_channel();
@@ -329,7 +322,7 @@ impl ChunkSerializer for LinearFile {
                     match ChunkData::from_bytes(&data, chunk)
                         .map_err(ChunkReadingError::ParsingError)
                     {
-                        Ok(chunk) => LoadedData::Loaded(Arc::new(RwLock::new(chunk))),
+                        Ok(chunk) => LoadedData::Loaded(chunk),
                         Err(err) => LoadedData::Error((chunk, err)),
                     }
                 } else {

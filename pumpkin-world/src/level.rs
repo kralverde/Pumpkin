@@ -42,7 +42,7 @@ pub struct Level {
     level_folder: LevelFolder,
     loaded_chunks: Arc<DashMap<Vector2<i32>, SyncChunk>>,
     chunk_watchers: Arc<DashMap<Vector2<i32>, usize>>,
-    chunk_saver: Arc<dyn ChunkIO<SyncChunk>>,
+    chunk_saver: Arc<dyn ChunkIO<Data = SyncChunk>>,
     world_gen: Arc<dyn WorldGenerator>,
     // Gets unlocked when dropped
     // TODO: Make this a trait
@@ -103,7 +103,7 @@ impl Level {
         let seed = Seed(level_info.world_gen_settings.seed as u64);
         let world_gen = get_world_gen(seed).into();
 
-        let chunk_saver: Arc<dyn ChunkIO<SyncChunk>> = match ADVANCED_CONFIG.chunk.format {
+        let chunk_saver: Arc<dyn ChunkIO<Data = SyncChunk>> = match ADVANCED_CONFIG.chunk.format {
             //ChunkFormat::Anvil => (Arc::new(AnvilChunkFormat), Arc::new(AnvilChunkFormat)),
             ChunkFormat::Linear => Arc::new(ChunkFileManager::<LinearFile>::default()),
             ChunkFormat::Anvil => Arc::new(ChunkFileManager::<AnvilChunkFile>::default()),
