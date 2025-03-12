@@ -695,14 +695,14 @@ impl ChunkSerializer for AnvilChunkFile {
                                     .pop()
                                     .expect("We just checked that this exists");
 
-                                let indexs_to_shift = chunks_to_shift
+                                let indices_to_shift = chunks_to_shift
                                     .iter()
                                     .map(|(index, _)| index)
                                     .copied()
                                     .collect::<Vec<_>>();
-                                let swaped_sectors = swap.1.serialized_data.sector_count();
+                                let swapped_sectors = swap.1.serialized_data.sector_count();
                                 let new_sectors = new_chunk_data.sector_count();
-                                let swaped_index = swap.0;
+                                let swapped_index = swap.0;
                                 let old_offset = old_chunk.file_sector_offset;
                                 self.chunks_data[index] = Some(AnvilChunkMetadata {
                                     serialized_data: new_chunk_data,
@@ -711,26 +711,26 @@ impl ChunkSerializer for AnvilChunkFile {
                                 });
                                 write_action.maybe_update_chunk_index(index);
 
-                                self.chunks_data[swaped_index]
+                                self.chunks_data[swapped_index]
                                     .as_mut()
                                     .expect("We checked if this was none")
                                     .file_sector_offset = old_offset;
-                                write_action.maybe_update_chunk_index(swaped_index);
+                                write_action.maybe_update_chunk_index(swapped_index);
 
                                 // Then offset everything else
 
                                 // If positive, now larger -> shift right, else shift left
-                                let offset = new_sectors as i64 - swaped_sectors as i64;
+                                let offset = new_sectors as i64 - swapped_sectors as i64;
 
                                 log::trace!(
                                     "Swapping {} with {}, shifting all chunks {} and after by {}",
                                     index,
-                                    swaped_index,
-                                    swaped_index,
+                                    swapped_index,
+                                    swapped_index,
                                     offset
                                 );
 
-                                for shift_index in indexs_to_shift {
+                                for shift_index in indices_to_shift {
                                     let chunk_data = self.chunks_data[shift_index]
                                         .as_mut()
                                         .expect("We checked if this was none");
