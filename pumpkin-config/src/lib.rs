@@ -36,25 +36,23 @@ use resource_pack::ResourcePackConfig;
 
 const CONFIG_ROOT_FOLDER: &str = "config/";
 
-#[cfg(not(test))]
-pub static ADVANCED_CONFIG: LazyLock<AdvancedConfiguration> = LazyLock::new(|| {
-    let exec_dir = env::current_dir().unwrap();
-    AdvancedConfiguration::load(&exec_dir)
-});
-
-// If we are testing, don't use the config from disk and make a way to override config options in
-// tests
-#[cfg(test)]
+// Would be nice to conditionally compile this based on if its a test or not, but cfg(test) does not
+// cross crate boundaries as far as I know :(
 pub static ADVANCED_CONFIG: LazyLock<AdvancedConfiguration> = LazyLock::new(|| {
     if let Some(config) = ADVANCED_CONFIG_OVERRIDE.lock().unwrap().take() {
         config
     } else {
-        let temp_dir = tempdir::TempDir::new("config").unwrap();
-        AdvancedConfiguration::load(temp_dir.path())
+        let exec_dir = env::current_dir().unwrap();
+        AdvancedConfiguration::load(&exec_dir)
     }
 });
 
-pub static ADVANCED_CONFIG_OVERRIDE: Mutex<Option<AdvancedConfiguration>> = Mutex::new(None);
+static ADVANCED_CONFIG_OVERRIDE: Mutex<Option<AdvancedConfiguration>> = Mutex::new(None);
+///WARNING: This should only be used in tests!
+pub fn override_config(config: AdvancedConfiguration) {
+    let mut config_wrapper = ADVANCED_CONFIG_OVERRIDE.lock().unwrap();
+    let _ = config_wrapper.get_or_insert(config);
+}
 
 pub static BASIC_CONFIG: LazyLock<BasicConfiguration> = LazyLock::new(|| {
     let exec_dir = env::current_dir().unwrap();

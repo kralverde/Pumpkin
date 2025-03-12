@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct ChunkConfig {
     pub compression: ChunkCompression,
     pub format: ChunkFormat,
-    pub copy_on_write: bool,
+    pub write_in_place: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone)]

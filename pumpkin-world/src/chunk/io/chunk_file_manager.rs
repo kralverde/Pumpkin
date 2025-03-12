@@ -267,13 +267,18 @@ where
                 let mut serializer = chunk_serializer.write().await;
                 for chunk_lock in chunk_locks {
                     let mut chunk = chunk_lock.write().await;
+                    let chunk_is_dirty = chunk.dirty;
                     // Edge case: this chunk is loaded while we were saving, mark it as cleaned since we are
                     // updating what we will write here
                     chunk.dirty = false;
                     // It is important that we keep the lock after we mark the chunk as clean so no one else
                     // can modify it
                     let chunk = chunk.downgrade();
-                    serializer.update_chunk(&*chunk).await?;
+
+                    // We only need to update the chunk if it is dirty
+                    if chunk_is_dirty {
+                        serializer.update_chunk(&*chunk).await?;
+                    }
                 }
                 log::trace!("Updated data for file {:?}", path);
 
@@ -288,6 +293,8 @@ where
                     // With the modification done, we can drop the write lock but keep the read lock
                     // to avoid other threads to write/modify the data, but allow other threads to read it
                     let serializer = serializer.downgrade();
+
+                    log::debug!("Writing file for {:?}", path);
                     serializer
                         .write(path.clone())
                         .await
