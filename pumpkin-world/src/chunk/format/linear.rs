@@ -229,7 +229,14 @@ impl ChunkSerializer for LinearFile {
         write.write_all(&compressed_buffer).await?;
         write.write_all(&SIGNATURE).await?;
 
-        write.flush().await
+        write.flush().await?;
+
+        // The rename of the file works like an atomic operation ensuring
+        // that the data is not corrupted before the rename is completed
+        tokio::fs::rename(temp_path, &path).await?;
+
+        log::trace!("Wrote file to Disk: {:?}", path);
+        Ok(())
     }
 
     fn read(raw_file: Bytes) -> Result<Self, ChunkReadingError> {
@@ -408,6 +415,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_writing() {
+        let _ = env_logger::try_init();
+
         let generator = get_world_gen(Seed(0));
 
         let temp_dir = TempDir::new().unwrap();
@@ -430,6 +439,12 @@ mod tests {
 
         for i in 0..5 {
             println!("Iteration {}", i + 1);
+            // Mark the chunks as dirty so we save them again
+            for (_, chunk) in &chunks {
+                let mut chunk = chunk.write().await;
+                chunk.dirty = true;
+            }
+
             chunk_saver
                 .save_chunks(
                     &level_folder,
