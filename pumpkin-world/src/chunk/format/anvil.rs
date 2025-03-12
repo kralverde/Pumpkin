@@ -3,7 +3,7 @@ use bytes::*;
 use flate2::read::{GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
 use indexmap::IndexMap;
 use itertools::Itertools;
-use pumpkin_config::ADVANCED_CONFIG;
+use pumpkin_config::advanced_config;
 use pumpkin_data::{block::Block, chunk::ChunkStatus};
 use pumpkin_nbt::serializer::to_bytes;
 use pumpkin_util::math::ceil_log2;
@@ -304,14 +304,19 @@ impl AnvilChunkData {
         Ok(chunk)
     }
 
-    fn from_chunk(chunk: &ChunkData) -> Result<Self, ChunkWritingError> {
+    fn from_chunk(
+        chunk: &ChunkData,
+        compression: Option<Compression>,
+    ) -> Result<Self, ChunkWritingError> {
         let raw_bytes = chunk_to_bytes(chunk)
             .map_err(|err| ChunkWritingError::ChunkSerializingError(err.to_string()))?;
 
-        let compression: Compression = ADVANCED_CONFIG.chunk.compression.algorithm.clone().into();
+        let compression = compression
+            .unwrap_or_else(|| advanced_config().chunk.compression.algorithm.clone().into());
+
         // We need to buffer here anyway so theres no use in making an impl Write for this
         let compressed_data = compression
-            .compress_data(&raw_bytes, ADVANCED_CONFIG.chunk.compression.level)
+            .compress_data(&raw_bytes, advanced_config().chunk.compression.level)
             .map_err(ChunkWritingError::Compression)?;
 
         Ok(AnvilChunkData {
@@ -590,10 +595,14 @@ impl ChunkSerializer for AnvilChunkFile {
             .as_secs() as u32;
 
         let index = AnvilChunkFile::get_chunk_index(&chunk.position);
-        let new_chunk_data = AnvilChunkData::from_chunk(chunk)?;
+        // Default to the compression type read from the file
+        let compression_type = self.chunks_data[index]
+            .as_ref()
+            .and_then(|chunk_data| chunk_data.serialized_data.compression);
+        let new_chunk_data = AnvilChunkData::from_chunk(chunk, compression_type)?;
 
         let mut write_action = self.write_action.lock().await;
-        if !ADVANCED_CONFIG.chunk.write_in_place {
+        if !advanced_config().chunk.write_in_place {
             *write_action = WriteAction::All;
         }
 
@@ -900,7 +909,7 @@ pub fn chunk_to_bytes(chunk_data: &ChunkData) -> Result<Vec<u8>, ChunkSerializin
 
 #[cfg(test)]
 mod tests {
-    use pumpkin_config::{ADVANCED_CONFIG, AdvancedConfiguration, override_config};
+    use pumpkin_config::{AdvancedConfiguration, advanced_config, override_config_for_testing};
     use pumpkin_util::math::vector2::Vector2;
     use std::fs;
     use std::path::PathBuf;
@@ -977,8 +986,8 @@ mod tests {
     async fn test_write_in_place() {
         let mut config = AdvancedConfiguration::default();
         config.chunk.write_in_place = true;
-        override_config(config);
-        assert!(ADVANCED_CONFIG.chunk.write_in_place);
+        override_config_for_testing(config);
+        assert!(advanced_config().chunk.write_in_place);
 
         let _ = env_logger::try_init();
 
@@ -1182,9 +1191,8 @@ mod tests {
     async fn test_write_bulk() {
         let mut config = AdvancedConfiguration::default();
         config.chunk.write_in_place = false;
-        override_config(config);
-        // This only works when running this test solo :(
-        //assert!(!ADVANCED_CONFIG.chunk.write_in_place);
+        override_config_for_testing(config);
+        assert!(!advanced_config().chunk.write_in_place);
 
         let _ = env_logger::try_init();
 

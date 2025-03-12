@@ -49,6 +49,8 @@ criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 temp-dir = "0.1.14"
 # Print log info inside tests when needed
 env_logger = "0.11.7"
+# Allows us to modify the config
+pumpkin-config = { path = "../pumpkin-config", features = ["test_helper"] }
 
 [[bench]]
 name = "chunk_noise_populate"

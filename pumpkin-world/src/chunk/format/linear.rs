@@ -8,7 +8,7 @@ use crate::chunk::{ChunkData, ChunkReadingError, ChunkWritingError};
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes};
 use log::error;
-use pumpkin_config::ADVANCED_CONFIG;
+use pumpkin_config::advanced_config;
 use pumpkin_util::math::vector2::Vector2;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
@@ -200,14 +200,14 @@ impl ChunkSerializer for LinearFile {
         // TODO: maybe zstd lib has memory leaks
         let compressed_buffer = zstd::bulk::compress(
             data_buffer.as_slice(),
-            ADVANCED_CONFIG.chunk.compression.level as i32,
+            advanced_config().chunk.compression.level as i32,
         )
         .expect("Failed to compress the data buffer")
         .into_boxed_slice();
 
         let file_header = LinearFileHeader {
             chunks_bytes: compressed_buffer.len(),
-            compression_level: ADVANCED_CONFIG.chunk.compression.level as u8,
+            compression_level: advanced_config().chunk.compression.level as u8,
             chunks_count: self
                 .chunks_headers
                 .iter()

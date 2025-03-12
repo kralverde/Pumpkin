@@ -6,7 +6,7 @@ use crate::server::{Server, ticker::Ticker};
 use log::{Level, LevelFilter, Log};
 use net::PacketHandlerState;
 use plugin::PluginManager;
-use pumpkin_config::{ADVANCED_CONFIG, BASIC_CONFIG};
+use pumpkin_config::{BASIC_CONFIG, advanced_config};
 use pumpkin_util::text::TextComponent;
 use rustyline_async::{Readline, ReadlineEvent};
 use std::collections::HashMap;
@@ -98,10 +98,10 @@ impl Log for ReadlineLogWrapper {
 }
 
 pub static LOGGER_IMPL: LazyLock<Option<(ReadlineLogWrapper, LevelFilter)>> = LazyLock::new(|| {
-    if ADVANCED_CONFIG.logging.enabled {
+    if advanced_config().logging.enabled {
         let mut config = simplelog::ConfigBuilder::new();
 
-        if ADVANCED_CONFIG.logging.timestamp {
+        if advanced_config().logging.timestamp {
             config.set_time_format_custom(time::macros::format_description!(
                 "[year]-[month]-[day] [hour]:[minute]:[second]"
             ));
@@ -110,7 +110,7 @@ pub static LOGGER_IMPL: LazyLock<Option<(ReadlineLogWrapper, LevelFilter)>> = La
             config.set_time_level(LevelFilter::Off);
         }
 
-        if !ADVANCED_CONFIG.logging.color {
+        if !advanced_config().logging.color {
             for level in Level::iter() {
                 config.set_level_color(level, None);
             }
@@ -119,7 +119,7 @@ pub static LOGGER_IMPL: LazyLock<Option<(ReadlineLogWrapper, LevelFilter)>> = La
             config.set_write_log_enable_colors(true);
         }
 
-        if !ADVANCED_CONFIG.logging.threads {
+        if !advanced_config().logging.threads {
             config.set_thread_level(LevelFilter::Off);
         } else {
             config.set_thread_level(LevelFilter::Info);
@@ -132,7 +132,7 @@ pub static LOGGER_IMPL: LazyLock<Option<(ReadlineLogWrapper, LevelFilter)>> = La
             .and_then(Result::ok)
             .unwrap_or(LevelFilter::Info);
 
-        if ADVANCED_CONFIG.commands.use_console {
+        if advanced_config().commands.use_console {
             match Readline::new("$ ".to_owned()) {
                 Ok((rl, stdout)) => {
                     let logger = simplelog::WriteLogger::new(level, config.build(), stdout);
@@ -198,7 +198,7 @@ impl PumpkinServer {
             .local_addr()
             .expect("Unable to get the address of server!");
 
-        let rcon = ADVANCED_CONFIG.networking.rcon.clone();
+        let rcon = advanced_config().networking.rcon.clone();
 
         let mut ticker = Ticker::new(BASIC_CONFIG.tps);
 
@@ -217,12 +217,12 @@ impl PumpkinServer {
             });
         }
 
-        if ADVANCED_CONFIG.networking.query.enabled {
+        if advanced_config().networking.query.enabled {
             log::info!("Query protocol enabled. Starting...");
             tokio::spawn(query::start_query_handler(server.clone(), addr));
         }
 
-        if ADVANCED_CONFIG.networking.lan_broadcast.enabled {
+        if advanced_config().networking.lan_broadcast.enabled {
             log::info!("LAN broadcast enabled. Starting...");
             tokio::spawn(lan_broadcast::start_lan_broadcast(addr));
         }

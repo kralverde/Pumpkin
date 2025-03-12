@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 use dashmap::{DashMap, Entry};
 use log::trace;
 use num_traits::Zero;
-use pumpkin_config::{ADVANCED_CONFIG, chunk::ChunkFormat};
+use pumpkin_config::{advanced_config, chunk::ChunkFormat};
 use pumpkin_util::math::vector2::Vector2;
 use tokio::{
     sync::{RwLock, mpsc},
@@ -110,7 +110,7 @@ impl Level {
         let seed = Seed(level_info.world_gen_settings.seed as u64);
         let world_gen = get_world_gen(seed).into();
 
-        let chunk_saver: Arc<dyn ChunkIO<Data = SyncChunk>> = match ADVANCED_CONFIG.chunk.format {
+        let chunk_saver: Arc<dyn ChunkIO<Data = SyncChunk>> = match advanced_config().chunk.format {
             //ChunkFormat::Anvil => (Arc::new(AnvilChunkFormat), Arc::new(AnvilChunkFormat)),
             ChunkFormat::Linear => Arc::new(ChunkFileManager::<LinearFile>::default()),
             ChunkFormat::Anvil => Arc::new(ChunkFileManager::<AnvilChunkFile>::default()),
