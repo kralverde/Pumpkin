@@ -1,5 +1,5 @@
-use crate::bytebuf::ByteBufMut;
 use crate::codec::var_int::VarInt;
+use crate::ser::ByteBufMut;
 use crate::{ClientPacket, codec::identifier::Identifier};
 use pumpkin_data::{packet::clientbound::PLAY_STOP_SOUND, sound::SoundCategory};
 use pumpkin_macros::packet;

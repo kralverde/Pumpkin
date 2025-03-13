@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use pumpkin_world::block::registry::State;
 use std::{
     collections::VecDeque,
     io::Cursor,
@@ -1540,7 +1539,7 @@ impl Player {
                     .await;
             }
             SChunkBatch::PACKET_ID => {
-                self.handle_chunk_batch(SChunkBatch::read(bytebuf)?).await;
+                self.handle_chunk_batch(SChunkBatch::read(payload)?).await;
             }
             _ => {
                 log::warn!("Failed to handle player packet id {}", packet.id);

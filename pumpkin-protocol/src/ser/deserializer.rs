@@ -187,7 +187,7 @@ impl<'de, R: NetworkRead> de::Deserializer<'de> for &mut Deserializer<R> {
             deserializer: &'a mut Deserializer<R>,
         }
 
-        impl<'de, 'a, R: NetworkRead> SeqAccess<'de> for Access<'a, R> {
+        impl<'de, R: NetworkRead> SeqAccess<'de> for Access<'_, R> {
             type Error = ReadingError;
 
             fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -213,7 +213,7 @@ impl<'de, R: NetworkRead> de::Deserializer<'de> for &mut Deserializer<R> {
             len: usize,
         }
 
-        impl<'de, 'a, R: NetworkRead> SeqAccess<'de> for Access<'a, R> {
+        impl<'de, R: NetworkRead> SeqAccess<'de> for Access<'_, R> {
             type Error = ReadingError;
 
             fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
