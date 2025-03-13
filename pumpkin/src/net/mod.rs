@@ -21,7 +21,7 @@ use pumpkin_config::networking::compression::CompressionInfo;
 use pumpkin_protocol::{
     ClientPacket, ConnectionState, Property, RawPacket, ServerPacket,
     client::{config::CConfigDisconnect, login::CLoginDisconnect, play::CPlayDisconnect},
-    packet_decoder::PacketDecoder,
+    packet_decoder::NetworkDecoder,
     packet_encoder::{PacketEncodeError, PacketEncoder},
     ser::{ReadingError, packet::Packet},
     server::{
@@ -41,8 +41,8 @@ use pumpkin_util::{ProfileAction, text::TextComponent};
 use serde::Deserialize;
 use sha1::Digest;
 use sha2::Sha256;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::{net::tcp::OwnedReadHalf, sync::Mutex};
 
 use thiserror::Error;
 use uuid::Uuid;
@@ -114,8 +114,6 @@ pub enum PacketHandlerState {
     Stop,
 }
 
-type RawPacketType = RawPacket<Cursor<Bytes>>;
-
 /// Everything which makes a Connection with our Server is a `Client`.
 /// Client will become Players when they reach the `Play` state
 pub struct Client {
@@ -141,11 +139,11 @@ pub struct Client {
     /// The packet encoder for outgoing packets.
     pub enc: Arc<Mutex<PacketEncoder>>,
     /// The packet decoder for incoming packets.
-    pub dec: Arc<Mutex<PacketDecoder>>,
+    pub dec: Arc<Mutex<NetworkDecoder<Cursor<Bytes>>>>,
     /// A channel for sending packets to the client.
     pub server_packets_channel: mpsc::Sender<PacketHandlerState>,
     /// A queue of raw packets received from the client, waiting to be processed.
-    pub client_packets_queue: Arc<Mutex<VecDeque<RawPacketType>>>,
+    pub client_packets_queue: Arc<Mutex<VecDeque<RawPacket>>>,
     /// Indicates whether the client should be converted into a player.
     pub make_player: AtomicBool,
 }
@@ -167,7 +165,7 @@ impl Client {
             address: Mutex::new(address),
             connection_state: AtomicCell::new(ConnectionState::HandShake),
             enc: Arc::new(Mutex::new(PacketEncoder::default())),
-            dec: Arc::new(Mutex::new(PacketDecoder::default())),
+            dec: Arc::new(Mutex::new(NetworkDecoder::new(Cursor::new(Bytes::new())))),
             closed: AtomicBool::new(false),
             server_packets_channel,
             client_packets_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -176,7 +174,7 @@ impl Client {
     }
 
     /// Adds a Incoming packet to the queue
-    pub async fn add_packet(&self, packet: RawPacketType) {
+    pub async fn add_packet(&self, packet: RawPacket) {
         let mut client_packets_queue = self.client_packets_queue.lock().await;
         client_packets_queue.push_back(packet);
     }
@@ -209,18 +207,13 @@ impl Client {
     /// ```
     pub async fn set_encryption(
         &self,
-        shared_secret: Option<&[u8]>, // decrypted
+        shared_secret: &[u8], // decrypted
     ) -> Result<(), EncryptionError> {
-        if let Some(shared_secret) = shared_secret {
-            let crypt_key: [u8; 16] = shared_secret
-                .try_into()
-                .map_err(|_| EncryptionError::SharedWrongLength)?;
-            self.dec.lock().await.set_encryption(Some(&crypt_key));
-            self.enc.lock().await.set_encryption(Some(&crypt_key));
-        } else {
-            self.dec.lock().await.set_encryption(None);
-            self.enc.lock().await.set_encryption(None);
-        }
+        let crypt_key: [u8; 16] = shared_secret
+            .try_into()
+            .map_err(|_| EncryptionError::SharedWrongLength)?;
+        self.dec.lock().await.set_encryption(&crypt_key);
+        self.enc.lock().await.set_encryption(Some(&crypt_key));
         Ok(())
     }
 
@@ -239,7 +232,11 @@ impl Client {
             }
         }
 
-        self.dec.lock().await.set_compression(compression.is_some());
+        self.dec
+            .lock()
+            .await
+            .set_compression(compression.as_ref().map(|info| info.threshold as usize));
+
         self.enc
             .lock()
             .await
@@ -392,7 +389,7 @@ impl Client {
     pub async fn handle_packet(
         &self,
         server: &Server,
-        packet: &mut RawPacketType,
+        packet: &mut RawPacket,
     ) -> Result<(), ReadingError> {
         match self.connection_state.load() {
             pumpkin_protocol::ConnectionState::HandShake => {
@@ -416,12 +413,9 @@ impl Client {
         }
     }
 
-    async fn handle_handshake_packet(
-        &self,
-        packet: &mut RawPacketType,
-    ) -> Result<(), ReadingError> {
+    async fn handle_handshake_packet(&self, packet: &RawPacket) -> Result<(), ReadingError> {
         log::debug!("Handling handshake group");
-        let payload = &mut packet.payload;
+        let payload = &packet.payload[..];
         match packet.id {
             0 => {
                 self.handle_handshake(SHandShake::read(payload)?).await;
@@ -439,10 +433,10 @@ impl Client {
     async fn handle_status_packet(
         &self,
         server: &Server,
-        packet: &mut RawPacketType,
+        packet: &RawPacket,
     ) -> Result<(), ReadingError> {
         log::debug!("Handling status group");
-        let payload = &mut packet.payload;
+        let payload = &packet.payload[..];
         match packet.id {
             SStatusRequest::PACKET_ID => {
                 self.handle_status_request(server).await;
@@ -465,10 +459,10 @@ impl Client {
     async fn handle_login_packet(
         &self,
         server: &Server,
-        packet: &mut RawPacketType,
+        packet: &RawPacket,
     ) -> Result<(), ReadingError> {
         log::debug!("Handling login group for id");
-        let payload = &mut packet.payload;
+        let payload = &packet.payload[..];
         match packet.id {
             SLoginStart::PACKET_ID => {
                 self.handle_login_start(server, SLoginStart::read(payload)?)
@@ -501,10 +495,10 @@ impl Client {
     async fn handle_config_packet(
         &self,
         server: &Server,
-        packet: &mut RawPacketType,
+        packet: &RawPacket,
     ) -> Result<(), ReadingError> {
         log::debug!("Handling config group");
-        let payload = &mut packet.payload;
+        let payload = &packet.payload[..];
         match packet.id {
             SClientInformationConfig::PACKET_ID => {
                 self.handle_client_information_config(SClientInformationConfig::read(payload)?)

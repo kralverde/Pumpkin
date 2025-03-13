@@ -123,7 +123,7 @@ impl<R: AsyncRead + Unpin> NetworkDecoder<R> {
             if decompressed_length > 0 {
                 DecompressionReader::Decompress(ZlibDecoder::new(BufReader::new(bounded_reader)))
             } else {
-                // Validate that we are less than the compression threshold
+                // Validate that we are not less than the compression threshold
                 if raw_packet_length > threshold {
                     Err(PacketDecodeError::NotCompressed)?
                 }
@@ -401,11 +401,9 @@ mod tests {
         let mut decoder = NetworkDecoder::new(packet.as_slice());
 
         // Attempt to decode and expect a read error
-        let result = decoder.get_raw_packet().await;
-
-        if result.is_ok() {
-            panic!("This should have errored!");
-        }
+        let raw_packet = decoder.get_raw_packet().await.unwrap();
+        assert_eq!(raw_packet.id, packet_id);
+        assert_eq!(raw_packet.payload.as_ref(), payload);
     }
 
     /// Test decoding with maximum length packet

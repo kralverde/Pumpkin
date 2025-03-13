@@ -168,7 +168,7 @@ impl Client {
         log::debug!("Handling encryption");
         let shared_secret = server.decrypt(&encryption_response.shared_secret).unwrap();
 
-        if let Err(error) = self.set_encryption(Some(&shared_secret)).await {
+        if let Err(error) = self.set_encryption(&shared_secret).await {
             self.kick(TextComponent::text(error.to_string())).await;
             return;
         }

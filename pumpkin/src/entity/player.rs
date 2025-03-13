@@ -1431,9 +1431,9 @@ impl Player {
     pub async fn handle_play_packet(
         self: &Arc<Self>,
         server: &Arc<Server>,
-        packet: &mut RawPacket<Cursor<Bytes>>,
+        packet: &RawPacket,
     ) -> Result<(), Box<dyn PumpkinError>> {
-        let payload = &mut packet.payload;
+        let payload = &packet.payload[..];
         match packet.id {
             SConfirmTeleport::PACKET_ID => {
                 self.handle_confirm_teleport(SConfirmTeleport::read(payload)?)
