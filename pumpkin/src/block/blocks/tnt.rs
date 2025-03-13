@@ -7,12 +7,12 @@ use crate::entity::tnt::TNTEntity;
 use crate::server::Server;
 use crate::world::World;
 use async_trait::async_trait;
+use pumpkin_data::block::Block;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::sound::SoundCategory;
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
-use pumpkin_world::block::registry::Block;
 use rand::Rng;
 
 #[pumpkin_block("minecraft:tnt")]
@@ -29,14 +29,15 @@ impl PumpkinBlock for TNTBlock {
         player: &Player,
         location: BlockPos,
         item: &Item,
-        server: &Server,
+        _server: &Server,
+        _world: &World,
     ) -> BlockActionResult {
         if *item != Item::FLINT_AND_STEEL || *item == Item::FIRE_CHARGE {
             return BlockActionResult::Continue;
         }
         let world = player.world().await;
         world.set_block_state(&location, 0).await;
-        let entity = server.add_entity(location.to_f64(), EntityType::TNT, &world);
+        let entity = world.create_entity(location.to_f64(), EntityType::TNT);
         let pos = entity.pos.load();
         let tnt = Arc::new(TNTEntity::new(entity, DEFAULT_POWER, DEFAULT_FUSE));
         world.spawn_entity(tnt.clone()).await;
@@ -50,14 +51,8 @@ impl PumpkinBlock for TNTBlock {
             .await;
         BlockActionResult::Consume
     }
-    async fn explode(
-        &self,
-        _block: &Block,
-        world: &Arc<World>,
-        location: BlockPos,
-        server: &Server,
-    ) {
-        let entity = server.add_entity(location.to_f64(), EntityType::TNT, world);
+    async fn explode(&self, _block: &Block, world: &Arc<World>, location: BlockPos) {
+        let entity = world.create_entity(location.to_f64(), EntityType::TNT);
         let fuse = rand::thread_rng().gen_range(0..DEFAULT_FUSE / 4) + DEFAULT_FUSE / 8;
         let tnt = Arc::new(TNTEntity::new(entity, DEFAULT_POWER, fuse));
         world.spawn_entity(tnt.clone()).await;

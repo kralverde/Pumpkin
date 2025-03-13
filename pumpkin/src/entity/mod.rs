@@ -28,7 +28,10 @@ use pumpkin_util::math::{
     wrap_degrees,
 };
 use serde::Serialize;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicI32},
+};
 use tokio::sync::RwLock;
 
 use crate::world::World;
@@ -73,6 +76,8 @@ pub trait EntityBase: Send + Sync {
     fn get_entity(&self) -> &Entity;
     fn get_living_entity(&self) -> Option<&LivingEntity>;
 }
+
+static CURRENT_ID: AtomicI32 = AtomicI32::new(0);
 
 /// Represents a not living Entity (e.g. Item, Egg, Snowball...)
 pub struct Entity {
@@ -121,24 +126,24 @@ pub struct Entity {
 }
 
 impl Entity {
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
-        entity_id: EntityId,
         entity_uuid: uuid::Uuid,
         world: Arc<World>,
         position: Vector3<f64>,
         entity_type: EntityType,
-        standing_eye_height: f32,
-        bounding_box: AtomicCell<BoundingBox>,
-        bounding_box_size: AtomicCell<EntityDimensions>,
         invulnerable: bool,
     ) -> Self {
         let floor_x = position.x.floor() as i32;
         let floor_y = position.y.floor() as i32;
         let floor_z = position.z.floor() as i32;
 
+        let bounding_box_size = EntityDimensions {
+            width: entity_type.dimension[0],
+            height: entity_type.dimension[1],
+        };
+
         Self {
-            entity_id,
+            entity_id: CURRENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             entity_uuid,
             entity_type,
             on_ground: AtomicBool::new(false),
@@ -154,10 +159,15 @@ impl Entity {
             head_yaw: AtomicCell::new(0.0),
             pitch: AtomicCell::new(0.0),
             velocity: AtomicCell::new(Vector3::new(0.0, 0.0, 0.0)),
-            standing_eye_height,
+            standing_eye_height: entity_type.eye_height,
             pose: AtomicCell::new(EntityPose::Standing),
-            bounding_box,
-            bounding_box_size,
+            bounding_box: AtomicCell::new(BoundingBox::new_from_pos(
+                position.x,
+                position.y,
+                position.z,
+                &bounding_box_size,
+            )),
+            bounding_box_size: AtomicCell::new(bounding_box_size),
             invulnerable: AtomicBool::new(invulnerable),
             damage_immunities: Vec::new(),
         }
@@ -417,6 +427,33 @@ impl Entity {
         self.invulnerable.load(std::sync::atomic::Ordering::Relaxed)
             || self.damage_immunities.contains(damage_type)
     }
+
+    async fn velocity_multiplier(&self, _pos: Vector3<f64>) -> f32 {
+        let world = self.world.read().await;
+        let block = world.get_block(&self.block_pos.load()).await.unwrap();
+        block.velocity_multiplier
+        // if velo_multiplier == 1.0 {
+        //     const VELOCITY_OFFSET: f64 = 0.500001; // Vanilla
+        //     let pos_with_y_offset = BlockPos(Vector3::new(
+        //         pos.x.floor() as i32,
+        //         (pos.y - VELOCITY_OFFSET).floor() as i32,
+        //         pos.z.floor() as i32,
+        //     ));
+        //     let block = world.get_block(&pos_with_y_offset).await.unwrap();
+        //     block.velocity_multiplier
+        // } else {
+        // }
+    }
+
+    async fn tick_move(&self) {
+        let velo = self.velocity.load();
+        let pos = self.pos.load();
+        self.pos
+            .store(Vector3::new(pos.x + velo.x, pos.y + velo.y, pos.z + velo.z));
+        let multiplier = f64::from(self.velocity_multiplier(pos).await);
+        self.velocity
+            .store(velo.multiply(multiplier, 1.0, multiplier));
+    }
 }
 
 #[async_trait]
@@ -425,7 +462,9 @@ impl EntityBase for Entity {
         false
     }
 
-    async fn tick(&self, _: &Server) {}
+    async fn tick(&self, _: &Server) {
+        self.tick_move().await;
+    }
 
     fn get_entity(&self) -> &Entity {
         self

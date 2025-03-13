@@ -32,8 +32,8 @@ use pumpkin_macros::send_cancellable;
 use pumpkin_protocol::{
     ClientPacket,
     client::play::{
-        CChunkData, CEntityStatus, CGameEvent, CLogin, CPlayerInfoUpdate, CRemoveEntities,
-        CRemovePlayerInfo, CSpawnEntity, GameEvent, PlayerAction,
+        CEntityStatus, CGameEvent, CLogin, CPlayerInfoUpdate, CRemoveEntities, CRemovePlayerInfo,
+        CSpawnEntity, GameEvent, PlayerAction,
     },
 };
 use pumpkin_protocol::{client::play::CLevelEvent, codec::identifier::Identifier};
@@ -48,8 +48,9 @@ use pumpkin_registry::DimensionType;
 use pumpkin_util::math::vector2::Vector2;
 use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
 use pumpkin_util::text::{TextComponent, color::NamedColor};
-use pumpkin_world::chunk::ChunkData;
 use pumpkin_world::level::Level;
+use pumpkin_world::level::SyncChunk;
+use pumpkin_world::{block::BlockDirection, chunk::ChunkData};
 use pumpkin_world::{
     block::registry::{
         get_block_and_state_by_state_id, get_block_by_state_id, get_state_by_state_id,
@@ -60,11 +61,8 @@ use rand::{Rng, thread_rng};
 use scoreboard::Scoreboard;
 use thiserror::Error;
 use time::LevelTime;
-use tokio::sync::{Mutex, mpsc::Receiver};
-use tokio::{
-    runtime::Handle,
-    sync::{RwLock, mpsc},
-};
+use tokio::sync::{Mutex, mpsc::UnboundedReceiver};
+use tokio::sync::{RwLock, mpsc};
 
 pub mod border;
 pub mod bossbar;
@@ -306,6 +304,8 @@ impl World {
                     .entity
                     .bounding_box
                     .load()
+                    // This is vanilla, but TODO: change this when is in a Vehicle
+                    .expand(1.0, 0.5, 1.0)
                     .intersects(&entity.get_entity().bounding_box.load())
                 {
                     collied_player = Some(player.clone());
@@ -402,7 +402,7 @@ impl World {
         // also send his info to everyone else
         log::debug!("Broadcasting player info for {}", player.gameprofile.name);
         self.broadcast_packet_all(&CPlayerInfoUpdate::new(
-            0x01 | 0x08,
+            0x01 | 0x04 | 0x08,
             &[pumpkin_protocol::client::play::Player {
                 uuid: gameprofile.id,
                 actions: vec![
@@ -411,6 +411,7 @@ impl World {
                         properties: &gameprofile.properties,
                     },
                     PlayerAction::UpdateListed(true),
+                    PlayerAction::UpdateGameMode(VarInt(gamemode as i32)),
                 ],
             }],
         ))
@@ -664,7 +665,7 @@ impl World {
         position.y = f64::from(top + 1);
 
         log::debug!("Sending player teleport to {}", player.gameprofile.name);
-        player.request_teleport(position, yaw, pitch).await;
+        player.clone().request_teleport(position, yaw, pitch).await;
 
         player.living_entity.last_pos.store(position);
 
@@ -673,6 +674,7 @@ impl World {
         self.send_world_info(player, position, yaw, pitch).await;
     }
 
+    // NOTE: This function doesn't actually await on anything, it just spawns two tokio tasks
     /// IMPORTANT: Chunks have to be non-empty
     fn spawn_world_chunks(
         &self,
@@ -699,8 +701,14 @@ impl World {
             rel_x * rel_x + rel_z * rel_z
         });
 
-        let mut receiver = self.receive_chunks(chunks);
+        // We are loading a completely new work section: prioritize chunks the player is on top
+        // of
+        let new_spawn = chunks[0] == player.watched_section.load().center;
+        let mut receiver = self.receive_chunks(chunks, new_spawn);
         let level = self.level.clone();
+
+        // Only allow 128 chunk packets to be sent at a time to avoid overloading the client.
+        // TODO: Bulk chunks?
 
         tokio::spawn(async move {
             'main: while let Some((chunk, first_load)) = receiver.recv().await {
@@ -708,6 +716,7 @@ impl World {
 
                 #[cfg(debug_assertions)]
                 if position == (0, 0).into() {
+                    use pumpkin_protocol::client::play::CChunkData;
                     let binding = chunk.read().await;
                     let packet = CChunkData(&binding);
                     let mut test = bytes::BytesMut::new();
@@ -764,22 +773,20 @@ impl World {
                     send_cancellable! {{
                         ChunkSend {
                             world,
-                            chunk,
+                            chunk: chunk.clone(),
                             cancelled: false,
                         };
 
                         'after: {
-                            player
-                                .client
-                                .send_packet(&CChunkData(&*event.chunk.read().await))
-                                .await;
+                            let mut chunk_manager = player.chunk_manager.lock().await;
+                            chunk_manager.push_chunk(position, chunk);
                         }
                     }};
                 }
             }
 
             #[cfg(debug_assertions)]
-            log::debug!("chunks sent after {}ms ", inst.elapsed().as_millis(),);
+            log::debug!("chunks queued after {}ms ", inst.elapsed().as_millis(),);
         });
     }
 
@@ -964,7 +971,7 @@ impl World {
     ///
     /// - This function assumes `broadcast_packet_expect` and `remove_entity` are defined elsewhere.
     /// - The disconnect message sending is currently optional. Consider making it a configurable option.
-    pub async fn remove_player(&self, player: Arc<Player>, fire_event: bool) {
+    pub async fn remove_player(&self, player: &Arc<Player>, fire_event: bool) {
         self.players
             .write()
             .await
@@ -1003,6 +1010,15 @@ impl World {
         }
     }
 
+    pub fn create_entity(
+        self: &Arc<Self>,
+        position: Vector3<f64>,
+        entity_type: EntityType,
+    ) -> Entity {
+        let uuid = uuid::Uuid::new_v4();
+        Entity::new(uuid, self.clone(), position, entity_type, false)
+    }
+
     /// Adds a entity to the world.
     pub async fn spawn_entity(&self, entity: Arc<dyn EntityBase>) {
         let base_entity = entity.get_entity();
@@ -1034,12 +1050,11 @@ impl World {
         let relative = ChunkRelativeBlockCoordinates::from(relative_coordinates);
 
         let chunk = self.receive_chunk(chunk_coordinate).await.0;
-        let replaced_block_state_id = chunk.read().await.subchunks.get_block(relative).unwrap();
-        chunk
-            .write()
-            .await
-            .subchunks
-            .set_block(relative, block_state_id);
+        let mut chunk = chunk.write().await;
+        chunk.dirty = true;
+        let replaced_block_state_id = chunk.subchunks.get_block(relative).unwrap();
+        chunk.subchunks.set_block(relative, block_state_id);
+        drop(chunk);
 
         self.broadcast_packet_all(&CBlockUpdate::new(
             position,
@@ -1051,46 +1066,50 @@ impl World {
     }
 
     // Stream the chunks (don't collect them and then do stuff with them)
+    /// Spawns a tokio task to stream chunks.
     /// Important: must be called from an async function (or changed to accept a tokio runtime
     /// handle)
     pub fn receive_chunks(
         &self,
         chunks: Vec<Vector2<i32>>,
-    ) -> Receiver<(Arc<RwLock<ChunkData>>, bool)> {
-        let (sender, receive) = mpsc::channel(chunks.len());
+        new_spawn: bool,
+    ) -> UnboundedReceiver<(SyncChunk, bool)> {
+        let (sender, receiver) = mpsc::unbounded_channel();
         // Put this in another thread so we aren't blocking on it
         let level = self.level.clone();
-        let rt = Handle::current();
-        rayon::spawn(move || {
-            level.fetch_chunks(&chunks, sender, &rt);
+        tokio::spawn(async move {
+            if new_spawn {
+                if let Some((priority, rest)) = chunks.split_at_checked(9) {
+                    // Ensure client gets 9 closest chunks first
+                    level.fetch_chunks(priority, sender.clone()).await;
+                    level.fetch_chunks(rest, sender).await;
+                } else {
+                    level.fetch_chunks(&chunks, sender).await;
+                }
+            } else {
+                level.fetch_chunks(&chunks, sender).await;
+            }
         });
-        receive
+
+        receiver
     }
 
     pub async fn receive_chunk(&self, chunk_pos: Vector2<i32>) -> (Arc<RwLock<ChunkData>>, bool) {
-        let mut receiver = self.receive_chunks(vec![chunk_pos]);
-        let chunk = receiver
+        let mut receiver = self.receive_chunks(vec![chunk_pos], false);
+
+        receiver
             .recv()
             .await
-            .expect("Channel closed for unknown reason");
-
-        if !self.level.is_chunk_watched(&chunk_pos) {
-            log::trace!(
-                "Received chunk {:?}, but it is not watched... cleaning",
-                chunk_pos
-            );
-            self.level.clean_chunk(&chunk_pos).await;
-        }
-
-        chunk
+            .expect("Channel closed for unknown reason")
     }
 
+    /// If server is sent, it will do a block update
     pub async fn break_block(
         self: &Arc<Self>,
-        server: &Server,
         position: &BlockPos,
         cause: Option<Arc<Player>>,
         drop: bool,
+        server: Option<&Server>,
     ) {
         let block = self.get_block(position).await.unwrap();
         let event = BlockBreakEvent::new(cause.clone(), block.clone(), 0, false);
@@ -1112,7 +1131,7 @@ impl World {
             );
 
             if drop {
-                block::drop_loot(server, self, block, position, true).await;
+                block::drop_loot(self, &block, position, true, broken_block_state_id).await;
             }
 
             match cause {
@@ -1121,6 +1140,10 @@ impl World {
                         .await;
                 }
                 None => self.broadcast_packet_all(&particles_packet).await,
+            }
+
+            if let Some(server) = server {
+                self.update_neighbors(server, position, None).await;
             }
         }
     }
@@ -1142,7 +1165,7 @@ impl World {
     pub async fn get_block(
         &self,
         position: &BlockPos,
-    ) -> Result<&pumpkin_world::block::registry::Block, GetBlockError> {
+    ) -> Result<pumpkin_data::block::Block, GetBlockError> {
         let id = self.get_block_state_id(position).await?;
         get_block_by_state_id(id).ok_or(GetBlockError::InvalidBlockId)
     }
@@ -1151,7 +1174,7 @@ impl World {
     pub async fn get_block_state(
         &self,
         position: &BlockPos,
-    ) -> Result<&pumpkin_world::block::registry::State, GetBlockError> {
+    ) -> Result<pumpkin_data::block::BlockState, GetBlockError> {
         let id = self.get_block_state_id(position).await?;
         get_state_by_state_id(id).ok_or(GetBlockError::InvalidBlockId)
     }
@@ -1160,14 +1183,40 @@ impl World {
     pub async fn get_block_and_block_state(
         &self,
         position: &BlockPos,
-    ) -> Result<
-        (
-            &pumpkin_world::block::registry::Block,
-            &pumpkin_world::block::registry::State,
-        ),
-        GetBlockError,
-    > {
+    ) -> Result<(pumpkin_data::block::Block, pumpkin_data::block::BlockState), GetBlockError> {
         let id = self.get_block_state_id(position).await?;
         get_block_and_state_by_state_id(id).ok_or(GetBlockError::InvalidBlockId)
+    }
+
+    /// Updates neighboring blocks of a block
+    pub async fn update_neighbors(
+        &self,
+        server: &Server,
+        block_pos: &BlockPos,
+        except: Option<&BlockDirection>,
+    ) {
+        for direction in BlockDirection::update_order() {
+            if Some(&direction) == except {
+                continue;
+            }
+            let neighbor_pos = block_pos.offset(direction.to_offset());
+            let neighbor_block = self.get_block(&neighbor_pos).await;
+            if let Ok(neighbor_block) = neighbor_block {
+                if let Some(neighbor_pumpkin_block) =
+                    server.block_registry.get_pumpkin_block(&neighbor_block)
+                {
+                    neighbor_pumpkin_block
+                        .on_neighbor_update(
+                            server,
+                            self,
+                            &neighbor_block,
+                            &neighbor_pos,
+                            &direction,
+                            block_pos,
+                        )
+                        .await;
+                }
+            }
+        }
     }
 }

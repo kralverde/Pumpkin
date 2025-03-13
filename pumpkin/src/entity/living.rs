@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::atomic::AtomicI32};
 use crate::server::Server;
 use async_trait::async_trait;
 use crossbeam::atomic::AtomicCell;
-use pumpkin_config::ADVANCED_CONFIG;
+use pumpkin_config::advanced_config;
 use pumpkin_data::entity::{EffectType, EntityStatus};
 use pumpkin_data::{damage::DamageType, sound::Sound};
 use pumpkin_nbt::tag::NbtTag;
@@ -242,7 +242,9 @@ impl LivingEntity {
 
 #[async_trait]
 impl EntityBase for LivingEntity {
-    async fn tick(&self, _server: &Server) {
+    async fn tick(&self, server: &Server) {
+        self.entity.tick(server).await;
+
         if self
             .time_until_regen
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -272,7 +274,7 @@ impl EntityBase for LivingEntity {
         if !self.check_damage(amount) {
             return false;
         }
-        let config = &ADVANCED_CONFIG.pvp;
+        let config = &advanced_config().pvp;
 
         if !self
             .damage_with_context(amount, damage_type, None, None, None)

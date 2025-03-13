@@ -1,8 +1,10 @@
 use bytes::Bytes;
 use pumpkin_world::block::registry::State;
 use std::{
+    collections::VecDeque,
     io::Cursor,
     num::NonZeroU8,
+    ops::AddAssign,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, Ordering},
@@ -12,8 +14,9 @@ use std::{
 
 use async_trait::async_trait;
 use crossbeam::atomic::AtomicCell;
-use pumpkin_config::{ADVANCED_CONFIG, BASIC_CONFIG};
+use pumpkin_config::{BASIC_CONFIG, advanced_config};
 use pumpkin_data::{
+    block::BlockState,
     damage::DamageType,
     entity::{EffectType, EntityStatus, EntityType},
     item::Operation,
@@ -21,22 +24,25 @@ use pumpkin_data::{
     sound::{Sound, SoundCategory},
 };
 use pumpkin_inventory::player::PlayerInventory;
+use pumpkin_macros::send_cancellable;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::{
     RawPacket, ServerPacket,
     client::play::{
-        CAcknowledgeBlockChange, CActionBar, CCombatDeath, CDisguisedChatMessage, CGameEvent,
-        CKeepAlive, CParticle, CPlayDisconnect, CPlayerAbilities, CPlayerInfoUpdate,
-        CPlayerPosition, CRespawn, CSetExperience, CSetHealth, CSubtitle, CSystemChatMessage,
-        CTitleText, CUnloadChunk, CUpdateMobEffect, GameEvent, MetaDataType, PlayerAction,
+        CAcknowledgeBlockChange, CActionBar, CChunkBatchEnd, CChunkBatchStart, CChunkData,
+        CCombatDeath, CDisguisedChatMessage, CGameEvent, CKeepAlive, CParticle, CPlayDisconnect,
+        CPlayerAbilities, CPlayerInfoUpdate, CPlayerPosition, CRespawn, CSetExperience, CSetHealth,
+        CStopSound, CSubtitle, CSystemChatMessage, CTeleportEntity, CTitleText, CUnloadChunk,
+        CUpdateMobEffect, GameEvent, MetaDataType, PlayerAction,
     },
+    codec::identifier::Identifier,
     ser::packet::Packet,
     server::play::{
-        SChatCommand, SChatMessage, SClientCommand, SClientInformationPlay, SClientTickEnd,
-        SCommandSuggestion, SConfirmTeleport, SInteract, SPickItemFromBlock, SPlayerAbilities,
-        SPlayerAction, SPlayerCommand, SPlayerInput, SPlayerPosition, SPlayerPositionRotation,
-        SPlayerRotation, SSetCreativeSlot, SSetHeldItem, SSetPlayerGround, SSwingArm, SUpdateSign,
-        SUseItem, SUseItemOn,
+        SChatCommand, SChatMessage, SChunkBatch, SClientCommand, SClientInformationPlay,
+        SClientTickEnd, SCommandSuggestion, SConfirmTeleport, SInteract, SPickItemFromBlock,
+        SPlayerAbilities, SPlayerAction, SPlayerCommand, SPlayerInput, SPlayerPosition,
+        SPlayerPositionRotation, SPlayerRotation, SSetCreativeSlot, SSetHeldItem, SSetPlayerGround,
+        SSwingArm, SUpdateSign, SUseItem, SUseItemOn,
     },
 };
 use pumpkin_protocol::{
@@ -53,16 +59,13 @@ use pumpkin_protocol::{
 use pumpkin_util::{
     GameMode,
     math::{
-        boundingbox::{BoundingBox, EntityDimensions},
-        experience,
-        position::BlockPos,
-        vector2::Vector2,
+        boundingbox::BoundingBox, experience, position::BlockPos, vector2::Vector2,
         vector3::Vector3,
     },
     permission::PermissionLvl,
     text::TextComponent,
 };
-use pumpkin_world::{cylindrical_chunk_iterator::Cylindrical, item::ItemStack};
+use pumpkin_world::{cylindrical_chunk_iterator::Cylindrical, item::ItemStack, level::SyncChunk};
 use tokio::sync::{Mutex, Notify, RwLock};
 
 use super::{
@@ -77,12 +80,88 @@ use crate::{
     command::{client_suggestions, dispatcher::CommandDispatcher},
     data::op_data::OPERATOR_CONFIG,
     net::{Client, PlayerConfig},
+    plugin::player::{
+        player_change_world::PlayerChangeWorldEvent,
+        player_gamemode_change::PlayerGamemodeChangeEvent, player_teleport::PlayerTeleportEvent,
+    },
     server::Server,
     world::World,
 };
 use crate::{error::PumpkinError, net::GameProfile};
 
 use super::living::LivingEntity;
+
+enum BatchState {
+    Initial,
+    Waiting,
+    Count(u8),
+}
+
+pub struct ChunkManager {
+    chunks_per_tick: usize,
+    chunk_queue: VecDeque<(Vector2<i32>, SyncChunk)>,
+    batches_sent_since_ack: BatchState,
+}
+
+impl ChunkManager {
+    pub const NOTCHIAN_BATCHES_WITHOUT_ACK_UNTIL_PAUSE: u8 = 10;
+
+    #[must_use]
+    pub fn new(chunks_per_tick: usize) -> Self {
+        Self {
+            chunks_per_tick,
+            chunk_queue: VecDeque::new(),
+            batches_sent_since_ack: BatchState::Initial,
+        }
+    }
+
+    pub fn handle_acknowledge(&mut self, chunks_per_tick: f32) {
+        self.batches_sent_since_ack = BatchState::Count(0);
+        self.chunks_per_tick = chunks_per_tick.ceil() as usize;
+    }
+
+    pub fn push_chunk(&mut self, position: Vector2<i32>, chunk: SyncChunk) {
+        self.chunk_queue.push_back((position, chunk));
+    }
+
+    #[must_use]
+    pub fn can_send_chunk(&self) -> bool {
+        let state_available = match self.batches_sent_since_ack {
+            BatchState::Count(count) => count < Self::NOTCHIAN_BATCHES_WITHOUT_ACK_UNTIL_PAUSE,
+            BatchState::Initial => true,
+            BatchState::Waiting => false,
+        };
+
+        state_available && !self.chunk_queue.is_empty()
+    }
+
+    pub fn next_chunk(&mut self) -> Box<[SyncChunk]> {
+        let chunk_size = self.chunk_queue.len().min(self.chunks_per_tick);
+        let mut chunks = Vec::with_capacity(chunk_size);
+        chunks.extend(
+            self.chunk_queue
+                .drain(0..chunk_size)
+                .map(|(_, chunk)| chunk),
+        );
+
+        match &mut self.batches_sent_since_ack {
+            BatchState::Count(count) => {
+                count.add_assign(1);
+            }
+            state @ BatchState::Initial => *state = BatchState::Waiting,
+            BatchState::Waiting => unreachable!(),
+        }
+
+        chunks.into_boxed_slice()
+    }
+
+    #[must_use]
+    pub fn is_chunk_pending(&self, pos: &Vector2<i32>) -> bool {
+        // This is probably comparable to hashmap speed due to the relatively small count of chunks
+        // (guestimated to be ~ 1024)
+        self.chunk_queue.iter().any(|(elem_pos, _)| elem_pos == pos)
+    }
+}
 
 /// Represents a Minecraft player entity.
 ///
@@ -105,7 +184,7 @@ pub struct Player {
     /// The ID of the currently open container (if any).
     pub open_container: AtomicCell<Option<u64>>,
     /// The item currently being held by the player.
-    pub carried_item: AtomicCell<Option<ItemStack>>,
+    pub carried_item: Mutex<Option<ItemStack>>,
     /// send `send_abilities_update` when changed
     /// The player's abilities and special powers.
     ///
@@ -150,15 +229,11 @@ pub struct Player {
     /// The player's total experience points
     pub experience_points: AtomicI32,
     pub experience_pick_up_delay: Mutex<u32>,
+    pub chunk_manager: Mutex<ChunkManager>,
 }
 
 impl Player {
-    pub async fn new(
-        client: Arc<Client>,
-        world: Arc<World>,
-        entity_id: EntityId,
-        gamemode: GameMode,
-    ) -> Self {
+    pub async fn new(client: Arc<Client>, world: Arc<World>, gamemode: GameMode) -> Self {
         let gameprofile = client.gameprofile.lock().await.clone().map_or_else(
             || {
                 log::error!("Client {} has no game profile!", client.id);
@@ -175,21 +250,13 @@ impl Player {
 
         let gameprofile_clone = gameprofile.clone();
         let config = client.config.lock().await.clone().unwrap_or_default();
-        let bounding_box_size = EntityDimensions {
-            width: EntityType::PLAYER.dimension[0],
-            height: EntityType::PLAYER.dimension[1],
-        };
 
         Self {
             living_entity: LivingEntity::new(Entity::new(
-                entity_id,
                 player_uuid,
                 world,
                 Vector3::new(0.0, 0.0, 0.0),
                 EntityType::PLAYER,
-                EntityType::PLAYER.eye_height,
-                AtomicCell::new(BoundingBox::new_default(&bounding_box_size)),
-                AtomicCell::new(bounding_box_size),
                 matches!(gamemode, GameMode::Creative | GameMode::Spectator),
             )),
             config: Mutex::new(config),
@@ -203,7 +270,7 @@ impl Player {
             tick_counter: AtomicI32::new(0),
             packet_sequence: AtomicI32::new(-1),
             start_mining_time: AtomicI32::new(0),
-            carried_item: AtomicCell::new(None),
+            carried_item: Mutex::new(None),
             experience_pick_up_delay: Mutex::new(0),
             teleport_id_count: AtomicI32::new(0),
             mining: AtomicBool::new(false),
@@ -233,13 +300,15 @@ impl Player {
                 .iter()
                 .find(|op| op.uuid == gameprofile_clone.id)
                 .map_or(
-                    AtomicCell::new(ADVANCED_CONFIG.commands.default_op_level),
+                    AtomicCell::new(advanced_config().commands.default_op_level),
                     |op| AtomicCell::new(op.level),
                 ),
             inventory: Mutex::new(PlayerInventory::new()),
             experience_level: AtomicI32::new(0),
             experience_progress: AtomicCell::new(0.0),
             experience_points: AtomicI32::new(0),
+            // Default to sending 16 chunks per tick
+            chunk_manager: Mutex::new(ChunkManager::new(16)),
         }
     }
 
@@ -249,11 +318,11 @@ impl Player {
 
     /// Removes the Player out of the current World
     #[allow(unused_variables)]
-    pub async fn remove(self: Arc<Self>) {
+    pub async fn remove(self: &Arc<Self>) {
         let world = self.world().await;
         self.cancel_tasks.notify_waiters();
 
-        world.remove_player(self.clone(), true).await;
+        world.remove_player(self, true).await;
 
         let cylindrical = self.watched_section.load();
 
@@ -271,19 +340,20 @@ impl Player {
         let level = &world.level;
 
         // Decrement value of watched chunks
-        let chunks_to_clean = level.mark_chunks_as_not_watched(&radial_chunks);
-
+        let chunks_to_clean = level.mark_chunks_as_not_watched(&radial_chunks).await;
         // Remove chunks with no watchers from the cache
         level.clean_chunks(&chunks_to_clean).await;
         // Remove left over entries from all possiblily loaded chunks
-        level.clean_memory(&radial_chunks);
+        level.clean_memory();
 
         log::debug!(
             "Removed player id {} ({}) ({} chunks remain cached)",
             self.gameprofile.name,
             self.client.id,
-            level.loaded_chunk_count()
+            level.loaded_chunk_count(),
         );
+
+        level.clean_up_log().await;
 
         //self.world().level.list_cached();
     }
@@ -292,7 +362,7 @@ impl Player {
         let world = self.world().await;
         let victim_entity = victim.get_entity();
         let attacker_entity = &self.living_entity.entity;
-        let config = &ADVANCED_CONFIG.pvp;
+        let config = &advanced_config().pvp;
 
         let inventory = self.inventory().lock().await;
         let item_slot = inventory.held_item();
@@ -434,6 +504,18 @@ impl Player {
             .await;
     }
 
+    /// Stops a sound playing on the client.
+    ///
+    /// # Arguments
+    ///
+    /// * `sound_id`: An optional `Identifier` specifying the sound to stop. If `None`, all sounds in the specified category (if any) will be stopped.
+    /// * `category`: An optional `SoundCategory` specifying the sound category to stop. If `None`, all sounds with the specified identifier (if any) will be stopped.
+    pub async fn stop_sound(&self, sound_id: Option<Identifier>, category: Option<SoundCategory>) {
+        self.client
+            .send_packet(&CStopSound::new(sound_id, category))
+            .await;
+    }
+
     pub async fn await_cancel(&self) {
         self.cancel_tasks.notified().await;
     }
@@ -460,6 +542,27 @@ impl Player {
             }
         }
 
+        let chunk_of_chunks = {
+            let mut chunk_manager = self.chunk_manager.lock().await;
+            chunk_manager
+                .can_send_chunk()
+                .then(|| chunk_manager.next_chunk())
+        };
+
+        if let Some(chunk_of_chunks) = chunk_of_chunks {
+            let chunk_count = chunk_of_chunks.len();
+            self.client.send_packet(&CChunkBatchStart {}).await;
+            for chunk in chunk_of_chunks {
+                let chunk = chunk.read().await;
+                // TODO: Can we check if we still need the chunk to send? Like if its a fast moving
+                // player or something
+                self.client.send_packet(&CChunkData(&chunk)).await;
+            }
+            self.client
+                .send_packet(&CChunkBatchEnd::new(chunk_count))
+                .await;
+        }
+
         self.tick_counter.fetch_add(1, Ordering::Relaxed);
 
         if self.mining.load(Ordering::Relaxed) {
@@ -479,8 +582,8 @@ impl Player {
                 self.continue_mining(
                     *pos,
                     &world,
-                    state,
-                    &block.name,
+                    &state,
+                    block.name,
                     self.start_mining_time.load(Ordering::Relaxed),
                 )
                 .await;
@@ -521,7 +624,7 @@ impl Player {
         &self,
         location: BlockPos,
         world: &World,
-        state: &State,
+        state: &BlockState,
         block_name: &str,
         starting_time: i32,
     ) {
@@ -673,7 +776,7 @@ impl Player {
     async fn unload_watched_chunks(&self, world: &World) {
         let radial_chunks = self.watched_section.load().all_chunks_within();
         let level = &world.level;
-        let chunks_to_clean = level.mark_chunks_as_not_watched(&radial_chunks);
+        let chunks_to_clean = level.mark_chunks_as_not_watched(&radial_chunks).await;
         level.clean_chunks(&chunks_to_clean).await;
         let client = self.client.clone();
         tokio::spawn(async move {
@@ -694,43 +797,13 @@ impl Player {
 
     /// Teleports the player to a different world or dimension with an optional position, yaw, and pitch.
     pub async fn teleport_world(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         new_world: Arc<World>,
         position: Option<Vector3<f64>>,
         yaw: Option<f32>,
         pitch: Option<f32>,
     ) {
-        self.set_client_loaded(false);
         let current_world = self.living_entity.entity.world.read().await.clone();
-        let uuid = self.gameprofile.id;
-        current_world.remove_player(self.clone(), false).await;
-        *self.living_entity.entity.world.write().await = new_world.clone();
-        new_world.players.write().await.insert(uuid, self.clone());
-        self.unload_watched_chunks(&current_world).await;
-        let last_pos = self.living_entity.last_pos.load();
-        let death_dimension = self.world().await.dimension_type.name();
-        let death_location = BlockPos(Vector3::new(
-            last_pos.x.round() as i32,
-            last_pos.y.round() as i32,
-            last_pos.z.round() as i32,
-        ));
-        self.client
-            .send_packet(&CRespawn::new(
-                (new_world.dimension_type as u8).into(),
-                new_world.dimension_type.name(),
-                0, // seed
-                self.gamemode.load() as u8,
-                self.gamemode.load() as i8,
-                false,
-                false,
-                Some((death_dimension, death_location)),
-                0.into(),
-                0.into(),
-                1,
-            ))
-            .await;
-        self.send_abilities_update().await;
-        self.send_permission_lvl_update().await;
         let info = &new_world.level.level_info;
         let position = if let Some(pos) = position {
             pos
@@ -751,38 +824,139 @@ impl Player {
         };
         let yaw = yaw.unwrap_or(info.spawn_angle);
         let pitch = pitch.unwrap_or(10.0);
-        self.request_teleport(position, yaw, pitch).await;
-        self.living_entity.last_pos.store(position);
 
-        new_world.send_world_info(&self, position, yaw, pitch).await;
+        send_cancellable! {{
+            PlayerChangeWorldEvent {
+                player: self.clone(),
+                previous_world: current_world.clone(),
+                new_world: new_world.clone(),
+                position,
+                yaw,
+                pitch,
+                cancelled: false,
+            };
+
+            'after: {
+                let position = event.position;
+                let yaw = event.yaw;
+                let pitch = event.pitch;
+                let new_world = event.new_world;
+
+                self.set_client_loaded(false);
+                let uuid = self.gameprofile.id;
+                current_world.remove_player(self, false).await;
+                *self.living_entity.entity.world.write().await = new_world.clone();
+                new_world.players.write().await.insert(uuid, self.clone());
+                self.unload_watched_chunks(&current_world).await;
+                let last_pos = self.living_entity.last_pos.load();
+                let death_dimension = self.world().await.dimension_type.name();
+                let death_location = BlockPos(Vector3::new(
+                    last_pos.x.round() as i32,
+                    last_pos.y.round() as i32,
+                    last_pos.z.round() as i32,
+                ));
+                self.client
+                    .send_packet(&CRespawn::new(
+                        (new_world.dimension_type as u8).into(),
+                        new_world.dimension_type.name(),
+                        0, // seed
+                        self.gamemode.load() as u8,
+                        self.gamemode.load() as i8,
+                        false,
+                        false,
+                        Some((death_dimension, death_location)),
+                        0.into(),
+                        0.into(),
+                        1,
+                    ))
+                    .await;
+                self.send_abilities_update().await;
+                self.send_permission_lvl_update().await;
+                self.clone().request_teleport(position, yaw, pitch).await;
+                self.living_entity.last_pos.store(position);
+
+                new_world.send_world_info(self, position, yaw, pitch).await;
+            }
+        }}
     }
 
     /// Yaw and Pitch in degrees
-    /// Rarly used, For example when waking up player from bed or first time spawn. Otherwise entity teleport is used
+    /// Rarly used, For example when waking up player from bed or first time spawn. Otherwise the teleport method should be used
     /// Player should respond with the `SConfirmTeleport` packet
-    pub async fn request_teleport(&self, position: Vector3<f64>, yaw: f32, pitch: f32) {
+    pub async fn request_teleport(self: &Arc<Self>, position: Vector3<f64>, yaw: f32, pitch: f32) {
         // this is the ultra special magic code used to create the teleport id
         // This returns the old value
         // This operation wraps around on overflow.
-        let i = self
-            .teleport_id_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let teleport_id = i + 1;
-        self.living_entity.set_pos(position);
-        let entity = &self.living_entity.entity;
-        entity.set_rotation(yaw, pitch);
-        *self.awaiting_teleport.lock().await = Some((teleport_id.into(), position));
-        self.client
-            .send_packet(&CPlayerPosition::new(
-                teleport_id.into(),
-                position,
-                Vector3::new(0.0, 0.0, 0.0),
-                yaw,
-                pitch,
-                // TODO
-                &[],
-            ))
-            .await;
+
+        send_cancellable! {{
+            PlayerTeleportEvent {
+                player: self.clone(),
+                from: self.living_entity.entity.pos.load(),
+                to: position,
+                cancelled: false,
+            };
+
+            'after: {
+                let position = event.to;
+                let i = self
+                    .teleport_id_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let teleport_id = i + 1;
+                self.living_entity.set_pos(position);
+                let entity = &self.living_entity.entity;
+                entity.set_rotation(yaw, pitch);
+                *self.awaiting_teleport.lock().await = Some((teleport_id.into(), position));
+                self.client
+                    .send_packet(&CPlayerPosition::new(
+                        teleport_id.into(),
+                        position,
+                        Vector3::new(0.0, 0.0, 0.0),
+                        yaw,
+                        pitch,
+                        // TODO
+                        &[],
+                    ))
+                    .await;
+            }
+        }}
+    }
+
+    /// Teleports the player to a different position with an optional yaw and pitch.
+    /// This method is identical to `entity.teleport()` but emits a `PlayerTeleportEvent` instead of a `EntityTeleportEvent`.
+    pub async fn teleport(self: &Arc<Self>, position: Vector3<f64>, yaw: f32, pitch: f32) {
+        send_cancellable! {{
+            PlayerTeleportEvent {
+                player: self.clone(),
+                from: self.living_entity.entity.pos.load(),
+                to: position,
+                cancelled: false,
+            };
+
+            'after: {
+                let position = event.to;
+                self.living_entity
+                    .entity
+                    .world
+                    .read()
+                    .await
+                    .broadcast_packet_all(&CTeleportEntity::new(
+                        self.living_entity.entity.entity_id.into(),
+                        position,
+                        Vector3::new(0.0, 0.0, 0.0),
+                        yaw,
+                        pitch,
+                        // TODO
+                        &[],
+                        self.living_entity
+                            .entity
+                            .on_ground
+                            .load(std::sync::atomic::Ordering::SeqCst),
+                    ))
+                    .await;
+                self.living_entity.entity.set_pos(position);
+                self.living_entity.entity.set_rotation(yaw, pitch);
+            }
+        }}
     }
 
     pub fn block_interaction_range(&self) -> f64 {
@@ -887,45 +1061,57 @@ impl Player {
             .await;
     }
 
-    pub async fn set_gamemode(&self, gamemode: GameMode) {
+    pub async fn set_gamemode(self: &Arc<Self>, gamemode: GameMode) {
         // We could send the same gamemode without problems. But why waste bandwidth ?
         assert_ne!(
             self.gamemode.load(),
             gamemode,
             "Setting the same gamemode as already is"
         );
-        self.gamemode.store(gamemode);
-        {
-            // use another scope so we instantly unlock abilities
-            let mut abilities = self.abilities.lock().await;
-            abilities.set_for_gamemode(gamemode);
-        };
-        self.send_abilities_update().await;
+        send_cancellable! {{
+            PlayerGamemodeChangeEvent {
+                player: self.clone(),
+                new_gamemode: gamemode,
+                previous_gamemode: self.gamemode.load(),
+                cancelled: false,
+            };
 
-        self.living_entity.entity.invulnerable.store(
-            matches!(gamemode, GameMode::Creative | GameMode::Spectator),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        self.living_entity
-            .entity
-            .world
-            .read()
-            .await
-            .broadcast_packet_all(&CPlayerInfoUpdate::new(
-                0x04,
-                &[pumpkin_protocol::client::play::Player {
-                    uuid: self.gameprofile.id,
-                    actions: vec![PlayerAction::UpdateGameMode((gamemode as i32).into())],
-                }],
-            ))
-            .await;
+            'after: {
+                let gamemode = event.new_gamemode;
+                self.gamemode.store(gamemode);
+                {
+                    // use another scope so we instantly unlock abilities
+                    let mut abilities = self.abilities.lock().await;
+                    abilities.set_for_gamemode(gamemode);
+                };
+                self.send_abilities_update().await;
 
-        self.client
-            .send_packet(&CGameEvent::new(
-                GameEvent::ChangeGameMode,
-                gamemode as i32 as f32,
-            ))
-            .await;
+                self.living_entity.entity.invulnerable.store(
+                    matches!(gamemode, GameMode::Creative | GameMode::Spectator),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                self.living_entity
+                    .entity
+                    .world
+                    .read()
+                    .await
+                    .broadcast_packet_all(&CPlayerInfoUpdate::new(
+                        0x04,
+                        &[pumpkin_protocol::client::play::Player {
+                            uuid: self.gameprofile.id,
+                            actions: vec![PlayerAction::UpdateGameMode((gamemode as i32).into())],
+                        }],
+                    ))
+                    .await;
+
+                self.client
+                    .send_packet(&CGameEvent::new(
+                        GameEvent::ChangeGameMode,
+                        gamemode as i32 as f32,
+                    ))
+                    .await;
+            }
+        }}
     }
 
     /// Send skin layers and used hand to all players
@@ -940,7 +1126,7 @@ impl Player {
             .await;
     }
 
-    pub async fn can_harvest(&self, block: &State, block_name: &str) -> bool {
+    pub async fn can_harvest(&self, block: &BlockState, block_name: &str) -> bool {
         !block.tool_required
             || self
                 .inventory
@@ -1020,22 +1206,23 @@ impl Player {
             .await;
     }
 
-    pub async fn drop_item(&self, server: &Server, stack: ItemStack) {
-        let entity = server.add_entity(
-            self.living_entity.entity.pos.load(),
-            EntityType::ITEM,
-            &self.world().await,
-        );
-        let item_entity = Arc::new(ItemEntity::new(entity, stack));
+    pub async fn drop_item(&self, item_id: u16, count: u32) {
+        let entity = self
+            .world()
+            .await
+            .create_entity(self.living_entity.entity.pos.load(), EntityType::ITEM);
+
+        // TODO: Merge stacks together
+        let item_entity = Arc::new(ItemEntity::new(entity, item_id, count).await);
         self.world().await.spawn_entity(item_entity.clone()).await;
         item_entity.send_meta_packet().await;
     }
 
-    pub async fn drop_held_item(&self, server: &Server, drop_stack: bool) {
+    pub async fn drop_held_item(&self, drop_stack: bool) {
         let mut inv = self.inventory.lock().await;
-        if let Some(item) = inv.held_item_mut() {
-            let drop_amount = if drop_stack { item.item_count } else { 1 };
-            self.drop_item(server, ItemStack::new(drop_amount, item.item))
+        if let Some(item_stack) = inv.held_item_mut() {
+            let drop_amount = if drop_stack { item_stack.item_count } else { 1 };
+            self.drop_item(item_stack.item.id, u32::from(drop_amount))
                 .await;
             inv.decrease_current_stack(drop_amount);
         }
@@ -1173,7 +1360,8 @@ impl NBTStorage for Player {
 
     async fn read_nbt(&mut self, nbt: &mut NbtCompound) {
         self.living_entity.read_nbt(nbt).await;
-        self.inventory.lock().await.selected = nbt.get_int("SelectedItemSlot").unwrap_or(0) as u32;
+        self.inventory.lock().await.selected =
+            nbt.get_int("SelectedItemSlot").unwrap_or(0) as usize;
         self.abilities.lock().await.read_nbt(nbt).await;
 
         // Load from total XP
@@ -1253,7 +1441,8 @@ impl Player {
                     .await;
             }
             SChatCommand::PACKET_ID => {
-                self.handle_chat_command(server, &(SChatCommand::read(payload)?));
+                self.handle_chat_command(server, &(SChatCommand::read(payload)?))
+                    .await;
             }
             SChatMessage::PACKET_ID => {
                 self.handle_chat_message(SChatMessage::read(payload)?).await;
@@ -1322,7 +1511,7 @@ impl Player {
                     .await;
             }
             SSetCreativeSlot::PACKET_ID => {
-                self.handle_set_creative_slot(server, SSetCreativeSlot::read(payload)?)
+                self.handle_set_creative_slot(SSetCreativeSlot::read(payload)?)
                     .await?;
             }
             SSwingArm::PACKET_ID => {
@@ -1349,6 +1538,9 @@ impl Player {
             SCloseContainer::PACKET_ID => {
                 self.handle_close_container(server, SCloseContainer::read(payload)?)
                     .await;
+            }
+            SChunkBatch::PACKET_ID => {
+                self.handle_chunk_batch(SChunkBatch::read(bytebuf)?).await;
             }
             _ => {
                 log::warn!("Failed to handle player packet id {}", packet.id);

@@ -1,44 +1,38 @@
+use crate::block::registry::BlockRegistry;
+use crate::command::commands::default_dispatcher;
+use crate::command::commands::defaultgamemode::DefaultGamemode;
+use crate::entity::EntityId;
+use crate::item::registry::ItemRegistry;
+use crate::net::EncryptionError;
+use crate::plugin::player::player_login::PlayerLoginEvent;
+use crate::plugin::server::server_broadcast::ServerBroadcastEvent;
+use crate::world::custom_bossbar::CustomBossbars;
+use crate::{
+    command::dispatcher::CommandDispatcher, entity::player::Player, net::Client, world::World,
+};
 use connection_cache::{CachedBranding, CachedStatus};
-use crossbeam::atomic::AtomicCell;
 use key_store::KeyStore;
-use pumpkin_config::{ADVANCED_CONFIG, BASIC_CONFIG};
-use pumpkin_data::entity::EntityType;
+use pumpkin_config::{BASIC_CONFIG, advanced_config};
+use pumpkin_data::block::Block;
 use pumpkin_inventory::drag_handler::DragHandler;
 use pumpkin_inventory::{Container, OpenContainer};
+use pumpkin_macros::send_cancellable;
 use pumpkin_protocol::client::login::CEncryptionRequest;
 use pumpkin_protocol::{ClientPacket, client::config::CPluginMessage};
 use pumpkin_registry::{DimensionType, Registry};
-use pumpkin_util::math::boundingbox::{BoundingBox, EntityDimensions};
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector2::Vector2;
-use pumpkin_util::math::vector3::Vector3;
 use pumpkin_util::text::TextComponent;
-use pumpkin_world::block::registry::Block;
 use pumpkin_world::dimension::Dimension;
 use rand::prelude::SliceRandom;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::AtomicU32;
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicI32, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 use tokio::sync::{Mutex, RwLock};
-
-use crate::block::default_block_properties_manager;
-use crate::block::properties::BlockPropertiesManager;
-use crate::block::registry::BlockRegistry;
-use crate::command::commands::default_dispatcher;
-use crate::entity::{Entity, EntityId};
-use crate::item::registry::ItemRegistry;
-use crate::net::EncryptionError;
-use crate::world::custom_bossbar::CustomBossbars;
-use crate::{
-    command::dispatcher::CommandDispatcher, entity::player::Player, net::Client, world::World,
-};
 
 mod connection_cache;
 mod key_store;
@@ -60,8 +54,6 @@ pub struct Server {
     pub block_registry: Arc<BlockRegistry>,
     /// Item Behaviour
     pub item_registry: Arc<ItemRegistry>,
-    /// Creates and stores block property registry and managed behaviours.
-    pub block_properties_manager: Arc<BlockPropertiesManager>,
     /// Manages multiple worlds within the server.
     pub worlds: RwLock<Vec<Arc<World>>>,
     // All the dimensions that exists on the server,
@@ -72,14 +64,14 @@ pub struct Server {
     // TODO: should have per player open_containers
     pub open_containers: RwLock<HashMap<u64, OpenContainer>>,
     pub drag_handler: DragHandler,
-    /// Assigns unique IDs to entities.
-    entity_id: AtomicI32,
     /// Assigns unique IDs to containers.
     container_id: AtomicU32,
     /// Manages authentication with a authentication server, if enabled.
     pub auth_client: Option<reqwest::Client>,
     /// The server's custom bossbars
     pub bossbars: Mutex<CustomBossbars>,
+    /// The default gamemode when a player joins the server (reset every restart)
+    pub defaultgamemode: Mutex<DefaultGamemode>,
 }
 
 impl Server {
@@ -89,10 +81,10 @@ impl Server {
         let auth_client = BASIC_CONFIG.online_mode.then(|| {
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_millis(u64::from(
-                    ADVANCED_CONFIG.networking.authentication.connect_timeout,
+                    advanced_config().networking.authentication.connect_timeout,
                 )))
                 .read_timeout(Duration::from_millis(u64::from(
-                    ADVANCED_CONFIG.networking.authentication.read_timeout,
+                    advanced_config().networking.authentication.read_timeout,
                 )))
                 .build()
                 .expect("Failed to to make reqwest client")
@@ -109,17 +101,10 @@ impl Server {
             DimensionType::Overworld,
         );
 
-        // Spawn chunks are never unloaded
-        for chunk in Self::spawn_chunks() {
-            world.level.mark_chunk_as_newly_watched(chunk);
-        }
-
         Self {
             cached_registry: Registry::get_synced(),
             open_containers: RwLock::new(HashMap::new()),
             drag_handler: DragHandler::new(),
-            // 0 is invalid
-            entity_id: 2.into(),
             container_id: 0.into(),
             worlds: RwLock::new(vec![Arc::new(world)]),
             dimensions: vec![
@@ -130,22 +115,28 @@ impl Server {
             ],
             command_dispatcher,
             block_registry: super::block::default_registry(),
-            item_registry: super::item::default_registry(),
-            block_properties_manager: default_block_properties_manager(),
+            item_registry: super::item::items::default_registry(),
             auth_client,
             key_store: KeyStore::new(),
             server_listing: Mutex::new(CachedStatus::new()),
             server_branding: CachedBranding::new(),
             bossbars: Mutex::new(CustomBossbars::new()),
+            defaultgamemode: Mutex::new(DefaultGamemode {
+                gamemode: BASIC_CONFIG.default_gamemode,
+            }),
         }
     }
 
     const SPAWN_CHUNK_RADIUS: i32 = 1;
 
-    pub fn spawn_chunks() -> impl Iterator<Item = Vector2<i32>> {
-        (-Self::SPAWN_CHUNK_RADIUS..=Self::SPAWN_CHUNK_RADIUS).flat_map(|x| {
-            (-Self::SPAWN_CHUNK_RADIUS..=Self::SPAWN_CHUNK_RADIUS).map(move |z| Vector2::new(x, z))
-        })
+    #[must_use]
+    pub fn spawn_chunks() -> Box<[Vector2<i32>]> {
+        (-Self::SPAWN_CHUNK_RADIUS..=Self::SPAWN_CHUNK_RADIUS)
+            .flat_map(|x| {
+                (-Self::SPAWN_CHUNK_RADIUS..=Self::SPAWN_CHUNK_RADIUS)
+                    .map(move |z| Vector2::new(x, z))
+            })
+            .collect()
     }
 
     /// Adds a new player to the server.
@@ -173,26 +164,36 @@ impl Server {
     /// # Note
     ///
     /// You still have to spawn the Player in the World to make then to let them Join and make them Visible
-    pub async fn add_player(&self, client: Arc<Client>) -> (Arc<Player>, Arc<World>) {
-        let entity_id = self.new_entity_id();
-        let gamemode = BASIC_CONFIG.default_gamemode;
+    pub async fn add_player(&self, client: Arc<Client>) -> Option<(Arc<Player>, Arc<World>)> {
+        let gamemode = self.defaultgamemode.lock().await.gamemode;
         // Basically the default world
         // TODO: select default from config
         let world = &self.worlds.read().await[0];
 
-        let player = Arc::new(Player::new(client, world.clone(), entity_id, gamemode).await);
-        world
-            .add_player(player.gameprofile.id, player.clone())
-            .await;
-        // TODO: Config if we want increase online
-        if let Some(config) = player.client.config.lock().await.as_ref() {
-            // TODO: Config so we can also just ignore this hehe
-            if config.server_listing {
-                self.server_listing.lock().await.add_player();
-            }
-        }
+        let player = Arc::new(Player::new(client, world.clone(), gamemode).await);
+        send_cancellable! {{
+            PlayerLoginEvent::new(player.clone(), TextComponent::text("You have been kicked from the server"));
 
-        (player, world.clone())
+            'after: {
+                world
+                    .add_player(player.gameprofile.id, player.clone())
+                    .await;
+                // TODO: Config if we want increase online
+                if let Some(config) = player.client.config.lock().await.as_ref() {
+                    // TODO: Config so we can also just ignore this hehe
+                    if config.server_listing {
+                        self.server_listing.lock().await.add_player();
+                    }
+                }
+
+                Some((player, world.clone()))
+            }
+
+            'cancelled: {
+                player.kick(event.kick_message).await;
+                None
+            }
+        }}
     }
 
     pub async fn remove_player(&self) {
@@ -206,49 +207,6 @@ impl Server {
         }
 
         log::info!("Completed world save");
-    }
-
-    /// Adds a new living entity to the server. This does not Spawn the entity
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing:
-    ///
-    /// - `Arc<LivingEntity>`: A reference to the newly created living entity.
-    /// - `Arc<World>`: A reference to the world that the living entity was added to.
-    /// - `Uuid`: The uuid of the newly created living entity to be used to send to the client.
-    pub fn add_entity(
-        &self,
-        position: Vector3<f64>,
-        entity_type: EntityType,
-        world: &Arc<World>,
-    ) -> Entity {
-        let entity_id = self.new_entity_id();
-
-        // TODO: this should be resolved to a integer using a macro when calling this function
-        let bounding_box_size = EntityDimensions {
-            width: entity_type.dimension[0],
-            height: entity_type.dimension[1],
-        };
-
-        // TODO: standing eye height should be per mob
-        let new_uuid = uuid::Uuid::new_v4();
-        Entity::new(
-            entity_id,
-            new_uuid,
-            world.clone(),
-            position,
-            entity_type,
-            entity_type.eye_height,
-            AtomicCell::new(BoundingBox::new_from_pos(
-                position.x,
-                position.y,
-                position.z,
-                &bounding_box_size,
-            )),
-            AtomicCell::new(bounding_box_size),
-            false,
-        )
     }
 
     pub async fn try_get_container(
@@ -331,11 +289,17 @@ impl Server {
         chat_type: u32,
         target_name: Option<&TextComponent>,
     ) {
-        for world in self.worlds.read().await.iter() {
-            world
-                .broadcast_message(message, sender_name, chat_type, target_name)
-                .await;
-        }
+        send_cancellable! {{
+            ServerBroadcastEvent::new(message.clone(), sender_name.clone());
+
+            'after: {
+                for world in self.worlds.read().await.iter() {
+                    world
+                        .broadcast_message(&event.message, &event.sender, chat_type, target_name)
+                        .await;
+                }
+            }
+        }}
     }
 
     /// Searches for a player by their username across all worlds.
@@ -439,12 +403,6 @@ impl Server {
             }
         }
         false
-    }
-
-    /// Generates a new entity id
-    /// This should be global
-    pub fn new_entity_id(&self) -> EntityId {
-        self.entity_id.fetch_add(1, Ordering::SeqCst)
     }
 
     /// Generates a new container id
