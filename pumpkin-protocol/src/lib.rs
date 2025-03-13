@@ -1,11 +1,13 @@
-use std::{io::Read, num::NonZeroU16};
+use std::{borrow::BorrowMut, io::Read, num::NonZeroU16};
 
-use bytes::BufMut;
+use aes::cipher::{BlockDecryptMut, BlockSizeUser};
+use async_compression::tokio::bufread::ZlibDecoder;
+use bytes::{BufMut, Bytes};
 use codec::{identifier::Identifier, var_int::VarInt};
-use flate2::read::ZlibDecoder;
 use pumpkin_util::text::{TextComponent, style::Style};
 use ser::{ByteBufMut, NetworkRead, ReadingError, packet::Packet};
 use serde::{Deserialize, Serialize, Serializer};
+use tokio::io::{AsyncBufRead, AsyncRead, BufReader};
 
 #[cfg(feature = "clientbound")]
 pub mod client;
@@ -22,7 +24,8 @@ pub mod server;
 /// Don't forget to change this when porting
 pub const CURRENT_MC_PROTOCOL: NonZeroU16 = unsafe { NonZeroU16::new_unchecked(769) };
 
-pub const MAX_PACKET_SIZE: usize = 2097152;
+pub const MAX_PACKET_SIZE: u64 = 2097152;
+pub const MAX_PACKET_DATA_SIZE: usize = 8388608;
 
 pub type FixedBitSet = Box<[u8]>;
 
@@ -96,23 +99,51 @@ pub struct SoundEvent {
     pub range: Option<f32>,
 }
 
-pub struct RawPacket<R: Read> {
-    pub id: i32,
-    pub payload: RawPacketPayload<R>,
+type Aes128Cfb8Dec = cfb8::Decryptor<aes::Aes128>;
+
+pub struct StreamDecryptor<R: AsyncRead + Unpin> {
+    cipher: Aes128Cfb8Dec,
+    read: R,
 }
 
-pub enum RawPacketPayload<R: Read> {
-    Decompress(ZlibDecoder<R>),
-    Standard(R),
-}
-
-impl<R: Read> Read for RawPacketPayload<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Decompress(decoder) => decoder.read(buf),
-            Self::Standard(raw) => raw.read(buf),
+impl<R: AsyncRead + Unpin> StreamDecryptor<R> {
+    pub fn new(cipher: Aes128Cfb8Dec, stream: R) -> Self {
+        Self {
+            cipher,
+            read: stream,
         }
     }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for StreamDecryptor<R> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let ref_self = self.get_mut();
+        let read = std::pin::Pin::new(&mut ref_self.read);
+        let cipher = &mut ref_self.cipher;
+
+        // Get the starting position
+        let original_fill = buf.filled().len();
+        // Read the raw data
+        let internal_poll = read.poll_read(cx, buf);
+
+        if matches!(internal_poll, std::task::Poll::Ready(Ok(_))) {
+            // Decrypt the raw data in-place, note that our block size is 1 byte, so this is always safe
+            for block in buf.filled_mut()[original_fill..].chunks_mut(Aes128Cfb8Dec::block_size()) {
+                cipher.decrypt_block_mut(block.into());
+            }
+        }
+
+        internal_poll
+    }
+}
+
+pub struct RawPacket {
+    pub id: i32,
+    pub payload: Bytes,
 }
 
 // TODO: Have the input be `impl Write`

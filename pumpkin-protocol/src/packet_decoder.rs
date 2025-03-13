@@ -1,145 +1,157 @@
-use std::io::Cursor;
-
-use aes::cipher::{BlockDecryptMut, BlockSizeUser, KeyIvInit, generic_array::GenericArray};
-use bytes::{Buf, Bytes, BytesMut};
-use flate2::read::ZlibDecoder;
+use aes::cipher::KeyIvInit;
+use async_compression::tokio::bufread::ZlibDecoder;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 
 use crate::{
-    MAX_PACKET_SIZE, RawPacket, RawPacketPayload, VarInt,
-    codec::Codec,
-    ser::{NetworkRead, ReadingError},
+    Aes128Cfb8Dec, CompressionThreshold, MAX_PACKET_DATA_SIZE, MAX_PACKET_SIZE, RawPacket,
+    StreamDecryptor, VarInt, codec::Codec, ser::ReadingError,
 };
 
-type Cipher = cfb8::Decryptor<aes::Aes128>;
+// decrypt -> decompress -> raw
+pub enum DecompressionReader<R: AsyncRead + Unpin> {
+    Decompress(ZlibDecoder<BufReader<R>>),
+    None(R),
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for DecompressionReader<R> {
+    #[inline]
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Decompress(reader) => {
+                let reader = std::pin::Pin::new(reader);
+                reader.poll_read(cx, buf)
+            }
+            Self::None(reader) => {
+                let reader = std::pin::Pin::new(reader);
+                reader.poll_read(cx, buf)
+            }
+        }
+    }
+}
+
+pub enum DecryptionReader<R: AsyncRead + Unpin> {
+    Decrypt(Box<StreamDecryptor<R>>),
+    None(R),
+}
+
+impl<R: AsyncRead + Unpin> DecryptionReader<R> {
+    pub fn upgrade(self, cipher: Aes128Cfb8Dec) -> Self {
+        match self {
+            Self::None(stream) => Self::Decrypt(Box::new(StreamDecryptor::new(cipher, stream))),
+            _ => panic!("Cannot upgrade a stream that already has a cipher!"),
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for DecryptionReader<R> {
+    #[inline]
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Decrypt(reader) => {
+                let reader = std::pin::Pin::new(reader);
+                reader.poll_read(cx, buf)
+            }
+            Self::None(reader) => {
+                let reader = std::pin::Pin::new(reader);
+                reader.poll_read(cx, buf)
+            }
+        }
+    }
+}
 
 /// Decoder: Client -> Server
 /// Supports ZLib decoding/decompression
 /// Supports Aes128 Encryption
-#[derive(Default)]
-pub struct PacketDecoder {
-    buf: BytesMut,
-    cipher: Option<Cipher>,
-    expect_compression: bool,
+pub struct NetworkDecoder<R: AsyncRead + Unpin> {
+    reader: DecryptionReader<R>,
+    compression: Option<CompressionThreshold>,
 }
 
-impl PacketDecoder {
-    pub fn decode(&mut self) -> Result<Option<RawPacket<Cursor<Bytes>>>, PacketDecodeError> {
-        let packet_len = match VarInt::decode(&mut &self.buf[..]) {
+impl<R: AsyncRead + Unpin> NetworkDecoder<R> {
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader: DecryptionReader::None(reader),
+            compression: None,
+        }
+    }
+
+    pub fn set_compression(&mut self, threshold: Option<CompressionThreshold>) {
+        self.compression = threshold;
+    }
+
+    /// NOTE: Encryption can only be set; a minecraft stream cannot go back to being unencrypted
+    pub fn set_encryption(&mut self, key: &[u8; 16]) {
+        if matches!(self.reader, DecryptionReader::Decrypt(_)) {
+            panic!("Cannot upgrade a stream that already has a cipher!");
+        }
+        let cipher = Aes128Cfb8Dec::new_from_slices(key, key).expect("invalid key");
+        take_mut::take(&mut self.reader, |decoder| decoder.upgrade(cipher));
+    }
+
+    pub async fn get_raw_packet(&mut self) -> Result<RawPacket, PacketDecodeError> {
+        let packet_len = match VarInt::decode_async(&mut self.reader).await {
             Ok(len) => len,
-            Err(ReadingError::Incomplete(_)) => return Ok(None),
             _ => Err(PacketDecodeError::MalformedLength)?,
         };
 
-        let packet_len_byte_len = packet_len.written_size();
-        let packet_len = packet_len.0 as usize;
+        let packet_len = packet_len.0 as u64;
 
         if !(0..=MAX_PACKET_SIZE).contains(&packet_len) {
             Err(PacketDecodeError::OutOfBounds)?
         }
 
-        if self.buf.len() - packet_len_byte_len < packet_len {
-            // Not enough data arrived yet.
-            return Ok(None);
-        }
+        let mut bounded_reader = (&mut self.reader).take(packet_len);
 
-        let total_packet_len = packet_len_byte_len + packet_len;
-        let mut data = self.buf.split_to(total_packet_len).freeze();
+        let mut reader = if let Some(threshold) = self.compression {
+            let decompressed_length = VarInt::decode_async(&mut bounded_reader).await?;
+            let raw_packet_length = packet_len as usize - decompressed_length.written_size();
+            let decompressed_length = decompressed_length.0 as usize;
 
-        // TODO: Create a new buffer so we don't hold ownership of all the bytes we returned
-        // preventing them from being dropped
-        /*
-        let mut new_buf = BytesMut::with_capacity(self.buf.len());
-        new_buf.extend(&self.buf);
-        self.buf = new_buf;
-        */
-
-        // Go past the packet length VarInt
-        data.advance(packet_len_byte_len);
-        let mut reader = if self.expect_compression {
-            let data_len =
-                VarInt::decode(&mut &data[..]).map_err(|_| PacketDecodeError::TooLong)?;
-            let data_len_byte_len = data_len.written_size();
-            let data_len = data_len.0 as usize;
-
-            if !(0..=MAX_PACKET_SIZE).contains(&data_len) {
-                Err(PacketDecodeError::OutOfBounds)?
+            if !(0..=MAX_PACKET_DATA_SIZE).contains(&decompressed_length) {
+                Err(PacketDecodeError::TooLong)?
             }
 
-            // Is this packet compressed?
-            data.advance(data_len_byte_len);
-            if data_len > 0 {
-                RawPacketPayload::Decompress(ZlibDecoder::new(Cursor::new(data)))
+            if decompressed_length > 0 {
+                DecompressionReader::Decompress(ZlibDecoder::new(BufReader::new(bounded_reader)))
             } else {
-                debug_assert_eq!(data_len, 0);
-                RawPacketPayload::Standard(Cursor::new(data))
+                // Validate that we are less than the compression threshold
+                if raw_packet_length > threshold {
+                    Err(PacketDecodeError::NotCompressed)?
+                }
+
+                DecompressionReader::None(bounded_reader)
             }
         } else {
-            // no compression
-            RawPacketPayload::Standard(Cursor::new(data))
+            DecompressionReader::None(bounded_reader)
         };
 
-        let packet_id = reader
-            .get_var_int()
+        // TODO: Serde is sync so we need to write to a buffer here :(
+        // Is there a way to deserialize in an asynchronous manner?
+
+        let packet_id = VarInt::decode_async(&mut reader)
+            .await
             .map_err(|_| PacketDecodeError::DecodeID)?
             .0;
 
-        Ok(Some(RawPacket {
+        let mut payload = Vec::new();
+        reader
+            .read_to_end(&mut payload)
+            .await
+            .map_err(|err| PacketDecodeError::FailedDecompression(err.to_string()))?;
+
+        Ok(RawPacket {
             id: packet_id,
-            payload: reader,
-        }))
-    }
-
-    pub fn set_encryption(&mut self, key: Option<&[u8; 16]>) {
-        if let Some(key) = key {
-            assert!(self.cipher.is_none(), "encryption is already enabled");
-            let mut cipher = Cipher::new_from_slices(key, key).expect("invalid key");
-            // Don't forget to decrypt the data we already have.
-            Self::decrypt_bytes(&mut cipher, &mut self.buf);
-            self.cipher = Some(cipher);
-        } else {
-            assert!(self.cipher.is_some(), "encryption is already disabled");
-            self.cipher = None;
-        }
-    }
-
-    /// Sets ZLib Decompression
-    pub fn set_compression(&mut self, compression: bool) {
-        self.expect_compression = compression;
-    }
-
-    fn decrypt_bytes(cipher: &mut Cipher, bytes: &mut [u8]) {
-        for chunk in bytes.chunks_mut(Cipher::block_size()) {
-            let gen_arr = GenericArray::from_mut_slice(chunk);
-            cipher.decrypt_block_mut(gen_arr);
-        }
-    }
-
-    pub fn queue_bytes(&mut self, mut bytes: BytesMut) {
-        if let Some(cipher) = &mut self.cipher {
-            Self::decrypt_bytes(cipher, &mut bytes);
-        }
-
-        self.buf.unsplit(bytes);
-    }
-
-    pub fn queue_slice(&mut self, bytes: &[u8]) {
-        let len = self.buf.len();
-
-        self.buf.extend_from_slice(bytes);
-
-        if let Some(cipher) = &mut self.cipher {
-            let slice = &mut self.buf[len..];
-            Self::decrypt_bytes(cipher, slice);
-        }
-    }
-
-    pub fn take_capacity(&mut self) -> BytesMut {
-        self.buf.split_off(self.buf.len())
-    }
-
-    pub fn reserve(&mut self, additional: usize) {
-        self.buf.reserve(additional);
+            payload: payload.into(),
+        })
     }
 }
 
@@ -155,20 +167,30 @@ pub enum PacketDecodeError {
     MalformedLength,
     #[error("failed to decompress packet: {0}")]
     FailedDecompression(String), // Updated to include error details
+    #[error("packet is uncompressed but greater than the threshold")]
+    NotCompressed,
+}
+
+impl From<ReadingError> for PacketDecodeError {
+    fn from(value: ReadingError) -> Self {
+        Self::FailedDecompression(value.to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+
+    use std::io::Write;
 
     use crate::ser::ByteBufMut;
 
     use super::*;
     use aes::Aes128;
-    use bytes::BufMut;
+    use bytes::{BufMut, BytesMut};
     use cfb8::Encryptor as Cfb8Encryptor;
     use cfb8::cipher::AsyncStreamCipher;
-    use flate2::{Compression, write::ZlibEncoder};
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
 
     /// Helper function to compress data using libdeflater's Zlib compressor
     fn compress_zlib(data: &[u8]) -> Vec<u8> {
@@ -238,8 +260,8 @@ mod tests {
     }
 
     /// Test decoding without compression and encryption
-    #[test]
-    fn test_decode_without_compression_and_encryption() {
+    #[tokio::test]
+    async fn test_decode_without_compression_and_encryption() {
         // Sample packet data: packet_id = 1, payload = "Hello"
         let packet_id = 1;
         let payload = b"Hello";
@@ -248,30 +270,18 @@ mod tests {
         let packet = build_packet(packet_id, payload, false, None, None);
 
         // Initialize the decoder without compression and encryption
-        let mut decoder = PacketDecoder::default();
-        decoder.set_compression(false);
-
-        // Feed the packet to the decoder
-        decoder.queue_slice(&packet);
+        let mut decoder = NetworkDecoder::new(packet.as_slice());
 
         // Attempt to decode
-        let result = decoder.decode().expect("Decoding failed");
-        assert!(result.is_some());
-
-        let mut raw_packet = result.unwrap();
-        let mut decoded_payload = Vec::new();
-        raw_packet
-            .payload
-            .read_to_end(&mut decoded_payload)
-            .unwrap();
+        let raw_packet = decoder.get_raw_packet().await.expect("Decoding failed");
 
         assert_eq!(raw_packet.id, packet_id);
-        assert_eq!(decoded_payload, payload);
+        assert_eq!(raw_packet.payload.as_ref(), payload);
     }
 
     /// Test decoding with compression
-    #[test]
-    fn test_decode_with_compression() {
+    #[tokio::test]
+    async fn test_decode_with_compression() {
         // Sample packet data: packet_id = 2, payload = "Hello, compressed world!"
         let packet_id = 2;
         let payload = b"Hello, compressed world!";
@@ -280,67 +290,44 @@ mod tests {
         let packet = build_packet(packet_id, payload, true, None, None);
 
         // Initialize the decoder with compression enabled
-        let mut decoder = PacketDecoder::default();
-        decoder.set_compression(true);
-
-        // Feed the packet to the decoder
-        decoder.queue_slice(&packet);
+        let mut decoder = NetworkDecoder::new(packet.as_slice());
+        // Larger than payload
+        decoder.set_compression(Some(1000));
 
         // Attempt to decode
-        let result = decoder.decode().expect("Decoding failed");
-        assert!(result.is_some());
-
-        let mut raw_packet = result.unwrap();
-        let mut decoded_payload = Vec::new();
-        raw_packet
-            .payload
-            .read_to_end(&mut decoded_payload)
-            .unwrap();
+        let raw_packet = decoder.get_raw_packet().await.expect("Decoding failed");
 
         assert_eq!(raw_packet.id, packet_id);
-        assert_eq!(decoded_payload, payload);
+        assert_eq!(raw_packet.payload.as_ref(), payload);
     }
 
     /// Test decoding with encryption
-    #[test]
-    fn test_decode_with_encryption() {
+    #[tokio::test]
+    async fn test_decode_with_encryption() {
         // Sample packet data: packet_id = 3, payload = "Hello, encrypted world!"
         let packet_id = 3;
         let payload = b"Hello, encrypted world!";
 
         // Define encryption key and IV
         let key = [0x00u8; 16]; // Example key
-        let iv = [0x00u8; 16]; // Example IV
 
         // Build the packet with encryption enabled (no compression)
-        let packet = build_packet(packet_id, payload, false, Some(&key), Some(&iv));
+        let packet = build_packet(packet_id, payload, false, Some(&key), Some(&key));
 
         // Initialize the decoder with encryption enabled
-        let mut decoder = PacketDecoder::default();
-        decoder.set_compression(false);
-        decoder.set_encryption(Some(&key));
-
-        // Feed the encrypted packet to the decoder
-        decoder.queue_slice(&packet);
+        let mut decoder = NetworkDecoder::new(packet.as_slice());
+        decoder.set_encryption(&key);
 
         // Attempt to decode
-        let result = decoder.decode().expect("Decoding failed");
-        assert!(result.is_some());
-
-        let mut raw_packet = result.unwrap();
-        let mut decoded_payload = Vec::new();
-        raw_packet
-            .payload
-            .read_to_end(&mut decoded_payload)
-            .unwrap();
+        let raw_packet = decoder.get_raw_packet().await.expect("Decoding failed");
 
         assert_eq!(raw_packet.id, packet_id);
-        assert_eq!(decoded_payload, payload);
+        assert_eq!(raw_packet.payload.as_ref(), payload);
     }
 
     /// Test decoding with both compression and encryption
-    #[test]
-    fn test_decode_with_compression_and_encryption() {
+    #[tokio::test]
+    async fn test_decode_with_compression_and_encryption() {
         // Sample packet data: packet_id = 4, payload = "Hello, compressed and encrypted world!"
         let packet_id = 4;
         let payload = b"Hello, compressed and encrypted world!";
@@ -353,31 +340,20 @@ mod tests {
         let packet = build_packet(packet_id, payload, true, Some(&key), Some(&iv));
 
         // Initialize the decoder with both compression and encryption enabled
-        let mut decoder = PacketDecoder::default();
-        decoder.set_compression(true);
-        decoder.set_encryption(Some(&key));
-
-        // Feed the encrypted and compressed packet to the decoder
-        decoder.queue_slice(&packet);
+        let mut decoder = NetworkDecoder::new(packet.as_slice());
+        decoder.set_compression(Some(1000));
+        decoder.set_encryption(&key);
 
         // Attempt to decode
-        let result = decoder.decode().expect("Decoding failed");
-        assert!(result.is_some());
-
-        let mut raw_packet = result.unwrap();
-        let mut decoded_payload = Vec::new();
-        raw_packet
-            .payload
-            .read_to_end(&mut decoded_payload)
-            .unwrap();
+        let raw_packet = decoder.get_raw_packet().await.expect("Decoding failed");
 
         assert_eq!(raw_packet.id, packet_id);
-        assert_eq!(decoded_payload, payload);
+        assert_eq!(raw_packet.payload.as_ref(), payload);
     }
 
     /// Test decoding with invalid compressed data
-    #[test]
-    fn test_decode_with_invalid_compressed_data() {
+    #[tokio::test]
+    async fn test_decode_with_invalid_compressed_data() {
         // Sample packet data: packet_id = 5, payload_len = 10, but compressed data is invalid
         let data_len = 10; // Expected decompressed size
         let invalid_compressed_data = vec![0xFF, 0xFF, 0xFF]; // Invalid Zlib data
@@ -400,14 +376,11 @@ mod tests {
         let packet_bytes = packet_buffer;
 
         // Initialize the decoder with compression enabled
-        let mut decoder = PacketDecoder::default();
-        decoder.set_compression(true);
-
-        // Feed the invalid compressed packet to the decoder
-        decoder.queue_slice(&packet_bytes);
+        let mut decoder = NetworkDecoder::new(&packet_bytes[..]);
+        decoder.set_compression(Some(1000));
 
         // Attempt to decode and expect a decompression error
-        let result = decoder.decode();
+        let result = decoder.get_raw_packet().await;
 
         if result.is_ok() {
             panic!("This should have errored!");
@@ -415,8 +388,8 @@ mod tests {
     }
 
     /// Test decoding with a zero-length packet
-    #[test]
-    fn test_decode_with_zero_length_packet() {
+    #[tokio::test]
+    async fn test_decode_with_zero_length_packet() {
         // Sample packet data: packet_id = 7, payload = "" (empty)
         let packet_id = 7;
         let payload = b"";
@@ -425,34 +398,23 @@ mod tests {
         let packet = build_packet(packet_id, payload, false, None, None);
 
         // Initialize the decoder without compression and encryption
-        let mut decoder = PacketDecoder::default();
-        decoder.set_compression(false);
+        let mut decoder = NetworkDecoder::new(packet.as_slice());
 
-        // Feed the packet to the decoder
-        decoder.queue_slice(&packet);
+        // Attempt to decode and expect a read error
+        let result = decoder.get_raw_packet().await;
 
-        // Attempt to decode
-        let result = decoder.decode().expect("Decoding failed");
-        assert!(result.is_some());
-
-        let mut raw_packet = result.unwrap();
-        let mut decoded_payload = Vec::new();
-        raw_packet
-            .payload
-            .read_to_end(&mut decoded_payload)
-            .unwrap();
-
-        assert_eq!(raw_packet.id, packet_id);
-        assert_eq!(decoded_payload, payload);
+        if result.is_ok() {
+            panic!("This should have errored!");
+        }
     }
 
     /// Test decoding with maximum length packet
-    #[test]
-    fn test_decode_with_maximum_length_packet() {
+    #[tokio::test]
+    async fn test_decode_with_maximum_length_packet() {
         // Sample packet data: packet_id = 8, payload = "A" repeated MAX_PACKET_SIZE times
         // Sample packet data: packet_id = 8, payload = "A" repeated (MAX_PACKET_SIZE - 1) times
         let packet_id = 8;
-        let payload = vec![0x41u8; MAX_PACKET_SIZE - 1]; // "A" repeated
+        let payload = vec![0x41u8; MAX_PACKET_SIZE as usize - 1]; // "A" repeated
 
         // Build the packet with compression enabled
         let packet = build_packet(packet_id, &payload, true, None, None);
@@ -462,27 +424,14 @@ mod tests {
         );
 
         // Initialize the decoder with compression enabled
-        let mut decoder = PacketDecoder::default();
-        decoder.set_compression(true);
-
-        // Feed the packet to the decoder
-        decoder.queue_slice(&packet);
+        let mut decoder = NetworkDecoder::new(packet.as_slice());
+        decoder.set_compression(Some(MAX_PACKET_SIZE as usize + 1));
 
         // Attempt to decode
-        let result = decoder.decode().expect("Decoding failed");
-        assert!(
-            result.is_some(),
-            "Decoder returned None when it should have decoded a packet"
-        );
+        let result = decoder.get_raw_packet().await;
 
-        let mut raw_packet = result.unwrap();
-        let mut decoded_payload = Vec::new();
-        raw_packet
-            .payload
-            .read_to_end(&mut decoded_payload)
-            .unwrap();
-
+        let raw_packet = result.unwrap();
         assert_eq!(raw_packet.id, packet_id);
-        assert_eq!(decoded_payload, payload);
+        assert_eq!(raw_packet.payload.as_ref(), payload);
     }
 }

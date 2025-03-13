@@ -8,6 +8,7 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{SeqAccess, Visitor},
 };
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub type VarIntType = i32;
 
@@ -46,6 +47,23 @@ impl Codec<Self> for VarInt {
         let mut val = 0;
         for i in 0..Self::MAX_SIZE.get() {
             let byte = read.get_u8_be()?;
+            val |= (i32::from(byte) & 0x7F) << (i * 7);
+            if byte & 0x80 == 0 {
+                return Ok(VarInt(val));
+            }
+        }
+        Err(ReadingError::TooLarge("VarInt".to_string()))
+    }
+}
+
+impl VarInt {
+    pub async fn decode_async(read: &mut (impl AsyncRead + Unpin)) -> Result<Self, ReadingError> {
+        let mut val = 0;
+        for i in 0..Self::MAX_SIZE.get() {
+            let byte = read
+                .read_u8()
+                .await
+                .map_err(|err| ReadingError::Incomplete(err.to_string()))?;
             val |= (i32::from(byte) & 0x7F) << (i * 7);
             if byte & 0x80 == 0 {
                 return Ok(VarInt(val));

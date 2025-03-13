@@ -2,7 +2,6 @@ use std::io::Write;
 
 use aes::cipher::{BlockEncryptMut, BlockSizeUser, KeyIvInit, generic_array::GenericArray};
 use bytes::{BufMut, BytesMut};
-use flate2::{Compression, write::ZlibEncoder};
 use thiserror::Error;
 
 use crate::{
@@ -70,15 +69,18 @@ impl PacketEncoder {
                 // Clear the compression buffer
                 self.compress_buf.clear();
 
+                todo!();
+                /*
                 ZlibEncoder::new(&mut self.compress_buf, Compression::new(compression_level))
                     .write_all(data_to_compress)
                     .map_err(|e| PacketEncodeError::CompressionFailed(e.to_string()))?;
+                */
 
                 let data_len_size = VarInt(data_len as i32).written_size();
 
                 let packet_len = data_len_size + self.compress_buf.len();
 
-                if packet_len >= MAX_PACKET_SIZE {
+                if packet_len >= MAX_PACKET_SIZE as usize {
                     return Err(PacketEncodeError::TooLong(packet_len));
                 }
 
@@ -91,7 +93,7 @@ impl PacketEncoder {
                 let data_len_size = 1;
                 let packet_len = data_len_size + data_len;
 
-                if packet_len >= MAX_PACKET_SIZE {
+                if packet_len >= MAX_PACKET_SIZE as usize {
                     Err(PacketEncodeError::TooLong(packet_len))?
                 }
 
@@ -115,7 +117,7 @@ impl PacketEncoder {
 
         let packet_len = data_len;
 
-        if packet_len >= MAX_PACKET_SIZE {
+        if packet_len >= MAX_PACKET_SIZE as usize {
             Err(PacketEncodeError::TooLong(packet_len))?
         }
 
@@ -204,7 +206,6 @@ mod tests {
     use aes::Aes128;
     use cfb8::Decryptor as Cfb8Decryptor;
     use cfb8::cipher::AsyncStreamCipher;
-    use flate2::read::ZlibDecoder;
     use pumpkin_data::packet::clientbound::STATUS_STATUS_RESPONSE;
     use pumpkin_macros::packet;
     use serde::Serialize;
@@ -232,7 +233,8 @@ mod tests {
     /// Helper function to decompress data using libdeflater's Zlib decompressor
     fn decompress_zlib(data: &[u8], expected_size: usize) -> Result<Vec<u8>, std::io::Error> {
         let mut decompressed = vec![0u8; expected_size];
-        ZlibDecoder::new(data).read_exact(&mut decompressed)?;
+        todo!();
+        //ZlibDecoder::new(data).read_exact(&mut decompressed)?;
         Ok(decompressed)
     }
 
@@ -484,9 +486,9 @@ mod tests {
         // Build the packet without compression and encryption
         let packet_bytes = build_packet_with_encoder(&packet, None, None);
 
-        // Verify that the packet size does not exceed MAX_PACKET_SIZE
+        // Verify that the packet size does not exceed MAX_PACKET_SIZE as usize
         assert!(
-            packet_bytes.len() <= MAX_PACKET_SIZE,
+            packet_bytes.len() <= MAX_PACKET_SIZE as usize,
             "Packet size exceeds maximum allowed size"
         );
 
@@ -513,12 +515,12 @@ mod tests {
         assert_eq!(buffer, expected_payload);
     }
 
-    /// Test encoding a packet that exceeds MAX_PACKET_SIZE
+    /// Test encoding a packet that exceeds MAX_PACKET_SIZE as usize
     #[test]
     #[should_panic(expected = "TooLong")]
     fn test_encode_packet_exceeding_maximum_size() {
-        // Create a custom packet with data exceeding MAX_PACKET_SIZE
-        let data_size = MAX_PACKET_SIZE + 1; // Exceed by 1 byte
+        // Create a custom packet with data exceeding MAX_PACKET_SIZE as usize
+        let data_size = MAX_PACKET_SIZE as usize + 1; // Exceed by 1 byte
         let packet = MaxSizePacket::new(data_size);
 
         // Build the packet without compression and encryption
