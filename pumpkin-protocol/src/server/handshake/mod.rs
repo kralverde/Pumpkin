@@ -1,4 +1,4 @@
-use crate::ser::{ByteBufMut, NetworkRead};
+use crate::ser::{NetworkRead, NetworkWrite, WritingError};
 use crate::{ClientPacket, ConnectionState, ServerPacket, VarInt, ser::ReadingError};
 use pumpkin_data::packet::serverbound::HANDSHAKE_INTENTION;
 use pumpkin_macros::packet;
@@ -12,11 +12,13 @@ pub struct SHandShake {
 }
 
 impl ClientPacket for SHandShake {
-    fn write(&self, bytebuf: &mut impl bytes::BufMut) {
-        bytebuf.put_var_int(&self.protocol_version);
-        bytebuf.put_string_len(&self.server_address, 255);
-        bytebuf.put_u16(self.server_port);
-        bytebuf.put_var_int(&VarInt(self.next_state as i32));
+    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+        let mut write = write;
+
+        write.write_var_int(&self.protocol_version)?;
+        write.write_string_bounded(&self.server_address, 255)?;
+        write.write_u16_be(self.server_port)?;
+        write.write_var_int(&VarInt(self.next_state as i32))
     }
 }
 

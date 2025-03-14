@@ -1,13 +1,16 @@
-use std::{borrow::BorrowMut, io::Read, num::NonZeroU16};
+use std::{marker::PhantomData, num::NonZeroU16};
 
-use aes::cipher::{BlockDecryptMut, BlockSizeUser};
-use async_compression::tokio::bufread::ZlibDecoder;
-use bytes::{BufMut, Bytes};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, BlockSizeUser, generic_array::GenericArray};
+use bytes::Bytes;
 use codec::{identifier::Identifier, var_int::VarInt};
 use pumpkin_util::text::{TextComponent, style::Style};
-use ser::{ByteBufMut, NetworkRead, ReadingError, packet::Packet};
-use serde::{Deserialize, Serialize, Serializer};
-use tokio::io::{AsyncBufRead, AsyncRead, BufReader};
+use ser::{NetworkRead, NetworkWrite, ReadingError, WritingError, packet::Packet};
+use serde::{
+    Deserialize, Serialize, Serializer,
+    de::{DeserializeSeed, Visitor},
+    ser::SerializeSeq,
+};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(feature = "clientbound")]
 pub mod client;
@@ -67,33 +70,115 @@ impl TryFrom<VarInt> for ConnectionState {
     }
 }
 
-#[derive(Deserialize, Clone)]
-pub struct IDOrSoundEvent {
-    pub id: VarInt,
-    pub sound_event: Option<SoundEvent>,
+struct IdOrVisitor<T>(PhantomData<T>);
+impl<'de, T> Visitor<'de> for IdOrVisitor<T>
+where
+    T: Deserialize<'de>,
+{
+    type Value = IdOr<T>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("A VarInt followed by a value if the VarInt is 0")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        enum IdOrStateDeserializer<T> {
+            Init,
+            Id(u32),
+            Value(T),
+        }
+
+        impl<'de, T> DeserializeSeed<'de> for &mut IdOrStateDeserializer<T>
+        where
+            T: Deserialize<'de>,
+        {
+            type Value = ();
+
+            fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                match self {
+                    IdOrStateDeserializer::Init => {
+                        // Get the VarInt
+                        let id = VarInt::deserialize(deserializer)?;
+                        assert!(id.0 >= 0);
+                        *self = IdOrStateDeserializer::<T>::Id(id.0 as u32);
+                    }
+                    IdOrStateDeserializer::Id(id) => {
+                        assert!(*id == 0);
+                        // Get the data
+                        let value = T::deserialize(deserializer)?;
+                        *self = IdOrStateDeserializer::Value(value);
+                    }
+                    IdOrStateDeserializer::Value(_) => unreachable!(),
+                }
+
+                Ok(())
+            }
+        }
+
+        let mut state = IdOrStateDeserializer::<T>::Init;
+
+        let _ = seq.next_element_seed(&mut state)?;
+
+        match state {
+            IdOrStateDeserializer::Id(id) => {
+                if id > 0 {
+                    return Ok(IdOr::Id(id - 1));
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        let _ = seq.next_element_seed(&mut state)?;
+
+        match state {
+            IdOrStateDeserializer::Value(val) => Ok(IdOr::Value(val)),
+            _ => unreachable!(),
+        }
+    }
 }
 
-impl Serialize for IDOrSoundEvent {
+#[derive(PartialEq)]
+pub enum IdOr<T> {
+    Id(u32),
+    Value(T),
+}
+
+impl<'de, T> Deserialize<'de> for IdOr<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(IdOrVisitor(PhantomData))
+    }
+}
+
+impl<T: Serialize> Serialize for IdOr<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut buf = Vec::new();
-        buf.put_var_int(&self.id);
-        if self.id.0 == 0 {
-            if let Some(sound_event) = &self.sound_event {
-                buf.put_identifier(&sound_event.sound_name);
-
-                buf.put_option(&sound_event.range, |p, v| {
-                    p.put_f32(*v);
-                });
+        match self {
+            IdOr::Id(id) => VarInt::from(*id + 1).serialize(serializer),
+            IdOr::Value(value) => {
+                let mut seq = serializer.serialize_seq(None)?;
+                seq.serialize_element(&VarInt::from(0))?;
+                seq.serialize_element(value)?;
+                seq.end()
             }
         }
-        serializer.serialize_bytes(&buf)
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct SoundEvent {
     pub sound_name: Identifier,
     pub range: Option<f32>,
@@ -141,14 +226,86 @@ impl<R: AsyncRead + Unpin> AsyncRead for StreamDecryptor<R> {
     }
 }
 
+type Aes128Cfb8Enc = cfb8::Encryptor<aes::Aes128>;
+
+///NOTE: This makes lots of small writes; make sure there is a buffer somewhere down the line
+pub struct StreamEncryptor<W: AsyncWrite + Unpin> {
+    cipher: Aes128Cfb8Enc,
+    write: W,
+}
+
+impl<W: AsyncWrite + Unpin> StreamEncryptor<W> {
+    pub fn new(cipher: Aes128Cfb8Enc, stream: W) -> Self {
+        Self {
+            cipher,
+            write: stream,
+        }
+    }
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for StreamEncryptor<W> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        let ref_self = self.get_mut();
+        let cipher = &mut ref_self.cipher;
+
+        let mut total_written = 0;
+        // Decrypt the raw data, note that our block size is 1 byte, so this is always safe
+        for block in buf.chunks(Aes128Cfb8Enc::block_size()) {
+            let mut out = vec![0u8; Aes128Cfb8Enc::block_size()];
+            let out_block = GenericArray::from_mut_slice(&mut out);
+            cipher.encrypt_block_b2b_mut(block.into(), out_block);
+
+            let write = std::pin::Pin::new(&mut ref_self.write);
+            match write.poll_write(cx, &out) {
+                std::task::Poll::Pending => {
+                    if total_written == 0 {
+                        //If we didn't write anything, return pending
+                        return std::task::Poll::Pending;
+                    } else {
+                        // Otherwise, we actually did write something
+                        return std::task::Poll::Ready(Ok(total_written));
+                    }
+                }
+                std::task::Poll::Ready(result) => match result {
+                    Ok(written) => total_written += written,
+                    Err(err) => return std::task::Poll::Ready(Err(err)),
+                },
+            }
+        }
+
+        std::task::Poll::Ready(Ok(total_written))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        let ref_self = self.get_mut();
+        let write = std::pin::Pin::new(&mut ref_self.write);
+        write.poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        let ref_self = self.get_mut();
+        let write = std::pin::Pin::new(&mut ref_self.write);
+        write.poll_shutdown(cx)
+    }
+}
+
 pub struct RawPacket {
     pub id: i32,
     pub payload: Bytes,
 }
 
-// TODO: Have the input be `impl Write`
 pub trait ClientPacket: Packet {
-    fn write(&self, bytebuf: &mut impl BufMut);
+    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError>;
 }
 
 pub trait ServerPacket: Packet + Sized {
@@ -321,5 +478,25 @@ impl Serialize for LinkType {
             LinkType::News => VarInt(8).serialize(serializer),
             LinkType::Announcements => VarInt(9).serialize(serializer),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::ser::{deserializer::Deserializer, serializer::Serializer};
+    use serde::{Deserialize, Serialize};
+
+    use crate::{IdOr, SoundEvent};
+
+    fn test_serde_id_or() {
+        let mut buf = Vec::new();
+
+        let id = IdOr::<SoundEvent>::Id(0);
+        id.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+        let deser_id =
+            IdOr::<SoundEvent>::deserialize(&mut Deserializer::new(buf.as_slice())).unwrap();
+
+        assert!(id == deser_id);
     }
 }

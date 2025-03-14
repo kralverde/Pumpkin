@@ -1,9 +1,11 @@
-use bytes::BufMut;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{ClientPacket, ServerPacket, codec::var_int::VarIntType};
 
-use super::{NetworkRead, ReadingError, deserializer, serializer};
+use super::{
+    NetworkRead, NetworkWrite, ReadingError, WritingError, deserializer,
+    serializer::{self},
+};
 
 pub trait Packet {
     const PACKET_ID: VarIntType;
@@ -13,10 +15,9 @@ impl<P> ClientPacket for P
 where
     P: Packet + Serialize,
 {
-    fn write(&self, bytebuf: &mut impl BufMut) {
-        let mut serializer = serializer::Serializer::new(bytebuf);
+    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+        let mut serializer = serializer::Serializer::new(write);
         self.serialize(&mut serializer)
-            .expect("Could not serialize packet");
     }
 }
 

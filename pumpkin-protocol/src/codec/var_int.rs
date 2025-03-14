@@ -1,6 +1,6 @@
 use std::{num::NonZeroUsize, ops::Deref};
 
-use crate::ser::{NetworkRead, ReadingError};
+use crate::ser::{NetworkRead, NetworkWrite, ReadingError, WritingError};
 
 use super::Codec;
 use bytes::BufMut;
@@ -31,16 +31,17 @@ impl Codec<Self> for VarInt {
         }
     }
 
-    fn encode(&self, write: &mut impl BufMut) {
+    fn encode(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
         let mut val = self.0;
         for _ in 0..Self::MAX_SIZE.get() {
             let b: u8 = val as u8 & 0b01111111;
             val >>= 7;
-            write.put_u8(if val == 0 { b } else { b | 0b10000000 });
+            write.write_u8_be(if val == 0 { b } else { b | 0b10000000 })?;
             if val == 0 {
                 break;
             }
         }
+        Ok(())
     }
 
     fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {

@@ -1,13 +1,13 @@
 use std::num::NonZeroUsize;
 
-use bytes::BufMut;
 use serde::{Serialize, Serializer};
 
-use crate::ser::ByteBufMut;
 use crate::ser::NetworkRead;
+use crate::ser::NetworkWrite;
 use crate::ser::ReadingError;
+use crate::ser::WritingError;
 
-use super::{Codec, var_int::VarInt};
+use super::Codec;
 
 pub struct BitSet(pub Box<[i64]>);
 
@@ -19,11 +19,13 @@ impl Codec<BitSet> for BitSet {
         todo!()
     }
 
-    fn encode(&self, write: &mut impl BufMut) {
-        write.put_var_int(&VarInt::from(self.0.len()));
+    fn encode(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
+        write.write_var_int(&self.0.len().into())?;
         for b in &self.0 {
-            write.put_i64(*b);
+            write.write_i64_be(*b)?;
         }
+
+        Ok(())
     }
 
     fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {

@@ -1,13 +1,12 @@
 use core::str;
-use std::io::Read;
+use std::io::{Read, Write};
 
 use crate::{
     FixedBitSet,
     codec::{Codec, bit_set::BitSet, identifier::Identifier, var_int::VarInt, var_long::VarLong},
 };
-use bytes::BufMut;
 
-mod deserializer;
+pub mod deserializer;
 use thiserror::Error;
 pub mod packet;
 pub mod serializer;
@@ -22,6 +21,16 @@ pub enum ReadingError {
     #[error("{0} is too Large")]
     TooLarge(String),
     #[error("{0}")]
+    Message(String),
+}
+
+#[derive(Debug, Error)]
+pub enum WritingError {
+    #[error("IO error: {0}")]
+    IoError(std::io::Error),
+    #[error("Serde failure: {0}")]
+    Serde(String),
+    #[error("Failed to serialize packet: {0}")]
     Message(String),
 }
 
@@ -241,95 +250,161 @@ impl<R: Read> NetworkRead for R {
     }
 }
 
-pub trait ByteBufMut {
-    fn put_bool(&mut self, v: bool);
+pub trait NetworkWrite {
+    fn write_i8_be(&mut self, data: i8) -> Result<(), WritingError>;
+    fn write_u8_be(&mut self, data: u8) -> Result<(), WritingError>;
+    fn write_i16_be(&mut self, data: i16) -> Result<(), WritingError>;
+    fn write_u16_be(&mut self, data: u16) -> Result<(), WritingError>;
+    fn write_i32_be(&mut self, data: i32) -> Result<(), WritingError>;
+    fn write_u32_be(&mut self, data: u32) -> Result<(), WritingError>;
+    fn write_i64_be(&mut self, data: i64) -> Result<(), WritingError>;
+    fn write_u64_be(&mut self, data: u64) -> Result<(), WritingError>;
+    fn write_f32_be(&mut self, data: f32) -> Result<(), WritingError>;
+    fn write_f64_be(&mut self, data: f64) -> Result<(), WritingError>;
+    fn write_slice(&mut self, data: &[u8]) -> Result<(), WritingError>;
 
-    fn put_uuid(&mut self, v: &uuid::Uuid);
+    fn write_bool(&mut self, data: bool) -> Result<(), WritingError>;
+    fn write_var_int(&mut self, data: &VarInt) -> Result<(), WritingError>;
+    fn write_var_long(&mut self, data: &VarLong) -> Result<(), WritingError>;
+    fn write_string_bounded(&mut self, data: &str, bound: usize) -> Result<(), WritingError>;
+    fn write_string(&mut self, data: &str) -> Result<(), WritingError>;
+    fn write_identifier(&mut self, data: &Identifier) -> Result<(), WritingError>;
+    fn write_uuid(&mut self, data: &uuid::Uuid) -> Result<(), WritingError>;
+    fn write_bitset(&mut self, bitset: &BitSet) -> Result<(), WritingError>;
 
-    fn put_string(&mut self, val: &str);
+    fn write_option<G>(
+        &mut self,
+        data: &Option<G>,
+        write: impl FnOnce(&mut Self, &G) -> Result<(), WritingError>,
+    ) -> Result<(), WritingError>;
 
-    fn put_string_len(&mut self, val: &str, max_size: usize);
-
-    fn put_string_array(&mut self, array: &[&str]);
-
-    fn put_bit_set(&mut self, set: &BitSet);
-
-    /// Writes `true` if the option is Some, or `false` if None. If the option is
-    /// some, then it also calls the `write` closure.
-    fn put_option<G>(&mut self, val: &Option<G>, write: impl FnOnce(&mut Self, &G));
-
-    fn put_list<G>(&mut self, list: &[G], write: impl Fn(&mut Self, &G));
-
-    fn put_identifier(&mut self, val: &Identifier);
-
-    fn put_var_int(&mut self, value: &VarInt);
-
-    fn put_varint_arr(&mut self, v: &[i32]);
+    fn write_list<G>(
+        &mut self,
+        data: &[G],
+        write: impl Fn(&mut Self, &G) -> Result<(), WritingError>,
+    ) -> Result<(), WritingError>;
 }
 
-impl<T: BufMut> ByteBufMut for T {
-    fn put_bool(&mut self, v: bool) {
-        if v {
-            self.put_u8(1);
+impl<W: Write> NetworkWrite for W {
+    fn write_i8_be(&mut self, data: i8) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_u8_be(&mut self, data: u8) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_i16_be(&mut self, data: i16) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_u16_be(&mut self, data: u16) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_i32_be(&mut self, data: i32) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_u32_be(&mut self, data: u32) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_i64_be(&mut self, data: i64) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_u64_be(&mut self, data: u64) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_f32_be(&mut self, data: f32) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_f64_be(&mut self, data: f64) -> Result<(), WritingError> {
+        self.write_all(&data.to_be_bytes())
+            .map_err(WritingError::IoError)
+    }
+
+    fn write_slice(&mut self, data: &[u8]) -> Result<(), WritingError> {
+        self.write_all(data).map_err(WritingError::IoError)
+    }
+
+    fn write_bool(&mut self, data: bool) -> Result<(), WritingError> {
+        if data {
+            self.write_u8_be(1)
         } else {
-            self.put_u8(0);
+            self.write_u8_be(0)
         }
     }
 
-    fn put_uuid(&mut self, v: &uuid::Uuid) {
-        // thats the vanilla way
-        let pair = v.as_u64_pair();
-        self.put_u64(pair.0);
-        self.put_u64(pair.1);
+    fn write_var_int(&mut self, data: &VarInt) -> Result<(), WritingError> {
+        data.encode(self)
     }
 
-    fn put_string(&mut self, val: &str) {
-        self.put_string_len(val, i16::MAX as usize);
+    fn write_var_long(&mut self, data: &VarLong) -> Result<(), WritingError> {
+        data.encode(self)
     }
 
-    fn put_string_len(&mut self, val: &str, max_size: usize) {
-        if val.len() > max_size {
-            // Should be panic?, I mean its our fault
-            panic!("String is too big");
-        }
-        self.put_var_int(&val.len().into());
-        self.put(val.as_bytes());
+    fn write_string_bounded(&mut self, data: &str, bound: usize) -> Result<(), WritingError> {
+        assert!(data.len() <= bound);
+        self.write_var_int(&data.len().into())?;
+        self.write_all(data.as_bytes())
+            .map_err(WritingError::IoError)
     }
 
-    fn put_string_array(&mut self, array: &[&str]) {
-        for string in array {
-            self.put_string(string)
-        }
+    fn write_string(&mut self, data: &str) -> Result<(), WritingError> {
+        self.write_string_bounded(data, i16::MAX as usize)
     }
 
-    fn put_var_int(&mut self, var_int: &VarInt) {
-        var_int.encode(self);
+    fn write_identifier(&mut self, data: &Identifier) -> Result<(), WritingError> {
+        data.encode(self)
     }
 
-    fn put_bit_set(&mut self, bit_set: &BitSet) {
-        bit_set.encode(self);
+    fn write_uuid(&mut self, data: &uuid::Uuid) -> Result<(), WritingError> {
+        let (first, second) = data.as_u64_pair();
+        self.write_u64_be(first)?;
+        self.write_u64_be(second)
     }
 
-    fn put_option<G>(&mut self, val: &Option<G>, write: impl FnOnce(&mut Self, &G)) {
-        self.put_bool(val.is_some());
-        if let Some(v) = val {
-            write(self, v)
-        }
+    fn write_bitset(&mut self, data: &BitSet) -> Result<(), WritingError> {
+        data.encode(self)
     }
 
-    fn put_list<G>(&mut self, list: &[G], write: impl Fn(&mut Self, &G)) {
-        self.put_var_int(&list.len().into());
-        for v in list {
-            write(self, v);
+    fn write_option<G>(
+        &mut self,
+        data: &Option<G>,
+        write: impl FnOnce(&mut Self, &G) -> Result<(), WritingError>,
+    ) -> Result<(), WritingError> {
+        if let Some(data) = data {
+            self.write_bool(true)?;
+            write(self, data)
+        } else {
+            self.write_bool(false)
         }
     }
 
-    fn put_varint_arr(&mut self, v: &[i32]) {
-        self.put_list(v, |p, &v| p.put_var_int(&v.into()))
-    }
+    fn write_list<G>(
+        &mut self,
+        data: &[G],
+        write: impl Fn(&mut Self, &G) -> Result<(), WritingError>,
+    ) -> Result<(), WritingError> {
+        self.write_var_int(&data.len().into())?;
+        for data in data {
+            write(self, data)?;
+        }
 
-    fn put_identifier(&mut self, val: &Identifier) {
-        val.encode(self);
+        Ok(())
     }
 }
 
@@ -337,7 +412,6 @@ impl<T: BufMut> ByteBufMut for T {
 mod test {
     use std::io::Cursor;
 
-    use bytes::BytesMut;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -352,7 +426,7 @@ mod test {
             bar: i32,
         }
         let foo = Foo { bar: 69 };
-        let mut bytes = BytesMut::new();
+        let mut bytes = Vec::new();
         let mut serializer = serializer::Serializer::new(&mut bytes);
         foo.serialize(&mut serializer).unwrap();
 
@@ -370,7 +444,7 @@ mod test {
             bar: VarInt,
         }
         let foo = Foo { bar: 69.into() };
-        let mut bytes = BytesMut::new();
+        let mut bytes = Vec::new();
         let mut serializer = serializer::Serializer::new(&mut bytes);
         foo.serialize(&mut serializer).unwrap();
 

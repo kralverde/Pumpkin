@@ -1,9 +1,8 @@
 use std::num::NonZeroUsize;
 
-use bytes::BufMut;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor};
 
-use crate::ser::{ByteBufMut, NetworkRead, ReadingError};
+use crate::ser::{NetworkRead, NetworkWrite, ReadingError, WritingError};
 
 use super::Codec;
 
@@ -29,8 +28,8 @@ impl Codec<Self> for Identifier {
         todo!()
     }
 
-    fn encode(&self, write: &mut impl BufMut) {
-        write.put_string_len(&self.to_string(), Self::MAX_SIZE.get());
+    fn encode(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
+        write.write_string_bounded(&self.to_string(), Self::MAX_SIZE.get())
     }
 
     fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {

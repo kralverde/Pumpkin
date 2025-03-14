@@ -1,4 +1,4 @@
-use crate::ser::{ByteBufMut, NetworkRead};
+use crate::ser::{NetworkRead, NetworkWrite, WritingError};
 use pumpkin_data::packet::serverbound::LOGIN_HELLO;
 use pumpkin_macros::packet;
 
@@ -11,9 +11,11 @@ pub struct SLoginStart {
 }
 
 impl ClientPacket for SLoginStart {
-    fn write(&self, bytebuf: &mut impl bytes::BufMut) {
-        bytebuf.put_string_len(&self.name, 16);
-        bytebuf.put_uuid(&self.uuid);
+    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+        let mut write = write;
+
+        write.write_string_bounded(&self.name, 16)?;
+        write.write_uuid(&self.uuid)
     }
 }
 
