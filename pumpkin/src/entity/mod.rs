@@ -1,6 +1,6 @@
 use crate::server::Server;
 use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
 use core::f32;
 use crossbeam::atomic::AtomicCell;
 use living::LivingEntity;
@@ -403,10 +403,10 @@ impl Entity {
     {
         let mut buf = Vec::new();
         for meta in meta {
-            let serializer_buf = BytesMut::new();
-            let mut serializer = Serializer::new(serializer_buf);
+            let mut serializer_buf = Vec::new();
+            let mut serializer = Serializer::new(&mut serializer_buf);
             meta.serialize(&mut serializer).unwrap();
-            buf.put(serializer.output);
+            buf.extend(serializer_buf);
         }
         buf.put_u8(255);
         self.world

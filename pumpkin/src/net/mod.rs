@@ -22,7 +22,7 @@ use pumpkin_protocol::{
     ClientPacket, ConnectionState, Property, RawPacket, ServerPacket,
     client::{config::CConfigDisconnect, login::CLoginDisconnect, play::CPlayDisconnect},
     packet_decoder::NetworkDecoder,
-    packet_encoder::{PacketEncodeError, PacketEncoder},
+    packet_encoder::{NetworkEncoder, PacketEncodeError},
     ser::{ReadingError, packet::Packet},
     server::{
         config::{
@@ -137,7 +137,7 @@ pub struct Client {
     /// The client's IP address.
     pub address: Mutex<SocketAddr>,
     /// The packet encoder for outgoing packets.
-    pub enc: Arc<Mutex<PacketEncoder>>,
+    pub enc: Arc<Mutex<NetworkEncoder<Cursor<Vec<u8>>>>>,
     /// The packet decoder for incoming packets.
     pub dec: Arc<Mutex<NetworkDecoder<Cursor<Bytes>>>>,
     /// A channel for sending packets to the client.
@@ -164,7 +164,7 @@ impl Client {
             server_address: Mutex::new(String::new()),
             address: Mutex::new(address),
             connection_state: AtomicCell::new(ConnectionState::HandShake),
-            enc: Arc::new(Mutex::new(PacketEncoder::default())),
+            enc: Arc::new(Mutex::new(NetworkEncoder::new(Cursor::new(Vec::new())))),
             dec: Arc::new(Mutex::new(NetworkDecoder::new(Cursor::new(Bytes::new())))),
             closed: AtomicBool::new(false),
             server_packets_channel,
@@ -213,7 +213,7 @@ impl Client {
             .try_into()
             .map_err(|_| EncryptionError::SharedWrongLength)?;
         self.dec.lock().await.set_encryption(&crypt_key);
-        self.enc.lock().await.set_encryption(Some(&crypt_key));
+        self.enc.lock().await.set_encryption(&crypt_key);
         Ok(())
     }
 
@@ -257,10 +257,13 @@ impl Client {
 
         {
             let mut enc = self.enc.lock().await;
+            todo!();
+            /*
             if let Err(error) = enc.append_packet(packet) {
                 self.kick(TextComponent::text(error.to_string())).await;
                 return;
             }
+            */
         }
 
         let _ = self
@@ -311,7 +314,8 @@ impl Client {
         */
 
         let mut enc = self.enc.lock().await;
-        enc.append_packet(packet)?;
+        todo!();
+        //enc.append_packet(packet)?;
 
         let _ = self
             .server_packets_channel

@@ -1,72 +1,14 @@
-use std::io::Write;
-
-use aes::cipher::{BlockEncryptMut, BlockSizeUser, KeyIvInit, generic_array::GenericArray};
+use aes::cipher::KeyIvInit;
 use async_compression::{Level, tokio::write::ZlibEncoder};
-use bytes::{BufMut, BytesMut};
 use thiserror::Error;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::{
     Aes128Cfb8Enc, ClientPacket, CompressionLevel, CompressionThreshold, MAX_PACKET_DATA_SIZE,
-    MAX_PACKET_SIZE, StreamEncryptor, VarInt, codec::Codec, ser::NetworkRead,
+    MAX_PACKET_SIZE, StreamEncryptor, VarInt, codec::Codec,
 };
 
 // raw -> compress -> encrypt
-pub enum CompressionWriter<W: AsyncWrite + Unpin> {
-    Compress(ZlibEncoder<W>),
-    None(W),
-}
-
-impl<W: AsyncWrite + Unpin> AsyncWrite for CompressionWriter<W> {
-    fn poll_write(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        match self.get_mut() {
-            Self::Compress(writer) => {
-                let writer = std::pin::Pin::new(writer);
-                writer.poll_write(cx, buf)
-            }
-            Self::None(writer) => {
-                let writer = std::pin::Pin::new(writer);
-                writer.poll_write(cx, buf)
-            }
-        }
-    }
-
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        match self.get_mut() {
-            Self::Compress(writer) => {
-                let writer = std::pin::Pin::new(writer);
-                writer.poll_flush(cx)
-            }
-            Self::None(writer) => {
-                let writer = std::pin::Pin::new(writer);
-                writer.poll_flush(cx)
-            }
-        }
-    }
-
-    fn poll_shutdown(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        match self.get_mut() {
-            Self::Compress(writer) => {
-                let writer = std::pin::Pin::new(writer);
-                writer.poll_shutdown(cx)
-            }
-            Self::None(writer) => {
-                let writer = std::pin::Pin::new(writer);
-                writer.poll_shutdown(cx)
-            }
-        }
-    }
-}
 
 pub enum EncryptionWriter<W: AsyncWrite + Unpin> {
     Encrypt(Box<StreamEncryptor<W>>),
@@ -150,8 +92,11 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
         }
     }
 
-    pub fn set_compression(&mut self, threshold: Option<(CompressionThreshold, CompressionLevel)>) {
-        self.compression = threshold;
+    pub fn set_compression(
+        &mut self,
+        compression_info: Option<(CompressionThreshold, CompressionLevel)>,
+    ) {
+        self.compression = compression_info;
     }
 
     /// NOTE: Encryption can only be set; a minecraft stream cannot go back to being unencrypted
@@ -209,17 +154,17 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
             panic!("Failed to serialize packet to the network: {}", err);
             //PacketEncodeError::Message(err.to_string())
         })?;
-        let data_len = packet_buf.len();
 
+        let internal_data_len = packet_buf.len();
         let packet_id_var_int: VarInt = P::PACKET_ID.into();
-        let full_data_len = data_len + packet_id_var_int.written_size();
-        if full_data_len > MAX_PACKET_DATA_SIZE {
-            return Err(PacketEncodeError::TooLong(full_data_len));
+        let data_len = internal_data_len + packet_id_var_int.written_size();
+        if data_len > MAX_PACKET_DATA_SIZE {
+            return Err(PacketEncodeError::TooLong(data_len));
         }
-        let uncompressed_len_var_int: VarInt = full_data_len.into();
+        let data_len_var_int: VarInt = data_len.into();
 
         if let Some((compression_threshold, compression_level)) = self.compression {
-            if full_data_len > compression_threshold {
+            if data_len >= compression_threshold {
                 // Pushed before data:
                 // Length of (Data Length) + length of compressed (Packet ID + Data)
                 // Length of uncompressed (Packet ID + Data)
@@ -227,10 +172,10 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
                 // TODO: We need the compressed length at the beginning of the packet so we need to write to
                 // buf here :( Is there a magic way to find a compressed length?
                 let mut compressed_buf = Vec::new();
-                let mut compressor = CompressionWriter::Compress(ZlibEncoder::with_quality(
+                let mut compressor = ZlibEncoder::with_quality(
                     &mut compressed_buf,
                     Level::Precise(compression_level as i32),
-                ));
+                );
 
                 packet_id_var_int
                     .encode_async(&mut compressor)
@@ -241,21 +186,26 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
                     .write_all(&packet_buf)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+                compressor
+                    .flush()
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+                debug_assert!(!compressed_buf.is_empty());
 
                 let full_packet_len_var_int: VarInt =
-                    (uncompressed_len_var_int.written_size() + compressed_buf.len()).into();
+                    (data_len_var_int.written_size() + compressed_buf.len()).into();
 
-                let full_packet_len =
+                let complete_serialization_length =
                     full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
-                if full_packet_len > MAX_PACKET_SIZE as usize {
-                    return Err(PacketEncodeError::TooLong(full_packet_len));
+                if complete_serialization_length > MAX_PACKET_SIZE as usize {
+                    return Err(PacketEncodeError::TooLong(complete_serialization_length));
                 }
 
                 full_packet_len_var_int
                     .encode_async(&mut self.writer)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
-                uncompressed_len_var_int
+                data_len_var_int
                     .encode_async(&mut self.writer)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
@@ -268,21 +218,25 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
                 // Length of (Data Length) + length of compressed (Packet ID + Data)
                 // 0 to indicate uncompressed
 
-                let zero_var_int: VarInt = 0.into();
+                let data_len_var_int: VarInt = 0.into();
                 let full_packet_len_var_int: VarInt =
-                    (full_data_len + zero_var_int.written_size()).into();
+                    (data_len_var_int.written_size() + data_len).into();
 
-                let full_packet_len =
+                let complete_serialization_length =
                     full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
-                if full_packet_len > MAX_PACKET_SIZE as usize {
-                    return Err(PacketEncodeError::TooLong(full_packet_len));
+                if complete_serialization_length > MAX_PACKET_SIZE as usize {
+                    return Err(PacketEncodeError::TooLong(complete_serialization_length));
                 }
 
                 full_packet_len_var_int
                     .encode_async(&mut self.writer)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
-                zero_var_int
+                data_len_var_int
+                    .encode_async(&mut self.writer)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+                packet_id_var_int
                     .encode_async(&mut self.writer)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
@@ -295,15 +249,19 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
             // Pushed before data:
             // Length of Packet ID + Data
 
-            let full_packet_len_var_int: VarInt = uncompressed_len_var_int;
+            let full_packet_len_var_int: VarInt = data_len_var_int;
 
-            let full_packet_len =
+            let complete_serialization_length =
                 full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
-            if full_packet_len > MAX_PACKET_SIZE as usize {
-                return Err(PacketEncodeError::TooLong(full_packet_len));
+            if complete_serialization_length > MAX_PACKET_SIZE as usize {
+                return Err(PacketEncodeError::TooLong(complete_serialization_length));
             }
 
             full_packet_len_var_int
+                .encode_async(&mut self.writer)
+                .await
+                .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+            packet_id_var_int
                 .encode_async(&mut self.writer)
                 .await
                 .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
@@ -313,6 +271,10 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
                 .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
         }
 
+        self.writer
+            .flush()
+            .await
+            .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
         Ok(())
     }
 }
@@ -343,6 +305,7 @@ mod tests {
     use aes::Aes128;
     use cfb8::Decryptor as Cfb8Decryptor;
     use cfb8::cipher::AsyncStreamCipher;
+    use flate2::read::ZlibDecoder;
     use pumpkin_data::packet::clientbound::STATUS_STATUS_RESPONSE;
     use pumpkin_macros::packet;
     use serde::Serialize;
@@ -369,9 +332,9 @@ mod tests {
 
     /// Helper function to decompress data using libdeflater's Zlib decompressor
     fn decompress_zlib(data: &[u8], expected_size: usize) -> Result<Vec<u8>, std::io::Error> {
+        assert!(!data.is_empty());
         let mut decompressed = vec![0u8; expected_size];
-        todo!();
-        //ZlibDecoder::new(data).read_exact(&mut decompressed)?;
+        ZlibDecoder::new(data).read_exact(&mut decompressed)?;
         Ok(decompressed)
     }
 
@@ -382,38 +345,32 @@ mod tests {
     }
 
     /// Helper function to build a packet with optional compression and encryption
-    fn build_packet_with_encoder<T: ClientPacket>(
+    async fn build_packet_with_encoder<T: ClientPacket>(
         packet: &T,
         compression_info: Option<(CompressionThreshold, CompressionLevel)>,
         key: Option<&[u8; 16]>,
-    ) -> BytesMut {
-        let mut encoder = PacketEncoder::default();
-
-        if let Some(compression) = compression_info {
-            encoder.set_compression(Some(compression));
-        } else {
-            encoder.set_compression(None);
-        }
+    ) -> Box<[u8]> {
+        let mut buf = Vec::new();
+        let mut encoder = NetworkEncoder::new(&mut buf);
+        encoder.set_compression(compression_info);
 
         if let Some(key) = key {
-            encoder.set_encryption(Some(key));
+            encoder.set_encryption(key);
         }
 
-        encoder
-            .append_packet(packet)
-            .expect("Failed to append packet");
+        encoder.write_packet(packet).await.unwrap();
 
-        encoder.take()
+        buf.into_boxed_slice()
     }
 
     /// Test encoding without compression and encryption
-    #[test]
-    fn test_encode_without_compression_and_encryption() {
+    #[tokio::test]
+    async fn test_encode_without_compression_and_encryption() {
         // Create a CStatusResponse packet
         let packet = CStatusResponse::new("{\"description\": \"A Minecraft Server\"}");
 
         // Build the packet without compression and encryption
-        let packet_bytes = build_packet_with_encoder(&packet, None, None);
+        let packet_bytes = build_packet_with_encoder(&packet, None, None).await;
 
         // Decode the packet manually to verify correctness
         let mut buffer = &packet_bytes[..];
@@ -432,20 +389,20 @@ mod tests {
 
         // Remaining buffer is the payload
         // We need to obtain the expected payload
-        let mut expected_payload = BytesMut::new();
-        packet.write(&mut expected_payload);
+        let mut expected_payload = Vec::new();
+        packet.write(&mut expected_payload).unwrap();
 
         assert_eq!(buffer, expected_payload);
     }
 
     /// Test encoding with compression
-    #[test]
-    fn test_encode_with_compression() {
+    #[tokio::test]
+    async fn test_encode_with_compression() {
         // Create a CStatusResponse packet
         let packet = CStatusResponse::new("{\"description\": \"A Minecraft Server\"}");
 
         // Build the packet with compression enabled
-        let packet_bytes = build_packet_with_encoder(&packet, Some((0, 6)), None);
+        let packet_bytes = build_packet_with_encoder(&packet, Some((0, 6)), None).await;
 
         // Decode the packet manually to verify correctness
         let mut buffer = &packet_bytes[..];
@@ -460,8 +417,8 @@ mod tests {
 
         // Read data length VarInt (uncompressed data length)
         let data_length = decode_varint(&mut buffer).expect("Failed to decode data length");
-        let mut expected_payload = BytesMut::new();
-        packet.write(&mut expected_payload);
+        let mut expected_payload = Vec::new();
+        packet.write(&mut expected_payload).unwrap();
         let uncompressed_data_length =
             VarInt(CStatusResponse::PACKET_ID).written_size() + expected_payload.len();
         assert_eq!(data_length as usize, uncompressed_data_length);
@@ -486,8 +443,8 @@ mod tests {
     }
 
     /// Test encoding with encryption
-    #[test]
-    fn test_encode_with_encryption() {
+    #[tokio::test]
+    async fn test_encode_with_encryption() {
         // Create a CStatusResponse packet
         let packet = CStatusResponse::new("{\"description\": \"A Minecraft Server\"}");
 
@@ -495,7 +452,7 @@ mod tests {
         let key = [0x00u8; 16]; // Example key
 
         // Build the packet with encryption enabled (no compression)
-        let mut packet_bytes = build_packet_with_encoder(&packet, None, Some(&key));
+        let mut packet_bytes = build_packet_with_encoder(&packet, None, Some(&key)).await;
 
         // Decrypt the packet
         decrypt_aes128(&mut packet_bytes, &key, &key);
@@ -516,15 +473,14 @@ mod tests {
         assert_eq!(decoded_packet_id, CStatusResponse::PACKET_ID);
 
         // Remaining buffer is the payload
-        let mut expected_payload = BytesMut::new();
-        packet.write(&mut expected_payload);
-
+        let mut expected_payload = Vec::new();
+        packet.write(&mut expected_payload).unwrap();
         assert_eq!(buffer, expected_payload);
     }
 
     /// Test encoding with both compression and encryption
-    #[test]
-    fn test_encode_with_compression_and_encryption() {
+    #[tokio::test]
+    async fn test_encode_with_compression_and_encryption() {
         // Create a CStatusResponse packet
         let packet = CStatusResponse::new("{\"description\": \"A Minecraft Server\"}");
 
@@ -533,7 +489,7 @@ mod tests {
 
         // Build the packet with both compression and encryption enabled
         // Compression threshold is set to 0 to force compression
-        let mut packet_bytes = build_packet_with_encoder(&packet, Some((0, 6)), Some(&key));
+        let mut packet_bytes = build_packet_with_encoder(&packet, Some((0, 6)), Some(&key)).await;
 
         // Decrypt the packet
         decrypt_aes128(&mut packet_bytes, &key, &key);
@@ -551,8 +507,8 @@ mod tests {
 
         // Read data length VarInt (uncompressed data length)
         let data_length = decode_varint(&mut buffer).expect("Failed to decode data length");
-        let mut expected_payload = BytesMut::new();
-        packet.write(&mut expected_payload);
+        let mut expected_payload = Vec::new();
+        packet.write(&mut expected_payload).unwrap();
         let uncompressed_data_length =
             VarInt(CStatusResponse::PACKET_ID).written_size() + expected_payload.len();
         assert_eq!(data_length as usize, uncompressed_data_length);
@@ -577,13 +533,13 @@ mod tests {
     }
 
     /// Test encoding with zero-length payload
-    #[test]
-    fn test_encode_with_zero_length_payload() {
+    #[tokio::test]
+    async fn test_encode_with_zero_length_payload() {
         // Create a CStatusResponse packet with empty payload
         let packet = CStatusResponse::new("");
 
         // Build the packet without compression and encryption
-        let packet_bytes = build_packet_with_encoder(&packet, None, None);
+        let packet_bytes = build_packet_with_encoder(&packet, None, None).await;
 
         // Decode the packet manually to verify correctness
         let mut buffer = &packet_bytes[..];
@@ -601,8 +557,8 @@ mod tests {
         assert_eq!(decoded_packet_id, CStatusResponse::PACKET_ID);
 
         // Remaining buffer is the payload (empty)
-        let mut expected_payload = BytesMut::new();
-        packet.write(&mut expected_payload);
+        let mut expected_payload = Vec::new();
+        packet.write(&mut expected_payload).unwrap();
 
         assert_eq!(
             buffer.len(),
@@ -613,15 +569,15 @@ mod tests {
     }
 
     /// Test encoding with maximum length payload
-    #[test]
-    fn test_encode_with_maximum_string_length() {
+    #[tokio::test]
+    async fn test_encode_with_maximum_string_length() {
         // Maximum allowed string length is 32767 bytes
         let max_string_length = 32767;
         let payload_str = "A".repeat(max_string_length);
         let packet = CStatusResponse::new(&payload_str);
 
         // Build the packet without compression and encryption
-        let packet_bytes = build_packet_with_encoder(&packet, None, None);
+        let packet_bytes = build_packet_with_encoder(&packet, None, None).await;
 
         // Verify that the packet size does not exceed MAX_PACKET_SIZE as usize
         assert!(
@@ -646,34 +602,34 @@ mod tests {
         assert_eq!(decoded_packet_id, CStatusResponse::PACKET_ID);
 
         // Remaining buffer is the payload
-        let mut expected_payload = BytesMut::new();
-        packet.write(&mut expected_payload);
+        let mut expected_payload = Vec::new();
+        packet.write(&mut expected_payload).unwrap();
 
         assert_eq!(buffer, expected_payload);
     }
 
     /// Test encoding a packet that exceeds MAX_PACKET_SIZE as usize
-    #[test]
+    #[tokio::test]
     #[should_panic(expected = "TooLong")]
-    fn test_encode_packet_exceeding_maximum_size() {
+    async fn test_encode_packet_exceeding_maximum_size() {
         // Create a custom packet with data exceeding MAX_PACKET_SIZE as usize
         let data_size = MAX_PACKET_SIZE as usize + 1; // Exceed by 1 byte
         let packet = MaxSizePacket::new(data_size);
 
         // Build the packet without compression and encryption
         // This should panic with PacketEncodeError::TooLong
-        build_packet_with_encoder(&packet, None, None);
+        build_packet_with_encoder(&packet, None, None).await;
     }
 
     /// Test encoding with a small payload that should not be compressed
-    #[test]
-    fn test_encode_small_payload_no_compression() {
+    #[tokio::test]
+    async fn test_encode_small_payload_no_compression() {
         // Create a CStatusResponse packet with small payload
         let packet = CStatusResponse::new("Hi");
 
         // Build the packet with compression enabled
         // Compression threshold is set to a value higher than payload length
-        let packet_bytes = build_packet_with_encoder(&packet, Some((10, 6)), None);
+        let packet_bytes = build_packet_with_encoder(&packet, Some((10, 6)), None).await;
 
         // Decode the packet manually to verify that it was not compressed
         let mut buffer = &packet_bytes[..];
@@ -698,8 +654,8 @@ mod tests {
         assert_eq!(decoded_packet_id, CStatusResponse::PACKET_ID);
 
         // Remaining buffer is the payload
-        let mut expected_payload = BytesMut::new();
-        packet.write(&mut expected_payload);
+        let mut expected_payload = Vec::new();
+        packet.write(&mut expected_payload).unwrap();
 
         assert_eq!(buffer, expected_payload);
     }

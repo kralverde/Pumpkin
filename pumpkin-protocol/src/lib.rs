@@ -143,7 +143,7 @@ where
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum IdOr<T> {
     Id(u32),
     Value(T),
@@ -483,15 +483,36 @@ impl Serialize for LinkType {
 
 #[cfg(test)]
 mod test {
-    use crate::ser::{deserializer::Deserializer, serializer::Serializer};
+    use crate::{
+        codec::identifier::Identifier,
+        ser::{deserializer::Deserializer, serializer::Serializer},
+    };
     use serde::{Deserialize, Serialize};
 
     use crate::{IdOr, SoundEvent};
 
-    fn test_serde_id_or() {
+    #[test]
+    fn test_serde_id_or_id() {
         let mut buf = Vec::new();
 
         let id = IdOr::<SoundEvent>::Id(0);
+        id.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+        let deser_id =
+            IdOr::<SoundEvent>::deserialize(&mut Deserializer::new(buf.as_slice())).unwrap();
+
+        assert!(id == deser_id);
+    }
+
+    #[test]
+    fn test_serde_id_or_value() {
+        let mut buf = Vec::new();
+        let event = SoundEvent {
+            sound_name: Identifier::vanilla("test"),
+            range: Some(1.0),
+        };
+
+        let id = IdOr::<SoundEvent>::Value(event);
         id.serialize(&mut Serializer::new(&mut buf)).unwrap();
 
         let deser_id =

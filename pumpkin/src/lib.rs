@@ -307,9 +307,11 @@ impl PumpkinServer {
                 while let Some(notif) = rx.recv().await {
                     match notif {
                         PacketHandlerState::PacketReady => {
+                            todo!();
+                            /*
                             let buf = {
                                 let mut enc = client_clone.enc.lock().await;
-                                enc.take()
+                                //enc.take()
                             };
 
                             if let Err(e) = connection_writer.write_all(&buf).await {
@@ -317,6 +319,7 @@ impl PumpkinServer {
                                 client_clone.close().await;
                                 break;
                             }
+                            */
                         }
                         PacketHandlerState::Stop => break,
                     }

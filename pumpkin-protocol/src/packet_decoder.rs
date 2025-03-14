@@ -220,20 +220,20 @@ mod tests {
             // Create a buffer that includes packet_id_varint and payload
             let mut data_to_compress = Vec::new();
             let packet_id_varint = VarInt(packet_id);
-            data_to_compress.write_var_int(&packet_id_varint);
-            data_to_compress.write_slice(payload);
+            data_to_compress.write_var_int(&packet_id_varint).unwrap();
+            data_to_compress.write_slice(payload).unwrap();
 
             // Compress the combined data
             let compressed_payload = compress_zlib(&data_to_compress);
             let data_len = data_to_compress.len() as i32; // 1 + payload.len()
             let data_len_varint = VarInt(data_len);
-            buffer.write_var_int(&data_len_varint);
-            buffer.write_slice(&compressed_payload);
+            buffer.write_var_int(&data_len_varint).unwrap();
+            buffer.write_slice(&compressed_payload).unwrap();
         } else {
             // No compression; data_len is payload length
             let packet_id_varint = VarInt(packet_id);
-            buffer.write_var_int(&packet_id_varint);
-            buffer.write_slice(payload);
+            buffer.write_var_int(&packet_id_varint).unwrap();
+            buffer.write_slice(payload).unwrap();
         }
 
         // Calculate packet length: length of buffer
@@ -241,7 +241,9 @@ mod tests {
         let packet_len_varint = VarInt(packet_len);
         let mut packet_length_encoded = Vec::new();
         {
-            packet_len_varint.encode(&mut packet_length_encoded);
+            packet_len_varint
+                .encode(&mut packet_length_encoded)
+                .unwrap();
         }
 
         // Create a new buffer for the entire packet
@@ -360,8 +362,8 @@ mod tests {
         // Build the packet with compression enabled but invalid compressed data
         let mut buffer = Vec::new();
         let data_len_varint = VarInt(data_len);
-        buffer.write_var_int(&data_len_varint);
-        buffer.write_slice(&invalid_compressed_data);
+        buffer.write_var_int(&data_len_varint).unwrap();
+        buffer.write_slice(&invalid_compressed_data).unwrap();
 
         // Calculate packet length: VarInt(data_len) + invalid compressed data
         let packet_len = buffer.len() as i32;
@@ -369,8 +371,8 @@ mod tests {
 
         // Create a new buffer for the entire packet
         let mut packet_buffer = Vec::new();
-        packet_buffer.write_var_int(&packet_len_varint);
-        packet_buffer.write_slice(&buffer);
+        packet_buffer.write_var_int(&packet_len_varint).unwrap();
+        packet_buffer.write_slice(&buffer).unwrap();
 
         let packet_bytes = packet_buffer;
 

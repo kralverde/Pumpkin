@@ -1,7 +1,5 @@
-use bytes::Bytes;
 use std::{
     collections::VecDeque,
-    io::Cursor,
     num::NonZeroU8,
     ops::AddAssign,
     sync::{
@@ -26,7 +24,7 @@ use pumpkin_inventory::player::PlayerInventory;
 use pumpkin_macros::send_cancellable;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::{
-    RawPacket, ServerPacket,
+    IdOr, RawPacket, ServerPacket,
     client::play::{
         CAcknowledgeBlockChange, CActionBar, CChunkBatchEnd, CChunkBatchStart, CChunkData,
         CCombatDeath, CDisguisedChatMessage, CGameEvent, CKeepAlive, CParticle, CPlayDisconnect,
@@ -492,8 +490,7 @@ impl Player {
     ) {
         self.client
             .send_packet(&CSoundEffect::new(
-                VarInt(i32::from(sound_id)),
-                None,
+                IdOr::Id(sound_id as u32),
                 category,
                 position,
                 volume,

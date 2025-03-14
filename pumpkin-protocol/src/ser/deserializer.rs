@@ -143,11 +143,15 @@ impl<'de, R: NetworkRead> de::Deserializer<'de> for &mut Deserializer<R> {
         unimplemented!()
     }
 
-    fn deserialize_option<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
     {
-        unimplemented!()
+        if self.inner.get_bool()? {
+            visitor.visit_some(self)
+        } else {
+            visitor.visit_none()
+        }
     }
 
     fn deserialize_unit<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
