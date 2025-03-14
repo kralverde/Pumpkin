@@ -8,7 +8,7 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{SeqAccess, Visitor},
 };
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub type VarIntType = i32;
 
@@ -71,6 +71,25 @@ impl VarInt {
             }
         }
         Err(ReadingError::TooLarge("VarInt".to_string()))
+    }
+
+    pub async fn encode_async(
+        &self,
+        write: &mut (impl AsyncWrite + Unpin),
+    ) -> Result<(), WritingError> {
+        let mut val = self.0;
+        for _ in 0..Self::MAX_SIZE.get() {
+            let b: u8 = val as u8 & 0b01111111;
+            val >>= 7;
+            write
+                .write_u8(if val == 0 { b } else { b | 0b10000000 })
+                .await
+                .map_err(|err| WritingError::IoError(err))?;
+            if val == 0 {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 

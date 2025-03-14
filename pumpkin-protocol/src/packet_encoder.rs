@@ -1,28 +1,168 @@
 use std::io::Write;
 
 use aes::cipher::{BlockEncryptMut, BlockSizeUser, KeyIvInit, generic_array::GenericArray};
+use async_compression::{Level, tokio::write::ZlibEncoder};
 use bytes::{BufMut, BytesMut};
 use thiserror::Error;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::{
-    ClientPacket, CompressionLevel, CompressionThreshold, MAX_PACKET_SIZE, VarInt, codec::Codec,
+    Aes128Cfb8Enc, ClientPacket, CompressionLevel, CompressionThreshold, MAX_PACKET_DATA_SIZE,
+    MAX_PACKET_SIZE, StreamEncryptor, VarInt, codec::Codec, ser::NetworkRead,
 };
 
-type Cipher = cfb8::Encryptor<aes::Aes128>;
+// raw -> compress -> encrypt
+pub enum CompressionWriter<W: AsyncWrite + Unpin> {
+    Compress(ZlibEncoder<W>),
+    None(W),
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for CompressionWriter<W> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        match self.get_mut() {
+            Self::Compress(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_write(cx, buf)
+            }
+            Self::None(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_write(cx, buf)
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            Self::Compress(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_flush(cx)
+            }
+            Self::None(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_flush(cx)
+            }
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            Self::Compress(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_shutdown(cx)
+            }
+            Self::None(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_shutdown(cx)
+            }
+        }
+    }
+}
+
+pub enum EncryptionWriter<W: AsyncWrite + Unpin> {
+    Encrypt(Box<StreamEncryptor<W>>),
+    None(W),
+}
+
+impl<W: AsyncWrite + Unpin> EncryptionWriter<W> {
+    pub fn upgrade(self, cipher: Aes128Cfb8Enc) -> Self {
+        match self {
+            Self::None(stream) => Self::Encrypt(Box::new(StreamEncryptor::new(cipher, stream))),
+            _ => panic!("Cannot upgrade a stream that already has a cipher!"),
+        }
+    }
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for EncryptionWriter<W> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        match self.get_mut() {
+            Self::Encrypt(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_write(cx, buf)
+            }
+            Self::None(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_write(cx, buf)
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            Self::Encrypt(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_flush(cx)
+            }
+            Self::None(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_flush(cx)
+            }
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            Self::Encrypt(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_shutdown(cx)
+            }
+            Self::None(writer) => {
+                let writer = std::pin::Pin::new(writer);
+                writer.poll_shutdown(cx)
+            }
+        }
+    }
+}
 
 /// Encoder: Server -> Client
 /// Supports ZLib endecoding/compression
 /// Supports Aes128 Encryption
-#[derive(Default)]
-pub struct PacketEncoder {
-    buf: BytesMut,
-    compress_buf: Vec<u8>,
-    cipher: Option<Cipher>,
+pub struct NetworkEncoder<W: AsyncWrite + Unpin> {
+    writer: EncryptionWriter<W>,
     // compression and compression threshold
     compression: Option<(CompressionThreshold, CompressionLevel)>,
 }
 
-impl PacketEncoder {
+impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            writer: EncryptionWriter::None(writer),
+            compression: None,
+        }
+    }
+
+    pub fn set_compression(&mut self, threshold: Option<(CompressionThreshold, CompressionLevel)>) {
+        self.compression = threshold;
+    }
+
+    /// NOTE: Encryption can only be set; a minecraft stream cannot go back to being unencrypted
+    pub fn set_encryption(&mut self, key: &[u8; 16]) {
+        if matches!(self.writer, EncryptionWriter::Encrypt(_)) {
+            panic!("Cannot upgrade a stream that already has a cipher!");
+        }
+        let cipher = Aes128Cfb8Enc::new_from_slices(key, key).expect("invalid key");
+        take_mut::take(&mut self.writer, |encoder| encoder.upgrade(cipher));
+    }
+
     /// Appends a Clientbound `ClientPacket` to the internal buffer and applies compression when needed.
     ///
     /// If compression is enabled and the packet size exceeds the threshold, the packet is compressed.
@@ -53,132 +193,127 @@ impl PacketEncoder {
     /// -   `Data Length`: (Only present in compressed packets) The length of the uncompressed `Packet ID` and `Data`.
     /// -   `Packet ID`: The ID of the packet.
     /// -   `Data`: The packet's data.
-    pub fn append_packet<P: ClientPacket>(&mut self, packet: &P) -> Result<(), PacketEncodeError> {
-        let start_len = self.buf.len();
-        // Write the Packet ID first
-        VarInt(P::PACKET_ID).encode(&mut self.buf);
-        // Now write the packet into an empty buffer
-        packet.write(&mut self.buf);
-        let data_len = self.buf.len() - start_len;
+    pub async fn write_packet<P: ClientPacket>(
+        &mut self,
+        packet: &P,
+    ) -> Result<(), PacketEncodeError> {
+        // We need to know the length of the compressed buffer and serde is not async :(
+        // We need to write to a buffer here 😔
+
+        // TODO: We only need a length here, otherwise we could stream the deserialization (into a
+        // buffer). Add a "serialized_size" or something to packets that gets the serialized length
+        let mut packet_buf = Vec::new();
+        packet.write(&mut packet_buf).map_err(|err| {
+            // TODO: Remove this when we are confident with all of our networking
+
+            panic!("Failed to serialize packet to the network: {}", err);
+            //PacketEncodeError::Message(err.to_string())
+        })?;
+        let data_len = packet_buf.len();
+
+        let packet_id_var_int: VarInt = P::PACKET_ID.into();
+        let full_data_len = data_len + packet_id_var_int.written_size();
+        if full_data_len > MAX_PACKET_DATA_SIZE {
+            return Err(PacketEncodeError::TooLong(full_data_len));
+        }
+        let uncompressed_len_var_int: VarInt = full_data_len.into();
 
         if let Some((compression_threshold, compression_level)) = self.compression {
-            if data_len > compression_threshold {
-                // Get the data to compress
-                let data_to_compress = &self.buf[start_len..];
+            if full_data_len > compression_threshold {
+                // Pushed before data:
+                // Length of (Data Length) + length of compressed (Packet ID + Data)
+                // Length of uncompressed (Packet ID + Data)
 
-                // Clear the compression buffer
-                self.compress_buf.clear();
+                // TODO: We need the compressed length at the beginning of the packet so we need to write to
+                // buf here :( Is there a magic way to find a compressed length?
+                let mut compressed_buf = Vec::new();
+                let mut compressor = CompressionWriter::Compress(ZlibEncoder::with_quality(
+                    &mut compressed_buf,
+                    Level::Precise(compression_level as i32),
+                ));
 
-                todo!();
-                /*
-                ZlibEncoder::new(&mut self.compress_buf, Compression::new(compression_level))
-                    .write_all(data_to_compress)
-                    .map_err(|e| PacketEncodeError::CompressionFailed(e.to_string()))?;
-                */
+                packet_id_var_int
+                    .encode_async(&mut compressor)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
 
-                let data_len_size = VarInt(data_len as i32).written_size();
+                compressor
+                    .write_all(&packet_buf)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
 
-                let packet_len = data_len_size + self.compress_buf.len();
+                let full_packet_len_var_int: VarInt =
+                    (uncompressed_len_var_int.written_size() + compressed_buf.len()).into();
 
-                if packet_len >= MAX_PACKET_SIZE as usize {
-                    return Err(PacketEncodeError::TooLong(packet_len));
+                let full_packet_len =
+                    full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
+                if full_packet_len > MAX_PACKET_SIZE as usize {
+                    return Err(PacketEncodeError::TooLong(full_packet_len));
                 }
 
-                self.buf.truncate(start_len);
-
-                VarInt(packet_len as i32).encode(&mut self.buf);
-                VarInt(data_len as i32).encode(&mut self.buf);
-                self.buf.extend_from_slice(&self.compress_buf);
+                full_packet_len_var_int
+                    .encode_async(&mut self.writer)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+                uncompressed_len_var_int
+                    .encode_async(&mut self.writer)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+                self.writer
+                    .write_all(&compressed_buf)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
             } else {
-                let data_len_size = 1;
-                let packet_len = data_len_size + data_len;
+                // Pushed before data:
+                // Length of (Data Length) + length of compressed (Packet ID + Data)
+                // 0 to indicate uncompressed
 
-                if packet_len >= MAX_PACKET_SIZE as usize {
-                    Err(PacketEncodeError::TooLong(packet_len))?
+                let zero_var_int: VarInt = 0.into();
+                let full_packet_len_var_int: VarInt =
+                    (full_data_len + zero_var_int.written_size()).into();
+
+                let full_packet_len =
+                    full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
+                if full_packet_len > MAX_PACKET_SIZE as usize {
+                    return Err(PacketEncodeError::TooLong(full_packet_len));
                 }
 
-                let packet_len_size = VarInt(packet_len as i32).written_size();
-
-                let data_prefix_len = packet_len_size + data_len_size;
-
-                self.buf.put_bytes(0, data_prefix_len);
-                self.buf
-                    .copy_within(start_len..start_len + data_len, start_len + data_prefix_len);
-
-                let mut front = &mut self.buf[start_len..];
-
-                VarInt(packet_len as i32).encode(&mut front);
-                // Zero for no compression on this packet.
-                VarInt(0).encode(&mut front);
+                full_packet_len_var_int
+                    .encode_async(&mut self.writer)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+                zero_var_int
+                    .encode_async(&mut self.writer)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+                self.writer
+                    .write_all(&packet_buf)
+                    .await
+                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
             }
-
-            return Ok(());
-        }
-
-        let packet_len = data_len;
-
-        if packet_len >= MAX_PACKET_SIZE as usize {
-            Err(PacketEncodeError::TooLong(packet_len))?
-        }
-
-        let packet_len_size = VarInt(packet_len as i32).written_size();
-
-        self.buf.put_bytes(0, packet_len_size);
-        self.buf
-            .copy_within(start_len..start_len + data_len, start_len + packet_len_size);
-
-        let mut front = &mut self.buf[start_len..];
-        VarInt(packet_len as i32).encode(&mut front);
-        Ok(())
-    }
-
-    /// Enable encryption for taking all packets buffer `
-    pub fn set_encryption(&mut self, key: Option<&[u8; 16]>) {
-        if let Some(key) = key {
-            assert!(self.cipher.is_none(), "encryption is already enabled");
-
-            self.cipher = Some(Cipher::new_from_slices(key, key).expect("invalid key"));
         } else {
-            assert!(self.cipher.is_some(), "encryption is disabled");
+            // Pushed before data:
+            // Length of Packet ID + Data
 
-            self.cipher = None;
-        }
-    }
+            let full_packet_len_var_int: VarInt = uncompressed_len_var_int;
 
-    /// Enables or disables Zlib compression.
-    ///
-    /// If `compression` is `Some`, compression is enabled with the given `threshold`
-    /// for triggering compression and the specified `level`. If `compression` is
-    /// `None`, compression is disabled.
-    ///
-    /// # Errors
-    ///
-    /// Returns an `CompressionLevelError` if an invalid compression level is provided.
-    pub fn set_compression(
-        &mut self,
-        compression: Option<(CompressionThreshold, CompressionLevel)>,
-    ) {
-        self.compression = compression;
-    }
-
-    /// Encrypts the data in the internal buffer and returns it as a `BytesMut`.
-    ///
-    /// If a cipher is set, the data is encrypted in-place using block cipher encryption.
-    /// The buffer is processed in chunks of the cipher's block size. If the buffer's
-    /// length is not a multiple of the block size, the last partial block is *not* encrypted.
-    /// It's important to ensure that the data being encrypted is padded appropriately
-    /// beforehand if necessary.
-    ///
-    /// If no cipher is set, the buffer is returned as is.
-    pub fn take(&mut self) -> BytesMut {
-        if let Some(cipher) = &mut self.cipher {
-            for chunk in self.buf.chunks_mut(Cipher::block_size()) {
-                let gen_arr = GenericArray::from_mut_slice(chunk);
-                cipher.encrypt_block_mut(gen_arr);
+            let full_packet_len =
+                full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
+            if full_packet_len > MAX_PACKET_SIZE as usize {
+                return Err(PacketEncodeError::TooLong(full_packet_len));
             }
+
+            full_packet_len_var_int
+                .encode_async(&mut self.writer)
+                .await
+                .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+            self.writer
+                .write_all(&packet_buf)
+                .await
+                .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
         }
 
-        self.buf.split()
+        Ok(())
     }
 }
 
@@ -193,6 +328,8 @@ pub enum PacketEncodeError {
     TooLong(usize),
     #[error("Compression failed {0}")]
     CompressionFailed(String),
+    #[error("Writing packet failed: {0}")]
+    Message(String),
 }
 
 #[cfg(test)]
