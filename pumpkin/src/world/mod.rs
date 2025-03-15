@@ -717,7 +717,7 @@ impl World {
                     let binding = chunk.read().await;
                     let packet = CChunkData(&binding);
                     let mut test = Vec::new();
-                    packet.write(&mut test);
+                    packet.write(&mut test).unwrap();
                     let len = test.len();
                     log::debug!(
                         "Chunk packet size: {}B {}KB {}MB",

@@ -92,11 +92,8 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
         }
     }
 
-    pub fn set_compression(
-        &mut self,
-        compression_info: Option<(CompressionThreshold, CompressionLevel)>,
-    ) {
-        self.compression = compression_info;
+    pub fn set_compression(&mut self, compression_info: (CompressionThreshold, CompressionLevel)) {
+        self.compression = Some(compression_info);
     }
 
     /// NOTE: Encryption can only be set; a minecraft stream cannot go back to being unencrypted
@@ -352,7 +349,9 @@ mod tests {
     ) -> Box<[u8]> {
         let mut buf = Vec::new();
         let mut encoder = NetworkEncoder::new(&mut buf);
-        encoder.set_compression(compression_info);
+        if let Some(compression_info) = compression_info {
+            encoder.set_compression(compression_info);
+        }
 
         if let Some(key) = key {
             encoder.set_encryption(key);

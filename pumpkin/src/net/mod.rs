@@ -41,10 +41,18 @@ use pumpkin_util::{ProfileAction, text::TextComponent};
 use serde::Deserialize;
 use sha1::Digest;
 use sha2::Sha256;
-use tokio::sync::mpsc;
-use tokio::{net::tcp::OwnedReadHalf, sync::Mutex};
+use tokio::{
+    net::tcp::OwnedWriteHalf,
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+};
+use tokio::{
+    net::{TcpStream, tcp::OwnedReadHalf},
+    sync::Mutex,
+    task::JoinSet,
+};
 
 use thiserror::Error;
+use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 mod authentication;
 mod container;
@@ -137,24 +145,23 @@ pub struct Client {
     /// The client's IP address.
     pub address: Mutex<SocketAddr>,
     /// The packet encoder for outgoing packets.
-    pub enc: Arc<Mutex<NetworkEncoder<Cursor<Vec<u8>>>>>,
+    enc: Arc<Mutex<NetworkEncoder<OwnedWriteHalf>>>,
     /// The packet decoder for incoming packets.
-    pub dec: Arc<Mutex<NetworkDecoder<Cursor<Bytes>>>>,
-    /// A channel for sending packets to the client.
-    pub server_packets_channel: mpsc::Sender<PacketHandlerState>,
-    /// A queue of raw packets received from the client, waiting to be processed.
-    pub client_packets_queue: Arc<Mutex<VecDeque<RawPacket>>>,
+    dec: Arc<Mutex<NetworkDecoder<OwnedReadHalf>>>,
     /// Indicates whether the client should be converted into a player.
     pub make_player: AtomicBool,
+    tasks: TaskTracker,
 }
 
 impl Client {
     #[must_use]
     pub fn new(
         server_packets_channel: mpsc::Sender<PacketHandlerState>,
+        tcp_stream: TcpStream,
         address: SocketAddr,
         id: usize,
     ) -> Self {
+        let (read, write) = tcp_stream.into_split();
         Self {
             id,
             protocol_version: AtomicI32::new(0),
@@ -164,12 +171,11 @@ impl Client {
             server_address: Mutex::new(String::new()),
             address: Mutex::new(address),
             connection_state: AtomicCell::new(ConnectionState::HandShake),
-            enc: Arc::new(Mutex::new(NetworkEncoder::new(Cursor::new(Vec::new())))),
-            dec: Arc::new(Mutex::new(NetworkDecoder::new(Cursor::new(Bytes::new())))),
+            enc: Arc::new(Mutex::new(NetworkEncoder::new(write))),
+            dec: Arc::new(Mutex::new(NetworkDecoder::new(read))),
             closed: AtomicBool::new(false),
-            server_packets_channel,
-            client_packets_queue: Arc::new(Mutex::new(VecDeque::new())),
             make_player: AtomicBool::new(false),
+            tasks: TaskTracker::new(),
         }
     }
 

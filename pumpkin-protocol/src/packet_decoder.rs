@@ -84,8 +84,8 @@ impl<R: AsyncRead + Unpin> NetworkDecoder<R> {
         }
     }
 
-    pub fn set_compression(&mut self, threshold: Option<CompressionThreshold>) {
-        self.compression = threshold;
+    pub fn set_compression(&mut self, threshold: CompressionThreshold) {
+        self.compression = Some(threshold);
     }
 
     /// NOTE: Encryption can only be set; a minecraft stream cannot go back to being unencrypted
@@ -293,7 +293,7 @@ mod tests {
         // Initialize the decoder with compression enabled
         let mut decoder = NetworkDecoder::new(packet.as_slice());
         // Larger than payload
-        decoder.set_compression(Some(1000));
+        decoder.set_compression(1000);
 
         // Attempt to decode
         let raw_packet = decoder.get_raw_packet().await.expect("Decoding failed");
@@ -342,7 +342,7 @@ mod tests {
 
         // Initialize the decoder with both compression and encryption enabled
         let mut decoder = NetworkDecoder::new(packet.as_slice());
-        decoder.set_compression(Some(1000));
+        decoder.set_compression(1000);
         decoder.set_encryption(&key);
 
         // Attempt to decode
@@ -378,7 +378,7 @@ mod tests {
 
         // Initialize the decoder with compression enabled
         let mut decoder = NetworkDecoder::new(&packet_bytes[..]);
-        decoder.set_compression(Some(1000));
+        decoder.set_compression(1000);
 
         // Attempt to decode and expect a decompression error
         let result = decoder.get_raw_packet().await;
@@ -424,7 +424,7 @@ mod tests {
 
         // Initialize the decoder with compression enabled
         let mut decoder = NetworkDecoder::new(packet.as_slice());
-        decoder.set_compression(Some(MAX_PACKET_SIZE as usize + 1));
+        decoder.set_compression(MAX_PACKET_SIZE as usize + 1);
 
         // Attempt to decode
         let result = decoder.get_raw_packet().await;

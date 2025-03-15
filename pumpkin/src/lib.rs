@@ -293,9 +293,8 @@ impl PumpkinServer {
             );
 
             let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-            let (mut connection_reader, connection_writer) = connection.into_split();
 
-            let client = Arc::new(Client::new(tx, client_addr, id));
+            let client = Arc::new(Client::new(tx, connection, client_addr, id));
 
             let client_clone = client.clone();
             // This task will be cleaned up on its own
@@ -470,7 +469,7 @@ async fn poll(client: &Client, connection_reader: &mut OwnedReadHalf) -> bool {
             return false;
         }
 
-        let mut dec = client.dec.lock().await;
+        //let mut dec = client.dec.lock().await;
 
         todo!();
         /*
