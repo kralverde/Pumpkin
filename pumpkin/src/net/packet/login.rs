@@ -143,6 +143,10 @@ impl Client {
                 profile_actions: None,
             };
 
+            if advanced_config().networking.packet_compression.enabled {
+                //self.enable_compression().await;
+            }
+
             if BASIC_CONFIG.encryption {
                 let verify_token: [u8; 4] = rand::random();
                 // Wait until we have sent the encryption packet to the client
@@ -151,9 +155,6 @@ impl Client {
                 )
                 .await;
             } else {
-                if advanced_config().networking.packet_compression.enabled {
-                    self.enable_compression().await;
-                }
                 self.finish_login(&profile).await;
             }
 
@@ -240,9 +241,6 @@ impl Client {
             return;
         }
 
-        if advanced_config().networking.packet_compression.enabled {
-            self.enable_compression().await;
-        }
         self.finish_login(profile).await;
     }
 
@@ -351,6 +349,7 @@ impl Client {
 
         // TODO: Is this the right place to send them?
         // send tags
+
         self.send_packet_now(&CUpdateTags::new(&[
             pumpkin_data::tag::RegistryKey::Block,
             pumpkin_data::tag::RegistryKey::Fluid,

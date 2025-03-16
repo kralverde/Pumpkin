@@ -206,7 +206,7 @@ impl PumpkinServer {
         if rcon.enabled {
             let rcon_server = server.clone();
             server.spawn_task(async move {
-                RCONServer::new(&rcon, rcon_server).await.unwrap();
+                RCONServer::run(&rcon, rcon_server).await.unwrap();
             });
         }
 
@@ -286,17 +286,13 @@ impl PumpkinServer {
 
             // We need to await these to verify all cleanup code is complete
             tasks.spawn(async move {
-                while !client.closed.load(std::sync::atomic::Ordering::Relaxed)
-                    && !client
-                        .make_player
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    client.process_packets(&server).await;
-                }
+                client.process_packets(&server).await;
+
                 if client
                     .make_player
                     .load(std::sync::atomic::Ordering::Relaxed)
                 {
+                    // Client is kicked if this fails
                     if let Some((player, world)) = server.add_player(client).await {
                         world
                             .spawn_player(&BASIC_CONFIG, player.clone(), &server)
@@ -327,6 +323,8 @@ impl PumpkinServer {
 
         tasks.close();
         tasks.wait().await;
+
+        log::info!("Starting save.");
 
         self.server.save().await;
 

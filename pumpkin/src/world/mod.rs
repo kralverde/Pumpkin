@@ -695,6 +695,7 @@ impl World {
         // TODO: Bulk chunks?
 
         player.clone().spawn_task(async move {
+            //TODO: Add player close interrupt here
             'main: while let Some((chunk, first_load)) = receiver.recv().await {
                 let position = chunk.read().await.position;
 

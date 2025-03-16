@@ -98,10 +98,12 @@ impl<R: AsyncRead + Unpin> NetworkDecoder<R> {
     }
 
     pub async fn get_raw_packet(&mut self) -> Result<RawPacket, PacketDecodeError> {
-        let packet_len = match VarInt::decode_async(&mut self.reader).await {
-            Ok(len) => len,
-            _ => Err(PacketDecodeError::MalformedLength)?,
-        };
+        let packet_len = VarInt::decode_async(&mut self.reader)
+            .await
+            .map_err(|err| match err {
+                ReadingError::CleanEOF(_) => PacketDecodeError::ConnectionClosed,
+                err => PacketDecodeError::MalformedLength(err.to_string()),
+            })?;
 
         let packet_len = packet_len.0 as u64;
 
@@ -163,12 +165,14 @@ pub enum PacketDecodeError {
     TooLong,
     #[error("packet length is out of bounds")]
     OutOfBounds,
-    #[error("malformed packet length VarInt")]
-    MalformedLength,
+    #[error("malformed packet length VarInt: {0}")]
+    MalformedLength(String),
     #[error("failed to decompress packet: {0}")]
     FailedDecompression(String), // Updated to include error details
     #[error("packet is uncompressed but greater than the threshold")]
     NotCompressed,
+    #[error("the connection has closed")]
+    ConnectionClosed,
 }
 
 impl From<ReadingError> for PacketDecodeError {

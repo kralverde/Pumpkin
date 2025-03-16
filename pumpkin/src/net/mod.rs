@@ -19,7 +19,7 @@ use pumpkin_config::networking::compression::CompressionInfo;
 use pumpkin_protocol::{
     ClientPacket, ConnectionState, Property, RawPacket, ServerPacket,
     client::{config::CConfigDisconnect, login::CLoginDisconnect, play::CPlayDisconnect},
-    packet_decoder::NetworkDecoder,
+    packet_decoder::{NetworkDecoder, PacketDecodeError},
     packet_encoder::NetworkEncoder,
     ser::{ReadingError, packet::Packet},
     server::{
@@ -39,7 +39,12 @@ use pumpkin_util::{ProfileAction, text::TextComponent};
 use serde::Deserialize;
 use sha1::Digest;
 use sha2::Sha256;
-use tokio::{net::tcp::OwnedWriteHalf, sync::Notify, task::JoinHandle};
+use tokio::{
+    io::{BufReader, BufWriter},
+    net::tcp::OwnedWriteHalf,
+    sync::Notify,
+    task::JoinHandle,
+};
 use tokio::{
     net::{TcpStream, tcp::OwnedReadHalf},
     sync::Mutex,
@@ -139,9 +144,9 @@ pub struct Client {
     /// The client's IP address.
     pub address: Mutex<SocketAddr>,
     /// The packet encoder for outgoing packets.
-    network_writer: Arc<Mutex<NetworkEncoder<OwnedWriteHalf>>>,
+    network_writer: Arc<Mutex<NetworkEncoder<BufWriter<OwnedWriteHalf>>>>,
     /// The packet decoder for incoming packets.
-    network_reader: Arc<Mutex<NetworkDecoder<OwnedReadHalf>>>,
+    network_reader: Mutex<NetworkDecoder<BufReader<OwnedReadHalf>>>,
     /// Indicates whether the client should be converted into a player.
     pub make_player: AtomicBool,
     /// A collection of tasks associated with this client. The tasks await completion when removing the client.
@@ -163,8 +168,8 @@ impl Client {
             server_address: Mutex::new(String::new()),
             address: Mutex::new(address),
             connection_state: AtomicCell::new(ConnectionState::HandShake),
-            network_writer: Arc::new(Mutex::new(NetworkEncoder::new(write))),
-            network_reader: Arc::new(Mutex::new(NetworkDecoder::new(read))),
+            network_writer: Arc::new(Mutex::new(NetworkEncoder::new(BufWriter::new(write)))),
+            network_reader: Mutex::new(NetworkDecoder::new(BufReader::new(read))),
             closed: Arc::new(AtomicBool::new(false)),
             make_player: AtomicBool::new(false),
             close_interrupt: Arc::new(Notify::new()),
@@ -272,9 +277,11 @@ impl Client {
                 match packet_result {
                     Ok(packet) => Some(packet),
                     Err(err) => {
-                        log::warn!("Failed to decode packet from client {}: {}", self.id, err);
-                        let text = format!("Error while reading incoming packet {}", err);
-                        self.kick(TextComponent::text(text)).await;
+                        if !matches!(err, PacketDecodeError::ConnectionClosed) {
+                            log::warn!("Failed to decode packet from client {}: {}", self.id, err);
+                            let text = format!("Error while reading incoming packet {}", err);
+                            self.kick(TextComponent::text(text)).await;
+                        }
                         None
                     }
                 }
@@ -289,7 +296,7 @@ impl Client {
     /// * `packet`: A reference to a packet object implementing the `ClientPacket` trait.
     pub fn enqueue_packet<P, R>(&self, packet_ref: R)
     where
-        P: ClientPacket,
+        P: ClientPacket + Sync + Send,
         R: Borrow<P> + Send + 'static,
     {
         let network_writer = self.network_writer.clone();
@@ -298,7 +305,7 @@ impl Client {
         let notifier = self.close_interrupt.clone();
 
         // Ideally this would be some kind of queue, but thats hard to do over generic types
-        self.tasks.spawn_local(async move {
+        self.tasks.spawn(async move {
             let mut network_writer = network_writer.lock().await;
             if let Err(err) = network_writer.write_packet(packet_ref.borrow()).await {
                 // It is expected that the packet will fail if we are closed

@@ -30,7 +30,7 @@ impl ClientPacket for CUpdateTags<'_> {
             p.write_identifier(&Identifier::vanilla(registry_key.identifier_string()))?;
 
             let values = get_registry_key_tags(registry_key);
-            p.write_var_int(&VarInt::from(values.len() as i32))?;
+            p.write_var_int(&VarInt::from(values.len()))?;
             for (key, values) in values.iter() {
                 // This is technically a Identifier but same thing
                 p.write_string_bounded(key, u16::MAX as usize)?;

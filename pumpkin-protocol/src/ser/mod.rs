@@ -13,12 +13,11 @@ pub mod serializer;
 
 #[derive(Debug, Error)]
 pub enum ReadingError {
-    /// End-of-File
     #[error("EOF, Tried to read {0} but No bytes left to consume")]
-    EOF(String),
-    #[error("{0} is Incomplete")]
+    CleanEOF(String),
+    #[error("incomplete: {0}")]
     Incomplete(String),
-    #[error("{0} is too Large")]
+    #[error("too large: {0}")]
     TooLarge(String),
     #[error("{0}")]
     Message(String),
@@ -384,11 +383,11 @@ impl<W: Write> NetworkWrite for W {
     fn write_option<G>(
         &mut self,
         data: &Option<G>,
-        write: impl FnOnce(&mut Self, &G) -> Result<(), WritingError>,
+        writer: impl FnOnce(&mut Self, &G) -> Result<(), WritingError>,
     ) -> Result<(), WritingError> {
         if let Some(data) = data {
             self.write_bool(true)?;
-            write(self, data)
+            writer(self, data)
         } else {
             self.write_bool(false)
         }
@@ -396,12 +395,12 @@ impl<W: Write> NetworkWrite for W {
 
     fn write_list<G>(
         &mut self,
-        data: &[G],
-        write: impl Fn(&mut Self, &G) -> Result<(), WritingError>,
+        list: &[G],
+        writer: impl Fn(&mut Self, &G) -> Result<(), WritingError>,
     ) -> Result<(), WritingError> {
-        self.write_var_int(&data.len().into())?;
-        for data in data {
-            write(self, data)?;
+        self.write_var_int(&list.len().into())?;
+        for data in list {
+            writer(self, data)?;
         }
 
         Ok(())
