@@ -145,7 +145,8 @@ impl Client {
 
             if BASIC_CONFIG.encryption {
                 let verify_token: [u8; 4] = rand::random();
-                self.send_packet(
+                // Wait until we have sent the encryption packet to the client
+                self.send_packet_now(
                     &server.encryption_request(&verify_token, BASIC_CONFIG.online_mode),
                 )
                 .await;
@@ -247,14 +248,15 @@ impl Client {
 
     async fn enable_compression(&self) {
         let compression = advanced_config().networking.packet_compression.info.clone();
-        self.send_packet(&CSetCompression::new(compression.threshold.into()))
+        // We want to wait until we have sent the compression packet to the client
+        self.send_packet_now(&CSetCompression::new(compression.threshold.into()))
             .await;
-        self.set_compression(Some(compression)).await;
+        self.set_compression(compression).await;
     }
 
     async fn finish_login(&self, profile: &GameProfile) {
         let packet = CLoginSuccess::new(&profile.id, &profile.name, &profile.properties);
-        self.send_packet(&packet).await;
+        self.send_packet_now(&packet).await;
     }
 
     async fn authenticate(
@@ -337,10 +339,10 @@ impl Client {
     pub async fn handle_login_acknowledged(&self, server: &Server) {
         log::debug!("Handling login acknowledged");
         self.connection_state.store(ConnectionState::Config);
-        self.send_packet(&server.get_branding()).await;
+        self.send_packet_now(&server.get_branding()).await;
 
         if advanced_config().server_links.enabled {
-            self.send_packet(&CConfigServerLinks::new(
+            self.send_packet_now(&CConfigServerLinks::new(
                 &VarInt(LINKS.len() as i32),
                 &LINKS,
             ))
@@ -349,7 +351,7 @@ impl Client {
 
         // TODO: Is this the right place to send them?
         // send tags
-        self.send_packet(&CUpdateTags::new(&[
+        self.send_packet_now(&CUpdateTags::new(&[
             pumpkin_data::tag::RegistryKey::Block,
             pumpkin_data::tag::RegistryKey::Fluid,
         ]))
@@ -370,7 +372,7 @@ impl Client {
                 },
             );
 
-            self.send_packet(&resource_pack).await;
+            self.send_packet_now(&resource_pack).await;
         } else {
             // This will be invoked by our resource pack handler in the case of the above branch
             self.send_known_packs().await;
@@ -380,7 +382,7 @@ impl Client {
 
     pub async fn send_known_packs(&self) {
         // known data packs
-        self.send_packet(&CKnownPacks::new(&[KnownPack {
+        self.send_packet_now(&CKnownPacks::new(&[KnownPack {
             namespace: "minecraft",
             id: "core",
             version: "1.21",

@@ -39,7 +39,7 @@ impl CommandExecutor for ClearOrResetExecutor {
         let reset = self.0;
 
         for target in targets {
-            target.client.send_packet(&CClearTtitle::new(reset)).await;
+            target.client.enqueue_packet(CClearTtitle::new(reset));
         }
         sender
             .send_message(if targets.len() == 1 {

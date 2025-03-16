@@ -18,13 +18,13 @@ pub mod commands;
 pub mod dispatcher;
 pub mod tree;
 
-pub enum CommandSender<'a> {
-    Rcon(&'a tokio::sync::Mutex<Vec<String>>),
+pub enum CommandSender {
+    Rcon(Arc<tokio::sync::Mutex<Vec<String>>>),
     Console,
     Player(Arc<Player>),
 }
 
-impl fmt::Display for CommandSender<'_> {
+impl fmt::Display for CommandSender {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -38,7 +38,7 @@ impl fmt::Display for CommandSender<'_> {
     }
 }
 
-impl CommandSender<'_> {
+impl CommandSender {
     pub async fn send_message(&self, text: TextComponent) {
         match self {
             CommandSender::Console => log::info!("{}", text.to_pretty_console()),
@@ -103,7 +103,7 @@ impl CommandSender<'_> {
 pub trait CommandExecutor: Sync {
     async fn execute<'a>(
         &self,
-        sender: &mut CommandSender<'a>,
+        sender: &mut CommandSender,
         server: &Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError>;

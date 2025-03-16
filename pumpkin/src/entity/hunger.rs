@@ -35,7 +35,7 @@ impl HungerManager {
                 self.saturation.store((saturation - 1.0).max(0.0));
             } else {
                 self.level.store(level - 1);
-                player.send_health().await;
+                player.send_health();
             }
         }
         // Heal when hunger is full

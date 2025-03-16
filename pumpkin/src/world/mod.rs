@@ -164,7 +164,7 @@ impl World {
     {
         let current_players = self.players.read().await;
         for player in current_players.values() {
-            player.client.send_packet(packet).await;
+            player.client.enqueue_packet(packet).await;
         }
     }
 
@@ -195,7 +195,7 @@ impl World {
     {
         let current_players = self.players.read().await;
         for (_, player) in current_players.iter().filter(|c| !except.contains(c.0)) {
-            player.client.send_packet(packet).await;
+            player.client.enqueue_packet(packet).await;
         }
     }
 
@@ -355,7 +355,7 @@ impl World {
         // login packet for our new player
         player
             .client
-            .send_packet(&CLogin::new(
+            .enqueue_packet(&CLogin::new(
                 entity_id,
                 base_config.hardcore,
                 &dimensions,
@@ -441,7 +441,7 @@ impl World {
             log::debug!("Sending player info to {}", player.gameprofile.name);
             player
                 .client
-                .send_packet(&CPlayerInfoUpdate::new(0x01 | 0x08, &entries))
+                .enqueue_packet(&CPlayerInfoUpdate::new(0x01 | 0x08, &entries))
                 .await;
         };
 
@@ -474,7 +474,7 @@ impl World {
             log::debug!("Sending player entities to {}", player.gameprofile.name);
             player
                 .client
-                .send_packet(&CSpawnEntity::new(
+                .enqueue_packet(&CSpawnEntity::new(
                     existing_player.entity_id().into(),
                     gameprofile.id,
                     i32::from(EntityType::PLAYER.id).into(),
@@ -495,7 +495,7 @@ impl World {
         log::debug!("Sending waiting chunks to {}", player.gameprofile.name);
         player
             .client
-            .send_packet(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
+            .enqueue_packet(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
             .await;
 
         self.worldborder
@@ -512,7 +512,7 @@ impl World {
         if weather.raining {
             player
                 .client
-                .send_packet(&CGameEvent::new(GameEvent::BeginRaining, 0.0))
+                .enqueue_packet(&CGameEvent::new(GameEvent::BeginRaining, 0.0))
                 .await;
 
             // Calculate rain and thunder levels directly from public fields
@@ -521,11 +521,11 @@ impl World {
 
             player
                 .client
-                .send_packet(&CGameEvent::new(GameEvent::RainLevelChange, rain_level))
+                .enqueue_packet(&CGameEvent::new(GameEvent::RainLevelChange, rain_level))
                 .await;
             player
                 .client
-                .send_packet(&CGameEvent::new(
+                .enqueue_packet(&CGameEvent::new(
                     GameEvent::ThunderLevelChange,
                     thunder_level,
                 ))
@@ -561,7 +561,7 @@ impl World {
 
         player
             .client
-            .send_packet(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
+            .enqueue_packet(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
             .await;
 
         let entity = &player.living_entity.entity;
@@ -605,7 +605,7 @@ impl World {
             }
             player
                 .client
-                .send_packet(&CExplosion::new(
+                .enqueue_packet(&CExplosion::new(
                     position,
                     None,
                     VarInt(particle as i32),
@@ -630,7 +630,7 @@ impl World {
 
         player
             .client
-            .send_packet(&CRespawn::new(
+            .enqueue_packet(&CRespawn::new(
                 (self.dimension_type as u8).into(),
                 self.dimension_type.name(),
                 0, // seed

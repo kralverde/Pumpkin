@@ -237,7 +237,7 @@ impl Player {
             }
 
             'cancelled: {
-                self.client.send_packet(&CPlayerPosition::new(
+                self.client.send_packet_now(&CPlayerPosition::new(
                     self.teleport_id_count.load(std::sync::atomic::Ordering::Relaxed).into(),
                     self.living_entity.entity.pos.load(),
                     Vector3::new(0.0, 0.0, 0.0),
@@ -376,7 +376,7 @@ impl Player {
             + 1;
         *self.awaiting_teleport.lock().await = Some((teleport_id.into(), position));
         self.client
-            .send_packet(&CPlayerPosition::new(
+            .send_packet_now(&CPlayerPosition::new(
                 teleport_id.into(),
                 self.living_entity.entity.pos.load(),
                 Vector3::new(0.0, 0.0, 0.0),
@@ -448,7 +448,7 @@ impl Player {
                     let dispatcher = server_clone.command_dispatcher.read().await;
                     dispatcher
                         .handle_command(
-                            &mut CommandSender::Player(player_clone),
+                            &mut CommandSender::Player(&self),
                             &server_clone,
                             &command_clone,
                         )
@@ -490,7 +490,7 @@ impl Player {
                 slot as i16,
                 &slot_data,
             );
-            self.client.send_packet(&dest_packet).await;
+            self.client.enqueue_packet(&dest_packet).await;
         }
     }
 
@@ -571,7 +571,7 @@ impl Player {
         let equipment = &[(EquipmentSlot::MainHand, stack.clone())];
         self.living_entity.send_equipment_changes(equipment).await;
         self.client
-            .send_packet(&CSetHeldItem::new(dest_slot as i8))
+            .enqueue_packet(&CSetHeldItem::new(dest_slot as i8))
             .await;
     }
 
@@ -706,7 +706,7 @@ impl Player {
                         .await;
                 } else {
                     for recipient in event.recipients {
-                        recipient.client.send_packet(
+                        recipient.client.enqueue_packet(
                             &CPlayerChatMessage::new(
                                 gameprofile.id,
                                 1.into(),
@@ -943,7 +943,7 @@ impl Player {
                     if let Some(held) = self.inventory.lock().await.held_item() {
                         if !server.item_registry.can_mine(&held.item, self) {
                             self.client
-                                .send_packet(&CBlockUpdate::new(
+                                .enqueue_packet(&CBlockUpdate::new(
                                     &location,
                                     VarInt(i32::from(state.id)),
                                 ))
@@ -1125,7 +1125,7 @@ impl Player {
 
     pub async fn handle_play_ping_request(&self, request: SPlayPingRequest) {
         self.client
-            .send_packet(&CPingResponse::new(request.payload))
+            .enqueue_packet(&CPingResponse::new(request.payload))
             .await;
     }
 
@@ -1367,7 +1367,7 @@ impl Player {
             suggestions,
         );
 
-        self.client.send_packet(&response).await;
+        self.client.enqueue_packet(&response).await;
     }
 
     pub fn handle_cookie_response(&self, packet: &SPCookieResponse) {
@@ -1546,7 +1546,7 @@ impl Player {
                 || state.get_state().block_entity_type == Some(block_entity!("hanging_sign"))
         }) {
             self.client
-                .send_packet(&COpenSignEditor::new(
+                .enqueue_packet(&COpenSignEditor::new(
                     block_position,
                     selected_face.to_offset().z == 1,
                 ))

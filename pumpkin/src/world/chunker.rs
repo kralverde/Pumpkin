@@ -20,7 +20,7 @@ pub async fn player_join(player: &Arc<Player>) {
     log::debug!("Sending center chunk to {}", player.gameprofile.name);
     player
         .client
-        .send_packet(&CCenterChunk {
+        .enqueue_packet(&CCenterChunk {
             chunk_x: chunk_pos.x.into(),
             chunk_z: chunk_pos.z.into(),
         })
@@ -48,7 +48,7 @@ pub async fn update_position(player: &Arc<Player>) {
     if old_cylindrical != new_cylindrical {
         player
             .client
-            .send_packet(&CCenterChunk {
+            .enqueue_packet(&CCenterChunk {
                 chunk_x: new_chunk_center.x.into(),
                 chunk_z: new_chunk_center.z.into(),
             })
@@ -94,7 +94,7 @@ pub async fn update_position(player: &Arc<Player>) {
                         break;
                     }
                     client
-                        .send_packet(&CUnloadChunk::new(chunk.x, chunk.z))
+                        .enqueue_packet(&CUnloadChunk::new(chunk.x, chunk.z))
                         .await;
                 }
             });

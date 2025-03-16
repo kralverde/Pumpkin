@@ -148,7 +148,7 @@ impl Client {
     pub async fn handle_known_packs(&self, server: &Server, _config_acknowledged: SKnownPacks) {
         log::debug!("Handling known packs");
         for registry in &server.cached_registry {
-            self.send_packet(&CRegistryData::new(
+            self.send_packet_now(&CRegistryData::new(
                 &registry.registry_id,
                 &registry.registry_entries,
             ))
@@ -157,7 +157,7 @@ impl Client {
 
         // We are done with configuring
         log::debug!("finished config");
-        self.send_packet(&CFinishConfig).await;
+        self.enqueue_packet(CFinishConfig);
     }
 
     pub async fn handle_config_acknowledged(&self) {
