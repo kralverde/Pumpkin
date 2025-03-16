@@ -18,13 +18,10 @@ pub async fn player_join(player: &Arc<Player>) {
     let chunk_pos = player.living_entity.entity.chunk_pos.load();
 
     log::debug!("Sending center chunk to {}", player.gameprofile.name);
-    player
-        .client
-        .enqueue_packet(&CCenterChunk {
-            chunk_x: chunk_pos.x.into(),
-            chunk_z: chunk_pos.z.into(),
-        })
-        .await;
+    player.client.enqueue_packet(CCenterChunk {
+        chunk_x: chunk_pos.x.into(),
+        chunk_z: chunk_pos.z.into(),
+    });
     let view_distance = get_view_distance(player).await;
     log::debug!(
         "Player {} ({}) joined with view distance: {}",
@@ -46,13 +43,10 @@ pub async fn update_position(player: &Arc<Player>) {
     let new_cylindrical = Cylindrical::new(new_chunk_center, view_distance);
 
     if old_cylindrical != new_cylindrical {
-        player
-            .client
-            .enqueue_packet(&CCenterChunk {
-                chunk_x: new_chunk_center.x.into(),
-                chunk_z: new_chunk_center.z.into(),
-            })
-            .await;
+        player.client.enqueue_packet(CCenterChunk {
+            chunk_x: new_chunk_center.x.into(),
+            chunk_z: new_chunk_center.z.into(),
+        });
 
         let mut loading_chunks = Vec::new();
         let mut unloading_chunks = Vec::new();
@@ -84,20 +78,11 @@ pub async fn update_position(player: &Arc<Player>) {
 
         if !chunks_to_clean.is_empty() {
             level.clean_chunks(&chunks_to_clean).await;
-
-            // This can take a little if we are sending a bunch of packets, queue it up :p
-            let client = player.client.clone();
-            tokio::spawn(async move {
-                for chunk in unloading_chunks {
-                    if client.closed.load(std::sync::atomic::Ordering::Relaxed) {
-                        // We will never un-close a connection
-                        break;
-                    }
-                    client
-                        .enqueue_packet(&CUnloadChunk::new(chunk.x, chunk.z))
-                        .await;
-                }
-            });
+            for chunk in unloading_chunks {
+                player
+                    .client
+                    .enqueue_packet(CUnloadChunk::new(chunk.x, chunk.z));
+            }
         }
 
         if !loading_chunks.is_empty() {

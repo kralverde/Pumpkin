@@ -4,14 +4,12 @@
 use crate::net::{Client, lan_broadcast, query, rcon::RCONServer};
 use crate::server::{Server, ticker::Ticker};
 use log::{Level, LevelFilter, Log};
-use net::PacketHandlerState;
 use plugin::PluginManager;
 use plugin::server::server_command::ServerCommandEvent;
 use pumpkin_config::{BASIC_CONFIG, advanced_config};
 use pumpkin_macros::send_cancellable;
 use pumpkin_util::text::TextComponent;
 use rustyline_async::{Readline, ReadlineEvent};
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::{
@@ -21,11 +19,8 @@ use std::{
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, tcp::OwnedReadHalf},
-    sync::Mutex,
-};
+use tokio::{net::TcpListener, sync::Mutex};
+use tokio_util::task::TaskTracker;
 
 pub mod block;
 pub mod command;
@@ -256,7 +251,7 @@ impl PumpkinServer {
 
     pub async fn start(self) {
         let mut master_client_id: usize = 0;
-        let tasks = Arc::new(Mutex::new(HashMap::new()));
+        let tasks = TaskTracker::new();
 
         while !SHOULD_STOP.load(std::sync::atomic::Ordering::Relaxed) {
             let await_new_client = || async {
@@ -292,82 +287,39 @@ impl PumpkinServer {
                 id
             );
 
-            let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-
-            let client = Arc::new(Client::new(tx, connection, client_addr, id));
-
-            let client_clone = client.clone();
-            // This task will be cleaned up on its own
-            tokio::spawn(async move {
-                let mut connection_writer = connection_writer;
-
-                // We clone ownership of `tx` into here thru the client so this will never drop
-                // since there is always a tx in memory. We need to explicitly tell the recv to stop
-                while let Some(notif) = rx.recv().await {
-                    match notif {
-                        PacketHandlerState::PacketReady => {
-                            todo!();
-                            /*
-                            let buf = {
-                                let mut enc = client_clone.enc.lock().await;
-                                //enc.take()
-                            };
-
-                            if let Err(e) = connection_writer.write_all(&buf).await {
-                                log::warn!("Failed to write packet to client: {e}");
-                                client_clone.close().await;
-                                break;
-                            }
-                            */
-                        }
-                        PacketHandlerState::Stop => break,
-                    }
-                }
-            });
-
+            let client = Client::new(connection, client_addr, id);
             let server = self.server.clone();
-            let tasks_clone = tasks.clone();
+
             // We need to await these to verify all cleanup code is complete
-            let handle = tokio::spawn(async move {
+            tasks.spawn(async move {
                 while !client.closed.load(std::sync::atomic::Ordering::Relaxed)
                     && !client
                         .make_player
                         .load(std::sync::atomic::Ordering::Relaxed)
                 {
-                    let open = poll(&client, &mut connection_reader).await;
-                    if open {
-                        client.process_packets(&server).await;
-                    };
+                    client.process_packets(&server).await;
                 }
                 if client
                     .make_player
                     .load(std::sync::atomic::Ordering::Relaxed)
                 {
-                    if let Some((player, world)) = server.add_player(client.clone()).await {
+                    if let Some((player, world)) = server.add_player(client).await {
                         world
                             .spawn_player(&BASIC_CONFIG, player.clone(), &server)
                             .await;
 
-                        // poll Player
-                        while !player
-                            .client
-                            .closed
-                            .load(core::sync::atomic::Ordering::Relaxed)
-                        {
-                            let open = poll(&player.client, &mut connection_reader).await;
-                            if open {
-                                player.process_packets(&server).await;
-                            };
-                        }
+                        player.process_packets(&server).await;
+                        player.close().await;
                     }
+                } else {
+                    // Also handle case of client connects but does not become a player (like a server
+                    // ping)
+                    client.close();
+                    log::debug!("Awaiting tasks for client {}", id);
+                    client.await_tasks().await;
+                    log::debug!("Finished awaiting tasks for client {}", id);
                 }
-
-                // Also handle case of client connects but does not become a player (like a server
-                // ping)
-                client.close().await;
-                tasks_clone.lock().await.remove(&id);
             });
-            tasks.lock().await.insert(id, Some(handle));
         }
 
         log::info!("Stopped accepting incoming connections");
@@ -385,20 +337,10 @@ impl PumpkinServer {
             }
         }
 
-        let handles: Vec<Option<JoinHandle<()>>> = tasks
-            .lock()
-            .await
-            .values_mut()
-            .map(|val| val.take())
-            .collect();
-
         log::info!("Ending player tasks");
 
-        for handle in handles.into_iter().flatten() {
-            if let Err(err) = handle.await {
-                log::error!("Failed to join player task: {}", err.to_string());
-            }
-        }
+        tasks.close();
+        tasks.wait().await;
 
         self.server.save().await;
 
@@ -460,58 +402,6 @@ fn setup_console(rl: Readline, server: Arc<Server>) -> JoinHandle<()> {
 
         log::debug!("Stopped console commands task");
     })
-}
-
-async fn poll(client: &Client, connection_reader: &mut OwnedReadHalf) -> bool {
-    loop {
-        if client.closed.load(std::sync::atomic::Ordering::Relaxed) {
-            // If we manually close (like a kick) we dont want to keep reading bytes
-            return false;
-        }
-
-        //let mut dec = client.dec.lock().await;
-
-        todo!();
-        /*
-        match dec.decode() {
-            Ok(Some(packet)) => {
-                client.add_packet(packet).await;
-                return true;
-            }
-            Ok(None) => (), //log::debug!("Waiting for more data to complete packet..."),
-            Err(err) => {
-                log::warn!("Failed to decode packet for: {}", err.to_string());
-                client.close().await;
-                return false; // return to avoid reserving additional bytes
-            }
-        }
-
-        dec.reserve(4096);
-        let mut buf = dec.take_capacity();
-        */
-        let mut buf = Vec::new();
-
-        let bytes_read = connection_reader.read_buf(&mut buf).await;
-        match bytes_read {
-            Ok(cnt) => {
-                //log::debug!("Read {} bytes", cnt);
-                if cnt == 0 {
-                    client.close().await;
-                    return false;
-                }
-            }
-            Err(error) => {
-                log::error!("Error while reading incoming packet {}", error);
-                client.close().await;
-                return false;
-            }
-        };
-
-        // This should always be an O(1) unsplit because we reserved space earlier and
-        // the call to `read_buf` shouldn't have grown the allocation.
-
-        //dec.queue_bytes(buf);
-    }
 }
 
 fn scrub_address(ip: &str) -> String {

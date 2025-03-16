@@ -8,17 +8,17 @@ use crate::{
 };
 
 #[packet(PLAY_SET_OBJECTIVE)]
-pub struct CUpdateObjectives<'a> {
-    objective_name: &'a str,
+pub struct CUpdateObjectives {
+    objective_name: String,
     mode: u8,
     display_name: TextComponent,
     render_type: VarInt,
     number_format: Option<NumberFormat>,
 }
 
-impl<'a> CUpdateObjectives<'a> {
+impl CUpdateObjectives {
     pub fn new(
-        objective_name: &'a str,
+        objective_name: String,
         mode: Mode,
         display_name: TextComponent,
         render_type: RenderType,
@@ -34,11 +34,11 @@ impl<'a> CUpdateObjectives<'a> {
     }
 }
 
-impl ClientPacket for CUpdateObjectives<'_> {
+impl ClientPacket for CUpdateObjectives {
     fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
-        write.write_string(self.objective_name)?;
+        write.write_string(&self.objective_name)?;
         write.write_u8_be(self.mode)?;
         if self.mode == 0 || self.mode == 2 {
             write.write_slice(&self.display_name.encode())?;

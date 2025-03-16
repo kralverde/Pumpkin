@@ -164,7 +164,7 @@ impl Server {
     /// # Note
     ///
     /// You still have to spawn the Player in the World to make then to let them Join and make them Visible
-    pub async fn add_player(&self, client: Arc<Client>) -> Option<(Arc<Player>, Arc<World>)> {
+    pub async fn add_player(&self, client: Client) -> Option<(Arc<Player>, Arc<World>)> {
         let gamemode = self.defaultgamemode.lock().await.gamemode;
         // Basically the default world
         // TODO: select default from config
@@ -273,12 +273,17 @@ impl Server {
     /// # Arguments
     ///
     /// * `packet`: A reference to the packet to be broadcast. The packet must implement the `ClientPacket` trait.
-    pub async fn broadcast_packet_all<P>(&self, packet: &P)
+    pub async fn broadcast_packet_all<P>(&self, packet: P)
     where
-        P: ClientPacket,
+        P: ClientPacket + Send + Sync + 'static,
     {
+        let packet = Arc::new(packet);
         for world in self.worlds.read().await.iter() {
-            world.broadcast_packet_all(packet).await;
+            let current_players = world.players.read().await;
+            for player in current_players.values() {
+                let packet = packet.clone();
+                player.client.enqueue_packet::<P, Arc<P>>(packet);
+            }
         }
     }
 
@@ -295,7 +300,7 @@ impl Server {
             'after: {
                 for world in self.worlds.read().await.iter() {
                     world
-                        .broadcast_message(&event.message, &event.sender, chat_type, target_name)
+                        .broadcast_message(event.message.clone(), event.sender.clone(), chat_type, target_name.cloned())
                         .await;
                 }
             }

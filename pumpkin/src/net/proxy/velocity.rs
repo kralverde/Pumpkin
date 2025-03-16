@@ -50,7 +50,7 @@ pub async fn velocity_login(client: &Client) {
     let mut buf = BytesMut::new();
     buf.put_u8(MAX_SUPPORTED_FORWARDING_VERSION);
     client
-        .enqueue_packet(&CLoginPluginRequest::new(
+        .send_packet_now(&CLoginPluginRequest::new(
             velocity_message_id.into(),
             PLAYER_INFO_CHANNEL,
             &buf,

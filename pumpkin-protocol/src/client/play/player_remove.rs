@@ -6,14 +6,14 @@ use crate::VarInt;
 
 #[derive(Serialize)]
 #[packet(PLAY_PLAYER_INFO_REMOVE)]
-pub struct CRemovePlayerInfo<'a> {
+pub struct CRemovePlayerInfo {
     players_count: VarInt,
     #[serde(serialize_with = "serialize_slice_uuids")]
-    players: &'a [uuid::Uuid],
+    players: Box<[uuid::Uuid]>,
 }
 
-impl<'a> CRemovePlayerInfo<'a> {
-    pub fn new(players_count: VarInt, players: &'a [uuid::Uuid]) -> Self {
+impl CRemovePlayerInfo {
+    pub fn new(players_count: VarInt, players: Box<[uuid::Uuid]>) -> Self {
         Self {
             players_count,
             players,

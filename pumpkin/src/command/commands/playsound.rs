@@ -63,7 +63,7 @@ struct Executor;
 impl CommandExecutor for Executor {
     async fn execute<'a>(
         &self,
-        sender: &mut CommandSender<'a>,
+        sender: &mut CommandSender,
         _server: &crate::server::Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError> {
@@ -124,9 +124,7 @@ impl CommandExecutor for Executor {
             let max_distance = 16.0 * volume; // 16 blocks is base distance at volume 1.0
 
             if distance <= max_distance.into() || _min_volume > 0.0 {
-                target
-                    .play_sound(sound as u16, source, &pos, volume, pitch, seed)
-                    .await;
+                target.play_sound(sound as u16, source, &pos, volume, pitch, seed);
                 players_who_heard += 1;
             }
         }

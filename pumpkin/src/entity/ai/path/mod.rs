@@ -74,7 +74,7 @@ impl Navigator {
                 .world
                 .read()
                 .await
-                .broadcast_packet_all(&CUpdateEntityPos::new(
+                .broadcast_packet_all(CUpdateEntityPos::new(
                     entity.entity.entity_id.into(),
                     Vector3::new(
                         pos.x.mul_add(4096.0, -(last_pos.x * 4096.0)) as i16,

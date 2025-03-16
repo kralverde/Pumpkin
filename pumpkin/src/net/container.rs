@@ -39,7 +39,7 @@ impl Player {
         let title = TextComponent::text(window_title);
 
         self.client
-            .enqueue_packet(&COpenScreen::new(
+            .send_packet_now(&COpenScreen::new(
                 inventory.total_opened_containers.into(),
                 VarInt(window_type as i32),
                 &title,
@@ -79,7 +79,7 @@ impl Player {
             &slots,
             &carried_item,
         );
-        self.client.enqueue_packet(&packet).await;
+        self.client.send_packet_now(&packet).await;
     }
 
     /// The official Minecraft client is weird, and will always just close *any* window that is opened when this gets sent
@@ -87,11 +87,9 @@ impl Player {
     pub async fn close_container(&self) {
         let mut inventory = self.inventory().lock().await;
         inventory.total_opened_containers += 1;
-        self.client
-            .enqueue_packet(&CCloseContainer::new(
-                inventory.total_opened_containers.into(),
-            ))
-            .await;
+        self.client.enqueue_packet(CCloseContainer::new(
+            inventory.total_opened_containers.into(),
+        ));
     }
 
     pub async fn set_container_property<T: WindowPropertyTrait>(
@@ -99,13 +97,11 @@ impl Player {
         window_property: WindowProperty<T>,
     ) {
         let (id, value) = window_property.into_tuple();
-        self.client
-            .enqueue_packet(&CSetContainerProperty::new(
-                self.inventory().lock().await.total_opened_containers.into(),
-                id,
-                value,
-            ))
-            .await;
+        self.client.enqueue_packet(CSetContainerProperty::new(
+            self.inventory().lock().await.total_opened_containers.into(),
+            id,
+            value,
+        ));
     }
 
     pub async fn handle_click_container(
@@ -214,7 +210,7 @@ impl Player {
         let slot = Slot::from(item_stack);
         *state_id += 1;
         let packet = CSetContainerSlot::new(0, *state_id as i32, slot_index, &slot);
-        self.client.enqueue_packet(&packet).await;
+        self.client.send_packet_now(&packet).await;
         Ok(())
     }
 
@@ -640,7 +636,7 @@ impl Player {
                 slot_index as i16,
                 &slot,
             );
-            player.client.enqueue_packet(&packet).await;
+            player.client.send_packet_now(&packet).await;
         }
         Ok(())
     }

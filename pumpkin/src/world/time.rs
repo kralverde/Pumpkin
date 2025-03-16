@@ -32,7 +32,7 @@ impl LevelTime {
 
     pub async fn send_time(&self, world: &World) {
         world
-            .broadcast_packet_all(&CUpdateTime::new(self.world_age, self.time_of_day, true))
+            .broadcast_packet_all(CUpdateTime::new(self.world_age, self.time_of_day, true))
             .await;
     }
 

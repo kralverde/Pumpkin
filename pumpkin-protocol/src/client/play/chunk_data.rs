@@ -26,7 +26,7 @@ impl ClientPacket for CChunkData<'_> {
         let mut heightmap_nbt = Vec::new();
         pumpkin_nbt::serializer::to_bytes_unnamed(&self.0.heightmap, &mut heightmap_nbt).unwrap();
         // Heightmaps
-        write.write_slice(&heightmap_nbt);
+        write.write_slice(&heightmap_nbt)?;
 
         let mut data_buf = Vec::new();
         for subchunk in self.0.subchunks.array_iter() {

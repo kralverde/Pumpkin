@@ -1,10 +1,7 @@
 use std::{
     borrow::Borrow,
-    collections::VecDeque,
-    io::Cursor,
     net::SocketAddr,
     num::NonZeroU8,
-    ops::Deref,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI32},
@@ -17,14 +14,13 @@ use crate::{
     server::Server,
 };
 
-use bytes::Bytes;
 use crossbeam::atomic::AtomicCell;
 use pumpkin_config::networking::compression::CompressionInfo;
 use pumpkin_protocol::{
     ClientPacket, ConnectionState, Property, RawPacket, ServerPacket,
     client::{config::CConfigDisconnect, login::CLoginDisconnect, play::CPlayDisconnect},
     packet_decoder::NetworkDecoder,
-    packet_encoder::{NetworkEncoder, PacketEncodeError},
+    packet_encoder::NetworkEncoder,
     ser::{ReadingError, packet::Packet},
     server::{
         config::{
@@ -43,18 +39,10 @@ use pumpkin_util::{ProfileAction, text::TextComponent};
 use serde::Deserialize;
 use sha1::Digest;
 use sha2::Sha256;
-use tokio::{
-    net::tcp::OwnedWriteHalf,
-    sync::{
-        Notify,
-        mpsc::{self, UnboundedReceiver, UnboundedSender},
-    },
-    task::JoinHandle,
-};
+use tokio::{net::tcp::OwnedWriteHalf, sync::Notify, task::JoinHandle};
 use tokio::{
     net::{TcpStream, tcp::OwnedReadHalf},
     sync::Mutex,
-    task::JoinSet,
 };
 
 use thiserror::Error;
@@ -159,17 +147,12 @@ pub struct Client {
     /// A collection of tasks associated with this client. The tasks await completion when removing the client.
     tasks: TaskTracker,
     /// An notifier that is triggered when this client is closed.
-    close_interrupt: Notify,
+    close_interrupt: Arc<Notify>,
 }
 
 impl Client {
     #[must_use]
-    pub fn new(
-        server_packets_channel: mpsc::Sender<PacketHandlerState>,
-        tcp_stream: TcpStream,
-        address: SocketAddr,
-        id: usize,
-    ) -> Self {
+    pub fn new(tcp_stream: TcpStream, address: SocketAddr, id: usize) -> Self {
         let (read, write) = tcp_stream.into_split();
         Self {
             id,
@@ -184,13 +167,18 @@ impl Client {
             network_reader: Arc::new(Mutex::new(NetworkDecoder::new(read))),
             closed: Arc::new(AtomicBool::new(false)),
             make_player: AtomicBool::new(false),
-            close_interrupt: Notify::new(),
+            close_interrupt: Arc::new(Notify::new()),
             tasks: TaskTracker::new(),
         }
     }
 
     pub async fn await_close_interrupt(&self) {
         self.close_interrupt.notified().await
+    }
+
+    pub async fn await_tasks(&self) {
+        self.tasks.close();
+        self.tasks.wait().await;
     }
 
     /// Spawns a task associated with this client. All tasks spawned with this method are awaited
@@ -274,12 +262,13 @@ impl Client {
 
     /// Gets the next packet from the network or `None` if the connection has closed
     pub async fn get_packet(&self) -> Option<RawPacket> {
+        let mut network_reader = self.network_reader.lock().await;
         tokio::select! {
             () = self.await_close_interrupt() => {
                 log::debug!("Canceling player packet processing");
-                None;
+                None
             },
-            packet_result = self.network_reader.lock().await.get_raw_packet() => {
+            packet_result = network_reader.get_raw_packet() => {
                 match packet_result {
                     Ok(packet) => Some(packet),
                     Err(err) => {
@@ -306,6 +295,7 @@ impl Client {
         let network_writer = self.network_writer.clone();
         let client_id = self.id;
         let is_closed = self.closed.clone();
+        let notifier = self.close_interrupt.clone();
 
         // Ideally this would be some kind of queue, but thats hard to do over generic types
         let _ = self.tasks.spawn_local(async move {
@@ -313,11 +303,14 @@ impl Client {
             if let Err(err) = network_writer.write_packet(packet_ref.borrow()).await {
                 // It is expected that the packet will fail if we are closed
                 if !is_closed.load(std::sync::atomic::Ordering::Relaxed) {
-                    log::warn!(
+                    log::error!(
                         "Failed to send packet to client {}: {}",
                         client_id,
                         err.to_string()
                     );
+                    // We now need to close the connection to the client since the stream is in an
+                    // unknown state
+                    Self::thread_safe_close(notifier, is_closed);
                 }
             }
         });
@@ -346,6 +339,9 @@ impl Client {
                     self.id,
                     err.to_string()
                 );
+                // We now need to close the connection to the client since the stream is in an
+                // unknown state
+                self.close();
             }
         }
     }
@@ -364,13 +360,11 @@ impl Client {
     ///
     /// * `server`: A reference to the `Server` instance.
     pub async fn process_packets(&self, server: &Server) {
-        let mut packet_queue = self.client_packets_queue.lock().await;
-        while let Some(mut packet) = packet_queue.pop_front() {
-            if self.closed.load(std::sync::atomic::Ordering::Relaxed) {
-                log::debug!("Canceling client packet processing (pre)");
-                return;
-            }
-            if let Err(error) = self.handle_packet(server, &mut packet).await {
+        while !self.make_player.load(std::sync::atomic::Ordering::Relaxed) {
+            let packet = self.get_packet().await;
+            let Some(packet) = packet else { break };
+
+            if let Err(error) = self.handle_packet(server, &packet).await {
                 let text = format!("Error while reading incoming packet {error}");
                 log::error!(
                     "Failed to read incoming packet with id {}: {}",
@@ -409,7 +403,7 @@ impl Client {
     pub async fn handle_packet(
         &self,
         server: &Server,
-        packet: &mut RawPacket,
+        packet: &RawPacket,
     ) -> Result<(), ReadingError> {
         match self.connection_state.load() {
             pumpkin_protocol::ConnectionState::HandShake => {
@@ -560,7 +554,7 @@ impl Client {
     ///
     /// * `reason`: A string describing the reason for kicking the client.
     pub async fn kick(&self, reason: TextComponent) {
-        let result = match self.connection_state.load() {
+        match self.connection_state.load() {
             ConnectionState::Login => {
                 // TextComponent implements Serialze and writes in bytes instead of String, thats the reasib we only use content
                 self.send_packet_now(&CLoginDisconnect::new(
@@ -576,14 +570,11 @@ impl Client {
             ConnectionState::Play => self.send_packet_now(&CPlayDisconnect::new(reason)).await,
             _ => {
                 log::warn!("Can't kick in {:?} State", self.connection_state);
-                Ok(())
+                return;
             }
         };
-        if let Err(err) = result {
-            log::warn!("Failed to kick {}: {}", self.id, err.to_string());
-        }
         log::debug!("Closing connection for {}", self.id);
-        self.close().await;
+        self.close();
     }
 
     /// Checks if the client can join the server.
@@ -630,6 +621,11 @@ impl Client {
         }
 
         None
+    }
+
+    fn thread_safe_close(interrupt: Arc<Notify>, closed: Arc<AtomicBool>) {
+        interrupt.notify_waiters();
+        closed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Closes the connection to the client.

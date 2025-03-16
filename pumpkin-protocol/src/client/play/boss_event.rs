@@ -20,7 +20,7 @@ impl ClientPacket for CBossEvent<'_> {
     fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
-        write.write_uuid(self.uuid);
+        write.write_uuid(self.uuid)?;
         let action = &self.action;
         match action {
             BosseventAction::Add {

@@ -8,24 +8,24 @@ use crate::{
 };
 
 #[packet(PLAY_TELEPORT_ENTITY)]
-pub struct CTeleportEntity<'a> {
+pub struct CTeleportEntity {
     entity_id: VarInt,
     position: Vector3<f64>,
     delta: Vector3<f64>,
     yaw: f32,
     pitch: f32,
-    releatives: &'a [PositionFlag],
+    relatives: Box<[PositionFlag]>,
     on_ground: bool,
 }
 
-impl<'a> CTeleportEntity<'a> {
+impl CTeleportEntity {
     pub fn new(
         entity_id: VarInt,
         position: Vector3<f64>,
         delta: Vector3<f64>,
         yaw: f32,
         pitch: f32,
-        releatives: &'a [PositionFlag],
+        relatives: Box<[PositionFlag]>,
         on_ground: bool,
     ) -> Self {
         Self {
@@ -34,13 +34,13 @@ impl<'a> CTeleportEntity<'a> {
             delta,
             yaw,
             pitch,
-            releatives,
+            relatives,
             on_ground,
         }
     }
 }
 
-impl ClientPacket for CTeleportEntity<'_> {
+impl ClientPacket for CTeleportEntity {
     fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
@@ -54,7 +54,7 @@ impl ClientPacket for CTeleportEntity<'_> {
         write.write_f32_be(self.yaw)?;
         write.write_f32_be(self.pitch)?;
         // not sure about that
-        write.write_i32_be(PositionFlag::get_bitfield(self.releatives))?;
+        write.write_i32_be(PositionFlag::get_bitfield(&self.relatives))?;
         write.write_bool(self.on_ground)
     }
 }

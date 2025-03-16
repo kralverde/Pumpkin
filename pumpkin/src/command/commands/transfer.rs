@@ -35,7 +35,7 @@ struct TargetSelfExecutor;
 impl CommandExecutor for TargetSelfExecutor {
     async fn execute<'a>(
         &self,
-        sender: &mut CommandSender<'a>,
+        sender: &mut CommandSender,
         _server: &crate::server::Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError> {
@@ -62,7 +62,8 @@ impl CommandExecutor for TargetSelfExecutor {
             log::info!("[{name}: Transferring {name} to {hostname}:{port}]");
             player
                 .client
-                .enqueue_packet(CTransfer::new(hostname, VarInt(port)));
+                .send_packet_now(&CTransfer::new(hostname, VarInt(port)))
+                .await;
             Ok(())
         } else {
             Err(InvalidRequirement)
@@ -76,7 +77,7 @@ struct TargetPlayerExecutor;
 impl CommandExecutor for TargetPlayerExecutor {
     async fn execute<'a>(
         &self,
-        sender: &mut CommandSender<'a>,
+        sender: &mut CommandSender,
         _server: &crate::server::Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError> {
@@ -104,7 +105,7 @@ impl CommandExecutor for TargetPlayerExecutor {
 
         for p in players {
             p.client
-                .enqueue_packet(&CTransfer::new(hostname, VarInt(port)))
+                .send_packet_now(&CTransfer::new(hostname, VarInt(port)))
                 .await;
             log::info!(
                 "[{sender}: Transferring {} to {hostname}:{port}]",

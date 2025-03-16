@@ -44,12 +44,7 @@ struct Executor {
 }
 
 impl Executor {
-    async fn handle_query(
-        &self,
-        sender: &mut CommandSender<'_>,
-        target: &Player,
-        exp_type: ExpType,
-    ) {
+    async fn handle_query(&self, sender: &mut CommandSender, target: &Player, exp_type: ExpType) {
         match exp_type {
             ExpType::Levels => {
                 let level = target.experience_level.load(Ordering::Relaxed);
@@ -193,7 +188,7 @@ impl Executor {
                         return Err("commands.experience.set.points.invalid");
                     }
 
-                    target.set_experience_points(amount);
+                    target.set_experience_points(amount).await;
                 }
             }
         }
@@ -205,7 +200,7 @@ impl Executor {
 impl CommandExecutor for Executor {
     async fn execute<'a>(
         &self,
-        sender: &mut CommandSender<'a>,
+        sender: &mut CommandSender,
         _server: &crate::server::Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError> {

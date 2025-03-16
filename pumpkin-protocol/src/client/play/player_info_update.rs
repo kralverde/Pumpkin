@@ -9,28 +9,28 @@ use crate::{
 use super::PlayerAction;
 
 #[packet(PLAY_PLAYER_INFO_UPDATE)]
-pub struct CPlayerInfoUpdate<'a> {
+pub struct CPlayerInfoUpdate {
     pub actions: i8,
-    pub players: &'a [Player<'a>],
+    pub players: Box<[Player]>,
 }
 
-pub struct Player<'a> {
+pub struct Player {
     pub uuid: uuid::Uuid,
-    pub actions: Vec<PlayerAction<'a>>,
+    pub actions: Box<[PlayerAction]>,
 }
 
-impl<'a> CPlayerInfoUpdate<'a> {
-    pub fn new(actions: i8, players: &'a [Player]) -> Self {
+impl CPlayerInfoUpdate {
+    pub fn new(actions: i8, players: Box<[Player]>) -> Self {
         Self { actions, players }
     }
 }
 
-impl ClientPacket for CPlayerInfoUpdate<'_> {
+impl ClientPacket for CPlayerInfoUpdate {
     fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_i8_be(self.actions)?;
-        write.write_list::<Player>(self.players, |p, v| {
+        write.write_list::<Player>(&self.players, |p, v| {
             p.write_uuid(&v.uuid)?;
             for action in &v.actions {
                 match action {

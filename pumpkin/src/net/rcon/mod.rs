@@ -103,7 +103,7 @@ impl RCONClient {
             }
             ServerboundPacket::ExecCommand => {
                 if self.logged_in {
-                    let output = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+                    let output = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
 
                     let server_clone = server.clone();
                     let output_clone = output.clone();
@@ -112,7 +112,7 @@ impl RCONClient {
                         let dispatcher = server_clone.command_dispatcher.read().await;
                         dispatcher
                             .handle_command(
-                                &mut crate::command::CommandSender::Rcon(&output_clone),
+                                &mut crate::command::CommandSender::Rcon(output_clone),
                                 &server_clone,
                                 &packet_body,
                             )

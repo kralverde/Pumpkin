@@ -29,7 +29,7 @@ struct ClearOrResetExecutor(bool);
 impl CommandExecutor for ClearOrResetExecutor {
     async fn execute<'a>(
         &self,
-        sender: &mut CommandSender<'a>,
+        sender: &mut CommandSender,
         _server: &crate::server::Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError> {
@@ -72,7 +72,7 @@ struct TitleExecutor(TitleMode);
 impl CommandExecutor for TitleExecutor {
     async fn execute<'a>(
         &self,
-        sender: &mut CommandSender<'a>,
+        sender: &mut CommandSender,
         _server: &crate::server::Server,
         args: &ConsumedArgs<'a>,
     ) -> Result<(), CommandError> {

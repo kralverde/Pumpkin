@@ -169,7 +169,7 @@ pub struct Player {
     /// The player's game profile information, including their username and UUID.
     pub gameprofile: GameProfile,
     /// The client connection associated with the player.
-    pub client: Arc<Client>,
+    pub client: Client,
     /// Players Inventory
     pub inventory: Mutex<PlayerInventory>,
     /// The player's configuration settings. Changes when the Player changes their settings.
@@ -228,7 +228,7 @@ pub struct Player {
 }
 
 impl Player {
-    pub async fn new(client: Arc<Client>, world: Arc<World>, gamemode: GameMode) -> Self {
+    pub async fn new(client: Client, world: Arc<World>, gamemode: GameMode) -> Self {
         let gameprofile = client.gameprofile.lock().await.clone().map_or_else(
             || {
                 log::error!("Client {} has no game profile!", client.id);
@@ -445,11 +445,11 @@ impl Player {
         if config.swing {}
     }
 
-    pub fn show_title(&self, text: &TextComponent, mode: &TitleMode) {
+    pub async fn show_title(&self, text: &TextComponent, mode: &TitleMode) {
         match mode {
-            TitleMode::Title => self.client.enqueue_packet(CTitleText::new(text)),
-            TitleMode::SubTitle => self.client.enqueue_packet(CSubtitle::new(text)),
-            TitleMode::ActionBar => self.client.enqueue_packet(CActionBar::new(text)),
+            TitleMode::Title => self.client.send_packet_now(&CTitleText::new(text)).await,
+            TitleMode::SubTitle => self.client.send_packet_now(&CSubtitle::new(text)).await,
+            TitleMode::ActionBar => self.client.send_packet_now(&CActionBar::new(text)).await,
         }
     }
 
@@ -718,7 +718,7 @@ impl Player {
 
     /// sets the players permission level and syncs it with the client
     pub async fn set_permission_lvl(
-        &self,
+        self: &Arc<Self>,
         lvl: PermissionLvl,
         command_dispatcher: &CommandDispatcher,
     ) {
@@ -907,14 +907,14 @@ impl Player {
                     .world
                     .read()
                     .await
-                    .broadcast_packet_all(&CTeleportEntity::new(
+                    .broadcast_packet_all(CTeleportEntity::new(
                         self.living_entity.entity.entity_id.into(),
                         position,
                         Vector3::new(0.0, 0.0, 0.0),
                         yaw,
                         pitch,
                         // TODO
-                        &[],
+                        Box::new([]),
                         self.living_entity
                             .entity
                             .on_ground
@@ -1060,12 +1060,13 @@ impl Player {
                     .world
                     .read()
                     .await
-                    .broadcast_packet_all(&CPlayerInfoUpdate::new(
+                    .broadcast_packet_all(CPlayerInfoUpdate::new(
+                        // TODO: Remove magic number
                         0x04,
-                        &[pumpkin_protocol::client::play::Player {
+                        Box::new([pumpkin_protocol::client::play::Player {
                             uuid: self.gameprofile.id,
-                            actions: vec![PlayerAction::UpdateGameMode((gamemode as i32).into())],
-                        }],
+                            actions: Box::new([PlayerAction::UpdateGameMode((gamemode as i32).into())]),
+                        }]),
                     ))
                     .await;
 
@@ -1153,21 +1154,19 @@ impl Player {
         u32::from(i.max(j))
     }
 
-    pub async fn send_message(
+    pub fn send_message(
         &self,
-        message: &TextComponent,
+        message: TextComponent,
         chat_type: u32,
-        sender_name: &TextComponent,
-        target_name: Option<&TextComponent>,
+        sender_name: TextComponent,
+        target_name: Option<TextComponent>,
     ) {
-        self.client
-            .send_packet_now(&CDisguisedChatMessage::new(
-                message,
-                (chat_type + 1).into(),
-                sender_name,
-                target_name,
-            ))
-            .await;
+        self.client.enqueue_packet(CDisguisedChatMessage::new(
+            message,
+            (chat_type + 1).into(),
+            sender_name,
+            target_name,
+        ));
     }
 
     pub async fn drop_item(&self, item_id: u16, count: u32) {
@@ -1209,7 +1208,7 @@ impl Player {
         self.experience_progress.store(progress.clamp(0.0, 1.0));
         self.experience_points.store(points, Ordering::Relaxed);
 
-        self.client.enqueue_packet(&CSetExperience::new(
+        self.client.enqueue_packet(CSetExperience::new(
             progress.clamp(0.0, 1.0),
             points.into(),
             level.into(),
@@ -1358,6 +1357,16 @@ impl EntityBase for Player {
 }
 
 impl Player {
+    pub async fn close(&self) {
+        self.client.close();
+        log::debug!("Awaiting tasks for player {}", self.gameprofile.name);
+        self.client.await_tasks().await;
+        log::debug!(
+            "Finished awaiting tasks for client {}",
+            self.gameprofile.name
+        );
+    }
+
     pub async fn process_packets(self: &Arc<Self>, server: &Arc<Server>) {
         while let Some(packet) = self.client.get_packet().await {
             let packet_result = self.handle_play_packet(server, &packet).await;
@@ -1451,8 +1460,7 @@ impl Player {
             }
             SPlayerLoaded::PACKET_ID => self.handle_player_loaded(),
             SPlayPingRequest::PACKET_ID => {
-                self.handle_play_ping_request(SPlayPingRequest::read(payload)?)
-                    .await;
+                self.handle_play_ping_request(SPlayPingRequest::read(payload)?);
             }
             SClickContainer::PACKET_ID => {
                 self.handle_click_container(server, SClickContainer::read(payload)?)

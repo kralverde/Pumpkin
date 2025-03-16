@@ -65,7 +65,7 @@ impl LivingEntity {
             .await
             .broadcast_packet_except(
                 &[self.entity.entity_uuid],
-                &CSetEquipment::new(self.entity_id().into(), equipment),
+                CSetEquipment::new(self.entity_id().into(), equipment),
             )
             .await;
     }
@@ -77,7 +77,7 @@ impl LivingEntity {
             .world
             .read()
             .await
-            .broadcast_packet_all(&CTakeItemEntity::new(
+            .broadcast_packet_all(CTakeItemEntity::new(
                 item.entity_id.into(),
                 self.entity.entity_id.into(),
                 stack_amount.into(),
@@ -125,7 +125,7 @@ impl LivingEntity {
             .world
             .read()
             .await
-            .broadcast_packet_all(&CDamageEvent::new(
+            .broadcast_packet_all(CDamageEvent::new(
                 self.entity.entity_id.into(),
                 damage_type.id.into(),
                 source.map(|e| e.entity_id.into()),
@@ -286,7 +286,7 @@ impl EntityBase for LivingEntity {
         if config.hurt_animation {
             let entity_id = VarInt(self.entity.entity_id);
             world
-                .broadcast_packet_all(&CHurtAnimation::new(entity_id, self.entity.yaw.load()))
+                .broadcast_packet_all(CHurtAnimation::new(entity_id, self.entity.yaw.load()))
                 .await;
         }
         true

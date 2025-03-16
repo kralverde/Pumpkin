@@ -135,8 +135,8 @@ impl ChestBlock {
 
         if let Some(e) = get_block("minecraft:chest") {
             server
-                .broadcast_packet_all(&CBlockAction::new(
-                    &location,
+                .broadcast_packet_all(CBlockAction::new(
+                    location,
                     1,
                     num_players,
                     VarInt(e.id.into()),

@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::{IdOr, SoundEvent, VarInt};
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 #[packet(PLAY_SOUND_ENTITY)]
 pub struct CEntitySoundEffect {

@@ -207,7 +207,7 @@ impl Player {
                 world
                     .broadcast_packet_except(
                         &[self.gameprofile.id],
-                        &CUpdateEntityPos::new(
+                        CUpdateEntityPos::new(
                             entity_id.into(),
                             Vector3::new(
                                 x.mul_add(4096.0, -(last_pos.x * 4096.0)) as i16,
@@ -326,7 +326,7 @@ impl Player {
                 world
                     .broadcast_packet_except(
                         &[self.gameprofile.id],
-                        &CUpdateEntityPosRot::new(
+                        CUpdateEntityPosRot::new(
                             entity_id.into(),
                             Vector3::new(
                                 x.mul_add(4096.0, -(last_pos.x * 4096.0)) as i16,
@@ -342,7 +342,7 @@ impl Player {
                 world
                     .broadcast_packet_except(
                         &[self.gameprofile.id],
-                        &CHeadRot::new(entity_id.into(), yaw as u8),
+                        CHeadRot::new(entity_id.into(), yaw as u8),
                     )
                     .await;
                 if !self.abilities.lock().await.flying {
@@ -417,11 +417,11 @@ impl Player {
         let packet =
             CUpdateEntityRot::new(entity_id.into(), yaw as u8, pitch as u8, rotation.ground);
         world
-            .broadcast_packet_except(&[self.gameprofile.id], &packet)
+            .broadcast_packet_except(&[self.gameprofile.id], packet)
             .await;
         let packet = CHeadRot::new(entity_id.into(), yaw as u8);
         world
-            .broadcast_packet_except(&[self.gameprofile.id], &packet)
+            .broadcast_packet_except(&[self.gameprofile.id], packet)
             .await;
     }
 
@@ -448,7 +448,7 @@ impl Player {
                     let dispatcher = server_clone.command_dispatcher.read().await;
                     dispatcher
                         .handle_command(
-                            &mut CommandSender::Player(&self),
+                            &mut CommandSender::Player(player_clone),
                             &server_clone,
                             &command_clone,
                         )
@@ -490,7 +490,7 @@ impl Player {
                 slot as i16,
                 &slot_data,
             );
-            self.client.enqueue_packet(&dest_packet).await;
+            self.client.send_packet_now(&dest_packet).await;
         }
     }
 
@@ -571,8 +571,7 @@ impl Player {
         let equipment = &[(EquipmentSlot::MainHand, stack.clone())];
         self.living_entity.send_equipment_changes(equipment).await;
         self.client
-            .enqueue_packet(&CSetHeldItem::new(dest_slot as i8))
-            .await;
+            .enqueue_packet(CSetHeldItem::new(dest_slot as i8));
     }
 
     // pub fn handle_pick_item_from_entity(&self, _pick_item: SPickItemFromEntity) {
@@ -657,7 +656,7 @@ impl Player {
         world
             .broadcast_packet_except(
                 &[self.gameprofile.id],
-                &CEntityAnimation::new(id.into(), animation as u8),
+                CEntityAnimation::new(id.into(), animation as u8),
             )
             .await;
     }
@@ -689,15 +688,16 @@ impl Player {
                 if event.recipients.is_empty() {
                     let world = &entity.world.read().await;
                     world
-                        .broadcast_packet_all(&CPlayerChatMessage::new(
+                        .broadcast_packet_all(CPlayerChatMessage::new(
                             gameprofile.id,
                             1.into(),
-                            chat_message.signature.as_deref(),
-                            &event.message,
+                            chat_message.signature,
+                            event.message.clone(),
                             chat_message.timestamp,
                             chat_message.salt,
-                            &[],
-                            Some(TextComponent::text(event.message.clone())),
+                            // TODO: Previous messages
+                            Box::new([]),
+                            Some(TextComponent::text(event.message)),
                             FilterType::PassThrough,
                             (CHAT + 1).into(),
                             TextComponent::text(gameprofile.name.clone()),
@@ -705,23 +705,26 @@ impl Player {
                         ))
                         .await;
                 } else {
+                    let packet =
+                        CPlayerChatMessage::new(
+                            gameprofile.id,
+                            1.into(),
+                            chat_message.signature,
+                            event.message.clone(),
+                            chat_message.timestamp,
+                            chat_message.salt,
+                            Box::new([]),
+                            Some(TextComponent::text(event.message)),
+                            FilterType::PassThrough,
+                            (CHAT + 1).into(),
+                            TextComponent::text(gameprofile.name.clone()),
+                            None,
+                        );
+
+                    let packet = Arc::new(packet);
                     for recipient in event.recipients {
-                        recipient.client.enqueue_packet(
-                            &CPlayerChatMessage::new(
-                                gameprofile.id,
-                                1.into(),
-                                chat_message.signature.as_deref(),
-                                &event.message,
-                                chat_message.timestamp,
-                                chat_message.salt,
-                                &[],
-                                Some(TextComponent::text(event.message.clone())),
-                                FilterType::PassThrough,
-                                (CHAT + 1).into(),
-                                TextComponent::text(gameprofile.name.clone()),
-                                None,
-                            ),
-                        ).await;
+                        let packet = packet.clone();
+                        recipient.client.enqueue_packet::<CPlayerChatMessage, Arc<CPlayerChatMessage>>(packet);
                     }
                 }
             }
@@ -942,12 +945,10 @@ impl Player {
 
                     if let Some(held) = self.inventory.lock().await.held_item() {
                         if !server.item_registry.can_mine(&held.item, self) {
-                            self.client
-                                .enqueue_packet(&CBlockUpdate::new(
-                                    &location,
-                                    VarInt(i32::from(state.id)),
-                                ))
-                                .await;
+                            self.client.enqueue_packet(CBlockUpdate::new(
+                                location,
+                                VarInt(i32::from(state.id)),
+                            ));
                             self.update_sequence(player_action.sequence.0);
                             return;
                         }
@@ -1123,10 +1124,9 @@ impl Player {
         abilities.flying = flying;
     }
 
-    pub async fn handle_play_ping_request(&self, request: SPlayPingRequest) {
+    pub fn handle_play_ping_request(&self, request: SPlayPingRequest) {
         self.client
-            .enqueue_packet(&CPingResponse::new(request.payload))
-            .await;
+            .enqueue_packet(CPingResponse::new(request.payload));
     }
 
     pub async fn handle_use_item_on(
@@ -1240,7 +1240,7 @@ impl Player {
         let mut sign_buf = Vec::new();
         pumpkin_nbt::serializer::to_bytes_unnamed(&updated_sign, &mut sign_buf).unwrap();
         world
-            .broadcast_packet_all(&CBlockEntityData::new(
+            .broadcast_packet_all(CBlockEntityData::new(
                 sign_data.location,
                 VarInt(block_entity!("sign") as i32),
                 sign_buf.into_boxed_slice(),
@@ -1367,7 +1367,7 @@ impl Player {
             suggestions,
         );
 
-        self.client.enqueue_packet(&response).await;
+        self.client.enqueue_packet(response);
     }
 
     pub fn handle_cookie_response(&self, packet: &SPCookieResponse) {
@@ -1545,12 +1545,10 @@ impl Player {
             state.get_state().block_entity_type == Some(block_entity!("sign"))
                 || state.get_state().block_entity_type == Some(block_entity!("hanging_sign"))
         }) {
-            self.client
-                .enqueue_packet(&COpenSignEditor::new(
-                    block_position,
-                    selected_face.to_offset().z == 1,
-                ))
-                .await;
+            self.client.enqueue_packet(COpenSignEditor::new(
+                block_position,
+                selected_face.to_offset().z == 1,
+            ));
         }
     }
 }
