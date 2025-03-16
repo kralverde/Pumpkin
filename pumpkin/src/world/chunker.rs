@@ -18,10 +18,13 @@ pub async fn player_join(player: &Arc<Player>) {
     let chunk_pos = player.living_entity.entity.chunk_pos.load();
 
     log::debug!("Sending center chunk to {}", player.gameprofile.name);
-    player.client.enqueue_packet(CCenterChunk {
-        chunk_x: chunk_pos.x.into(),
-        chunk_z: chunk_pos.z.into(),
-    });
+    player
+        .client
+        .enqueue_packet(&CCenterChunk {
+            chunk_x: chunk_pos.x.into(),
+            chunk_z: chunk_pos.z.into(),
+        })
+        .await;
     let view_distance = get_view_distance(player).await;
     log::debug!(
         "Player {} ({}) joined with view distance: {}",
@@ -43,10 +46,13 @@ pub async fn update_position(player: &Arc<Player>) {
     let new_cylindrical = Cylindrical::new(new_chunk_center, view_distance);
 
     if old_cylindrical != new_cylindrical {
-        player.client.enqueue_packet(CCenterChunk {
-            chunk_x: new_chunk_center.x.into(),
-            chunk_z: new_chunk_center.z.into(),
-        });
+        player
+            .client
+            .enqueue_packet(&CCenterChunk {
+                chunk_x: new_chunk_center.x.into(),
+                chunk_z: new_chunk_center.z.into(),
+            })
+            .await;
 
         let mut loading_chunks = Vec::new();
         let mut unloading_chunks = Vec::new();
@@ -81,7 +87,8 @@ pub async fn update_position(player: &Arc<Player>) {
             for chunk in unloading_chunks {
                 player
                     .client
-                    .enqueue_packet(CUnloadChunk::new(chunk.x, chunk.z));
+                    .enqueue_packet(&CUnloadChunk::new(chunk.x, chunk.z))
+                    .await;
             }
         }
 

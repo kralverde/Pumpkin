@@ -281,11 +281,13 @@ impl PumpkinServer {
                 id
             );
 
-            let client = Client::new(connection, client_addr, id);
+            let mut client = Client::new(connection, client_addr, id);
+            client.init();
             let server = self.server.clone();
 
             // We need to await these to verify all cleanup code is complete
             tasks.spawn(async move {
+                // TODO: We need to add a time-out here for un-cooperative clients
                 client.process_packets(&server).await;
 
                 if client
@@ -326,7 +328,7 @@ impl PumpkinServer {
 
         log::info!("Starting save.");
 
-        self.server.save().await;
+        self.server.shutdown().await;
 
         log::info!("Completed save!");
 

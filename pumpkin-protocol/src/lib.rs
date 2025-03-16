@@ -321,7 +321,13 @@ pub struct RawPacket {
 }
 
 pub trait ClientPacket: Packet {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError>;
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError>;
+
+    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+        let mut write = write;
+        write.write_var_int(&VarInt(Self::PACKET_ID))?;
+        self.write_packet_data(write)
+    }
 }
 
 pub trait ServerPacket: Packet + Sized {

@@ -6,7 +6,7 @@ use num_traits::Zero;
 use pumpkin_config::{advanced_config, chunk::ChunkFormat};
 use pumpkin_util::math::vector2::Vector2;
 use tokio::{
-    sync::{RwLock, mpsc},
+    sync::{Notify, RwLock, mpsc},
     task::{JoinHandle, JoinSet},
 };
 use tokio_util::task::TaskTracker;
@@ -57,6 +57,8 @@ pub struct Level {
     _locker: Arc<AnvilLevelLocker>,
     /// Tracks tasks associated with this world instance
     tasks: TaskTracker,
+    /// Notification that interrupts tasks for shutdown
+    pub shutdown_notifier: Notify,
 }
 
 #[derive(Clone)]
@@ -131,6 +133,7 @@ impl Level {
             level_info,
             _locker: Arc::new(locker),
             tasks: TaskTracker::new(),
+            shutdown_notifier: Notify::new(),
         }
     }
 
@@ -144,9 +147,10 @@ impl Level {
         self.tasks.spawn(task)
     }
 
-    pub async fn save(&self) {
+    pub async fn shutdown(&self) {
         log::info!("Saving level...");
 
+        self.shutdown_notifier.notify_waiters();
         self.tasks.close();
         log::debug!("Awaiting level tasks");
         self.tasks.wait().await;

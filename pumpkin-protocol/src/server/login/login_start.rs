@@ -11,7 +11,7 @@ pub struct SLoginStart {
 }
 
 impl ClientPacket for SLoginStart {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_string_bounded(&self.name, 16)?;

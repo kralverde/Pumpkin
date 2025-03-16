@@ -18,7 +18,7 @@ impl<'a> CKnownPacks<'a> {
 }
 
 impl ClientPacket for CKnownPacks<'_> {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
         write.write_list::<KnownPack>(self.known_packs, |p, v| {
             p.write_string(v.namespace)?;

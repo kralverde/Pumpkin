@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use pumpkin_protocol::client::play::CClearTtitle;
+use pumpkin_protocol::client::play::CClearTitle;
 use pumpkin_util::text::TextComponent;
 
 use crate::{
@@ -39,7 +39,7 @@ impl CommandExecutor for ClearOrResetExecutor {
         let reset = self.0;
 
         for target in targets {
-            target.client.enqueue_packet(CClearTtitle::new(reset));
+            target.client.enqueue_packet(&CClearTitle::new(reset)).await;
         }
         sender
             .send_message(if targets.len() == 1 {

@@ -1,9 +1,9 @@
 use crate::{Property, VarInt};
 
-pub enum PlayerAction {
+pub enum PlayerAction<'a> {
     AddPlayer {
-        name: String,
-        properties: Box<[Property]>,
+        name: &'a str,
+        properties: &'a [Property],
     },
     InitializeChat(u8),
     /// Gamemode ?

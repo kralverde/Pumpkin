@@ -460,13 +460,13 @@ impl Player {
 
     pub async fn show_title(&self, text: &TextComponent, mode: &TitleMode) {
         match mode {
-            TitleMode::Title => self.client.send_packet_now(&CTitleText::new(text)).await,
-            TitleMode::SubTitle => self.client.send_packet_now(&CSubtitle::new(text)).await,
-            TitleMode::ActionBar => self.client.send_packet_now(&CActionBar::new(text)).await,
+            TitleMode::Title => self.client.enqueue_packet(&CTitleText::new(text)).await,
+            TitleMode::SubTitle => self.client.enqueue_packet(&CSubtitle::new(text)).await,
+            TitleMode::ActionBar => self.client.enqueue_packet(&CActionBar::new(text)).await,
         }
     }
 
-    pub fn spawn_particle(
+    pub async fn spawn_particle(
         &self,
         position: Vector3<f64>,
         offset: Vector3<f32>,
@@ -474,19 +474,21 @@ impl Player {
         particle_count: i32,
         pariticle: Particle,
     ) {
-        self.client.enqueue_packet(CParticle::new(
-            false,
-            false,
-            position,
-            offset,
-            max_speed,
-            particle_count,
-            VarInt(pariticle as i32),
-            &[],
-        ))
+        self.client
+            .enqueue_packet(&CParticle::new(
+                false,
+                false,
+                position,
+                offset,
+                max_speed,
+                particle_count,
+                VarInt(pariticle as i32),
+                &[],
+            ))
+            .await;
     }
 
-    pub fn play_sound(
+    pub async fn play_sound(
         &self,
         sound_id: u16,
         category: SoundCategory,
@@ -495,14 +497,16 @@ impl Player {
         pitch: f32,
         seed: f64,
     ) {
-        self.client.enqueue_packet(CSoundEffect::new(
-            IdOr::Id(sound_id as u32),
-            category,
-            position,
-            volume,
-            pitch,
-            seed,
-        ))
+        self.client
+            .enqueue_packet(&CSoundEffect::new(
+                IdOr::Id(u32::from(sound_id)),
+                category,
+                position,
+                volume,
+                pitch,
+                seed,
+            ))
+            .await;
     }
 
     /// Stops a sound playing on the client.
@@ -511,9 +515,10 @@ impl Player {
     ///
     /// * `sound_id`: An optional `Identifier` specifying the sound to stop. If `None`, all sounds in the specified category (if any) will be stopped.
     /// * `category`: An optional `SoundCategory` specifying the sound category to stop. If `None`, all sounds with the specified identifier (if any) will be stopped.
-    pub fn stop_sound(&self, sound_id: Option<Identifier>, category: Option<SoundCategory>) {
+    pub async fn stop_sound(&self, sound_id: Option<Identifier>, category: Option<SoundCategory>) {
         self.client
-            .enqueue_packet(CStopSound::new(sound_id, category))
+            .enqueue_packet(&CStopSound::new(sound_id, category))
+            .await;
     }
 
     pub async fn tick(&self, server: &Server) {
@@ -525,9 +530,11 @@ impl Player {
             return;
         }
         if self.packet_sequence.load(Ordering::Relaxed) > -1 {
-            self.client.enqueue_packet(CAcknowledgeBlockChange::new(
-                self.packet_sequence.swap(-1, Ordering::Relaxed).into(),
-            ));
+            self.client
+                .enqueue_packet(&CAcknowledgeBlockChange::new(
+                    self.packet_sequence.swap(-1, Ordering::Relaxed).into(),
+                ))
+                .await;
         }
         {
             let mut xp = self.experience_pick_up_delay.lock().await;
@@ -545,14 +552,16 @@ impl Player {
 
         if let Some(chunk_of_chunks) = chunk_of_chunks {
             let chunk_count = chunk_of_chunks.len();
-            self.client.enqueue_packet(CChunkBatchStart {});
+            self.client.enqueue_packet(&CChunkBatchStart).await;
             for chunk in chunk_of_chunks {
                 let chunk = chunk.read().await;
                 // TODO: Can we check if we still need the chunk to send? Like if its a fast moving
                 // player or something
-                self.client.send_packet_now(&CChunkData(&chunk)).await;
+                self.client.enqueue_packet(&CChunkData(&chunk)).await;
             }
-            self.client.enqueue_packet(CChunkBatchEnd::new(chunk_count));
+            self.client
+                .enqueue_packet(&CChunkBatchEnd::new(chunk_count))
+                .await;
         }
 
         self.tick_counter.fetch_add(1, Ordering::Relaxed);
@@ -608,7 +617,7 @@ impl Player {
             let id = now.elapsed().as_millis() as i64;
             self.keep_alive_id
                 .store(id, std::sync::atomic::Ordering::Relaxed);
-            self.client.enqueue_packet(CKeepAlive::new(id));
+            self.client.enqueue_packet(&CKeepAlive::new(id)).await;
         }
     }
 
@@ -707,11 +716,13 @@ impl Player {
         if abilities.creative {
             b |= 8;
         }
-        self.client.enqueue_packet(CPlayerAbilities::new(
-            b,
-            abilities.fly_speed,
-            abilities.walk_speed,
-        ));
+        self.client
+            .enqueue_packet(&CPlayerAbilities::new(
+                b,
+                abilities.fly_speed,
+                abilities.walk_speed,
+            ))
+            .await;
     }
 
     /// syncs the players permission level with the client
@@ -743,20 +754,23 @@ impl Player {
     /// Sends the world time to just the player.
     pub async fn send_time(&self, world: &World) {
         let l_world = world.level_time.lock().await;
-        self.client.enqueue_packet(CUpdateTime::new(
-            l_world.world_age,
-            l_world.time_of_day,
-            true,
-        ));
+        self.client
+            .enqueue_packet(&CUpdateTime::new(
+                l_world.world_age,
+                l_world.time_of_day,
+                true,
+            ))
+            .await;
     }
 
     /// Sends the mobs to just the player.
-    // TODO: This should be optimized for larger servers based on current player chunk
+    // TODO: This should be optimized based on current player chunk
     pub async fn send_mobs(&self, world: &World) {
         let entities = world.entities.read().await.clone();
         for (_, entity) in entities {
             self.client
-                .enqueue_packet(entity.get_entity().create_spawn_packet());
+                .enqueue_packet(&entity.get_entity().create_spawn_packet())
+                .await;
         }
     }
 
@@ -767,7 +781,8 @@ impl Player {
         level.clean_chunks(&chunks_to_clean).await;
         for chunk in chunks_to_clean {
             self.client
-                .enqueue_packet(CUnloadChunk::new(chunk.x, chunk.z));
+                .enqueue_packet(&CUnloadChunk::new(chunk.x, chunk.z))
+                .await;
         }
 
         self.watched_section.store(Cylindrical::new(
@@ -837,7 +852,7 @@ impl Player {
                     last_pos.z.round() as i32,
                 ));
                 self.client
-                    .enqueue_packet(CRespawn::new(
+                    .enqueue_packet(&CRespawn::new(
                         (new_world.dimension_type as u8).into(),
                         new_world.dimension_type.name(),
                         0, // seed
@@ -849,7 +864,7 @@ impl Player {
                         0.into(),
                         0.into(),
                         1,
-                    ))
+                    )).await
                     ;
                 self.send_abilities_update().await;
                 self.send_permission_lvl_update().await;
@@ -888,7 +903,7 @@ impl Player {
                 entity.set_rotation(yaw, pitch);
                 *self.awaiting_teleport.lock().await = Some((teleport_id.into(), position));
                 self.client
-                    .enqueue_packet(CPlayerPosition::new(
+                    .enqueue_packet(&CPlayerPosition::new(
                         teleport_id.into(),
                         position,
                         Vector3::new(0.0, 0.0, 0.0),
@@ -896,8 +911,7 @@ impl Player {
                         pitch,
                         // TODO
                         &[],
-                    ))
-                    ;
+                    )).await;
             }
         }}
     }
@@ -920,14 +934,14 @@ impl Player {
                     .world
                     .read()
                     .await
-                    .broadcast_packet_all(CTeleportEntity::new(
+                    .broadcast_packet_all(&CTeleportEntity::new(
                         self.living_entity.entity.entity_id.into(),
                         position,
                         Vector3::new(0.0, 0.0, 0.0),
                         yaw,
                         pitch,
                         // TODO
-                        Box::new([]),
+                        &[],
                         self.living_entity
                             .entity
                             .on_ground
@@ -975,7 +989,7 @@ impl Player {
         }
 
         self.client
-            .send_packet_now(&CPlayDisconnect::new(reason.clone()))
+            .enqueue_packet(&CPlayDisconnect::new(&reason))
             .await;
 
         log::info!(
@@ -1004,20 +1018,22 @@ impl Player {
 
     pub async fn heal(&self, additional_health: f32) {
         self.living_entity.heal(additional_health).await;
-        self.send_health();
+        self.send_health().await;
     }
 
-    pub fn send_health(&self) {
-        self.client.enqueue_packet(CSetHealth::new(
-            self.living_entity.health.load(),
-            self.hunger_manager.level.load().into(),
-            self.hunger_manager.saturation.load(),
-        ));
+    pub async fn send_health(&self) {
+        self.client
+            .enqueue_packet(&CSetHealth::new(
+                self.living_entity.health.load(),
+                self.hunger_manager.level.load().into(),
+                self.hunger_manager.saturation.load(),
+            ))
+            .await;
     }
 
     pub async fn set_health(&self, health: f32) {
         self.living_entity.set_health(health).await;
-        self.send_health();
+        self.send_health().await;
     }
 
     pub fn tick_client_load_timeout(&self) {
@@ -1073,21 +1089,21 @@ impl Player {
                     .world
                     .read()
                     .await
-                    .broadcast_packet_all(CPlayerInfoUpdate::new(
+                    .broadcast_packet_all(&CPlayerInfoUpdate::new(
                         // TODO: Remove magic number
                         0x04,
-                        Box::new([pumpkin_protocol::client::play::Player {
+                        &[pumpkin_protocol::client::play::Player {
                             uuid: self.gameprofile.id,
-                            actions: Box::new([PlayerAction::UpdateGameMode((gamemode as i32).into())]),
-                        }]),
+                            actions: &[PlayerAction::UpdateGameMode((gamemode as i32).into())],
+                        }],
                     ))
                     .await;
 
                 self.client
-                    .enqueue_packet(CGameEvent::new(
+                    .enqueue_packet(&CGameEvent::new(
                         GameEvent::ChangeGameMode,
                         gamemode as i32 as f32,
-                    ));
+                    )).await;
             }
         }}
     }
@@ -1167,19 +1183,21 @@ impl Player {
         u32::from(i.max(j))
     }
 
-    pub fn send_message(
+    pub async fn send_message(
         &self,
-        message: TextComponent,
+        message: &TextComponent,
         chat_type: u32,
-        sender_name: TextComponent,
-        target_name: Option<TextComponent>,
+        sender_name: &TextComponent,
+        target_name: Option<&TextComponent>,
     ) {
-        self.client.enqueue_packet(CDisguisedChatMessage::new(
-            message,
-            (chat_type + 1).into(),
-            sender_name,
-            target_name,
-        ));
+        self.client
+            .enqueue_packet(&CDisguisedChatMessage::new(
+                message,
+                (chat_type + 1).into(),
+                sender_name,
+                target_name,
+            ))
+            .await;
     }
 
     pub async fn drop_item(&self, item_id: u16, count: u32) {
@@ -1210,22 +1228,24 @@ impl Player {
 
     pub async fn send_system_message_raw(&self, text: &TextComponent, overlay: bool) {
         self.client
-            .send_packet_now(&CSystemChatMessage::new(text, overlay))
-            .await
+            .enqueue_packet(&CSystemChatMessage::new(text, overlay))
+            .await;
     }
 
     /// Sets the player's experience level and updates the client
-    pub fn set_experience(&self, level: i32, progress: f32, points: i32) {
+    pub async fn set_experience(&self, level: i32, progress: f32, points: i32) {
         // TODO: These should be atomic together, not isolated; make a struct containing these. can cause ABA issues
         self.experience_level.store(level, Ordering::Relaxed);
         self.experience_progress.store(progress.clamp(0.0, 1.0));
         self.experience_points.store(points, Ordering::Relaxed);
 
-        self.client.enqueue_packet(CSetExperience::new(
-            progress.clamp(0.0, 1.0),
-            points.into(),
-            level.into(),
-        ));
+        self.client
+            .enqueue_packet(&CSetExperience::new(
+                progress.clamp(0.0, 1.0),
+                points.into(),
+                level.into(),
+            ))
+            .await;
     }
 
     /// Sets the player's experience level directly
@@ -1246,7 +1266,7 @@ impl Player {
             points = (points as f32 * scale) as i32;
         }
 
-        self.set_experience(new_level, progress, points);
+        self.set_experience(new_level, progress, points).await;
     }
 
     pub async fn add_effect(&self, effect: Effect, keep_fading: bool) {
@@ -1265,13 +1285,15 @@ impl Player {
             flag |= 8;
         }
         let effect_id = VarInt(effect.r#type as i32);
-        self.client.enqueue_packet(CUpdateMobEffect::new(
-            self.entity_id().into(),
-            effect_id,
-            effect.amplifier.into(),
-            effect.duration.into(),
-            flag,
-        ));
+        self.client
+            .enqueue_packet(&CUpdateMobEffect::new(
+                self.entity_id().into(),
+                effect_id,
+                effect.amplifier.into(),
+                effect.duration.into(),
+                flag,
+            ))
+            .await;
         self.living_entity.add_effect(effect).await;
     }
 
@@ -1298,19 +1320,20 @@ impl Player {
         }
 
         let progress = new_points as f32 / max_points as f32;
-        self.set_experience(current_level, progress, new_points);
+        self.set_experience(current_level, progress, new_points)
+            .await;
         true
     }
 
     /// Add experience points to the player
-    pub fn add_experience_points(&self, added_points: i32) {
+    pub async fn add_experience_points(&self, added_points: i32) {
         let current_level = self.experience_level.load(Ordering::Relaxed);
         let current_points = self.experience_points.load(Ordering::Relaxed);
         let total_exp = experience::points_to_level(current_level) + current_points;
         let new_total_exp = total_exp + added_points;
         let (new_level, new_points) = experience::total_to_level_and_points(new_total_exp);
         let progress = experience::progress_in_level(new_points, new_level);
-        self.set_experience(new_level, progress, new_points);
+        self.set_experience(new_level, progress, new_points).await;
     }
 }
 
@@ -1473,7 +1496,8 @@ impl Player {
             }
             SPlayerLoaded::PACKET_ID => self.handle_player_loaded(),
             SPlayPingRequest::PACKET_ID => {
-                self.handle_play_ping_request(SPlayPingRequest::read(payload)?);
+                self.handle_play_ping_request(SPlayPingRequest::read(payload)?)
+                    .await;
             }
             SClickContainer::PACKET_ID => {
                 self.handle_click_container(server, SClickContainer::read(payload)?)

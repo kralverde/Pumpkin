@@ -67,7 +67,7 @@ impl CommandExecutor for Executor {
                 player
                     .set_permission_lvl(new_level, &command_dispatcher)
                     .await;
-            }
+            };
 
             let player_name = &player.gameprofile.name;
             sender

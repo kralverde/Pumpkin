@@ -178,7 +178,7 @@ impl Executor {
             }
             ExpType::Points => {
                 if mode == Mode::Add {
-                    target.add_experience_points(amount);
+                    target.add_experience_points(amount).await;
                 } else {
                     // target.set_experience_points(amount).await; This could
                     let current_level = target.experience_level.load(Ordering::Relaxed);

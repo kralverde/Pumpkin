@@ -24,7 +24,7 @@ impl<'a> CUpdateTags<'a> {
 }
 
 impl ClientPacket for CUpdateTags<'_> {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
         write.write_list(self.tags, |p, registry_key| {
             p.write_identifier(&Identifier::vanilla(registry_key.identifier_string()))?;

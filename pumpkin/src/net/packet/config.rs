@@ -157,7 +157,7 @@ impl Client {
 
         // We are done with configuring
         log::debug!("finished config");
-        self.enqueue_packet(CFinishConfig);
+        self.send_packet_now(&CFinishConfig).await;
     }
 
     pub async fn handle_config_acknowledged(&self) {

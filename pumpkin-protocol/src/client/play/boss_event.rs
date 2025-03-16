@@ -17,7 +17,7 @@ impl<'a> CBossEvent<'a> {
 }
 
 impl ClientPacket for CBossEvent<'_> {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_uuid(self.uuid)?;

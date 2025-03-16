@@ -50,7 +50,7 @@ pub async fn velocity_login(client: &Client) {
     let mut buf = BytesMut::new();
     buf.put_u8(MAX_SUPPORTED_FORWARDING_VERSION);
     client
-        .send_packet_now(&CLoginPluginRequest::new(
+        .enqueue_packet(&CLoginPluginRequest::new(
             velocity_message_id.into(),
             PLAYER_INFO_CHANNEL,
             &buf,
@@ -82,7 +82,7 @@ fn read_game_profile(read: impl NetworkRead) -> Result<GameProfile, VelocityErro
         .get_list(|data| {
             let name = data.get_string()?;
             let value = data.get_string()?;
-            let signature = data.get_option(|d| d.get_string())?;
+            let signature = data.get_option(NetworkRead::get_string)?;
 
             Ok(Property {
                 name,

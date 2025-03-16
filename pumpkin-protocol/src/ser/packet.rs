@@ -15,7 +15,7 @@ impl<P> ClientPacket for P
 where
     P: Packet + Serialize,
 {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut serializer = serializer::Serializer::new(write);
         self.serialize(&mut serializer)
     }

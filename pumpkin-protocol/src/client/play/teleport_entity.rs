@@ -8,24 +8,24 @@ use crate::{
 };
 
 #[packet(PLAY_TELEPORT_ENTITY)]
-pub struct CTeleportEntity {
+pub struct CTeleportEntity<'a> {
     entity_id: VarInt,
     position: Vector3<f64>,
     delta: Vector3<f64>,
     yaw: f32,
     pitch: f32,
-    relatives: Box<[PositionFlag]>,
+    relatives: &'a [PositionFlag],
     on_ground: bool,
 }
 
-impl CTeleportEntity {
+impl<'a> CTeleportEntity<'a> {
     pub fn new(
         entity_id: VarInt,
         position: Vector3<f64>,
         delta: Vector3<f64>,
         yaw: f32,
         pitch: f32,
-        relatives: Box<[PositionFlag]>,
+        relatives: &'a [PositionFlag],
         on_ground: bool,
     ) -> Self {
         Self {
@@ -40,8 +40,8 @@ impl CTeleportEntity {
     }
 }
 
-impl ClientPacket for CTeleportEntity {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+impl ClientPacket for CTeleportEntity<'_> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_var_int(&self.entity_id)?;
@@ -54,7 +54,7 @@ impl ClientPacket for CTeleportEntity {
         write.write_f32_be(self.yaw)?;
         write.write_f32_be(self.pitch)?;
         // not sure about that
-        write.write_i32_be(PositionFlag::get_bitfield(&self.relatives))?;
+        write.write_i32_be(PositionFlag::get_bitfield(self.relatives))?;
         write.write_bool(self.on_ground)
     }
 }

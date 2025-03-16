@@ -49,7 +49,7 @@ pub async fn send_c_commands_packet(player: &Arc<Player>, dispatcher: &CommandDi
     let root_node_index = root.build(&mut proto_nodes);
 
     let packet = CCommands::new(proto_nodes, root_node_index.into());
-    player.client.send_packet_now(&packet).await;
+    player.client.enqueue_packet(&packet).await;
 }
 
 #[derive(Debug)]

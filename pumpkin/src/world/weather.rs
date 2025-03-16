@@ -71,11 +71,11 @@ impl Weather {
         if was_raining != raining {
             if was_raining {
                 world
-                    .broadcast_packet_all(CGameEvent::new(GameEvent::EndRaining, 0.0))
+                    .broadcast_packet_all(&CGameEvent::new(GameEvent::EndRaining, 0.0))
                     .await;
             } else {
                 world
-                    .broadcast_packet_all(CGameEvent::new(GameEvent::BeginRaining, 0.0))
+                    .broadcast_packet_all(&CGameEvent::new(GameEvent::BeginRaining, 0.0))
                     .await;
             }
         }
@@ -105,13 +105,16 @@ impl Weather {
         // Broadcast level changes if needed
         if (self.old_rain_level - self.rain_level).abs() > f32::EPSILON {
             world
-                .broadcast_packet_all(CGameEvent::new(GameEvent::RainLevelChange, self.rain_level))
+                .broadcast_packet_all(&CGameEvent::new(
+                    GameEvent::RainLevelChange,
+                    self.rain_level,
+                ))
                 .await;
         }
 
         if (self.old_thunder_level - self.thunder_level).abs() > f32::EPSILON {
             world
-                .broadcast_packet_all(CGameEvent::new(
+                .broadcast_packet_all(&CGameEvent::new(
                     GameEvent::ThunderLevelChange,
                     self.thunder_level,
                 ))

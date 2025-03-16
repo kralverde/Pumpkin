@@ -10,6 +10,7 @@ use crate::world::custom_bossbar::CustomBossbars;
 use crate::{
     command::dispatcher::CommandDispatcher, entity::player::Player, net::Client, world::World,
 };
+use bytes::Bytes;
 use connection_cache::{CachedBranding, CachedStatus};
 use key_store::KeyStore;
 use pumpkin_config::{BASIC_CONFIG, advanced_config};
@@ -216,17 +217,17 @@ impl Server {
         self.server_listing.lock().await.remove_player();
     }
 
-    pub async fn save(&self) {
+    pub async fn shutdown(&self) {
         self.tasks.close();
         log::debug!("Awaiting tasks for server");
         self.tasks.wait().await;
         log::debug!("Done awaiting tasks for server");
 
+        log::info!("Starting worlds");
         for world in self.worlds.read().await.iter() {
-            world.save().await;
+            world.shutdown().await;
         }
-
-        log::info!("Completed world save");
+        log::info!("Completed worlds");
     }
 
     pub async fn try_get_container(
@@ -293,16 +294,21 @@ impl Server {
     /// # Arguments
     ///
     /// * `packet`: A reference to the packet to be broadcast. The packet must implement the `ClientPacket` trait.
-    pub async fn broadcast_packet_all<P>(&self, packet: P)
+    pub async fn broadcast_packet_all<P>(&self, packet: &P)
     where
-        P: ClientPacket + Send + Sync + 'static,
+        P: ClientPacket,
     {
-        let packet = Arc::new(packet);
+        let mut packet_buf = Vec::new();
+        if let Err(err) = packet.write(&mut packet_buf) {
+            log::error!("Failed to serialize packet {}: {}", P::PACKET_ID, err);
+            return;
+        }
+        let packet_data: Bytes = packet_buf.into();
+
         for world in self.worlds.read().await.iter() {
             let current_players = world.players.read().await;
             for player in current_players.values() {
-                let packet = packet.clone();
-                player.client.enqueue_packet::<P, Arc<P>>(packet);
+                player.client.enqueue_packet_data(packet_data.clone()).await;
             }
         }
     }
@@ -320,7 +326,7 @@ impl Server {
             'after: {
                 for world in self.worlds.read().await.iter() {
                     world
-                        .broadcast_message(event.message.clone(), event.sender.clone(), chat_type, target_name.cloned())
+                        .broadcast_message(&event.message, &event.sender, chat_type, target_name)
                         .await;
                 }
             }

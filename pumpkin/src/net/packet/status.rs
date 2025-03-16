@@ -12,7 +12,8 @@ impl Client {
 
     pub async fn handle_ping_request(&self, ping_request: SStatusPingRequest) {
         log::debug!("Handling ping request");
-        self.enqueue_packet(CPingResponse::new(ping_request.payload));
+        self.send_packet_now(&CPingResponse::new(ping_request.payload))
+            .await;
         self.close();
     }
 }

@@ -8,19 +8,19 @@ use crate::VarInt;
 
 #[derive(Serialize)]
 #[packet(PLAY_DISGUISED_CHAT)]
-pub struct CDisguisedChatMessage {
-    message: TextComponent,
+pub struct CDisguisedChatMessage<'a> {
+    message: &'a TextComponent,
     chat_type: VarInt,
-    sender_name: TextComponent,
-    target_name: Option<TextComponent>,
+    sender_name: &'a TextComponent,
+    target_name: Option<&'a TextComponent>,
 }
 
-impl CDisguisedChatMessage {
+impl<'a> CDisguisedChatMessage<'a> {
     pub fn new(
-        message: TextComponent,
+        message: &'a TextComponent,
         chat_type: VarInt,
-        sender_name: TextComponent,
-        target_name: Option<TextComponent>,
+        sender_name: &'a TextComponent,
+        target_name: Option<&'a TextComponent>,
     ) -> Self {
         Self {
             message,

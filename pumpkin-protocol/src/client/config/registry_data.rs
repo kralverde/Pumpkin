@@ -40,7 +40,7 @@ impl RegistryEntry {
 }
 
 impl ClientPacket for CRegistryData<'_> {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
         write.write_identifier(self.registry_id)?;
         write.write_list::<RegistryEntry>(self.entries, |p, v| {

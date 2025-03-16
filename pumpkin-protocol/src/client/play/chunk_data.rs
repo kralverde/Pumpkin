@@ -15,7 +15,7 @@ use pumpkin_world::{
 pub struct CChunkData<'a>(pub &'a ChunkData);
 
 impl ClientPacket for CChunkData<'_> {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
         // Chunk X

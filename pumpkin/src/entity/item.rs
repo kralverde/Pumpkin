@@ -139,11 +139,14 @@ impl EntityBase for ItemEntity {
             };
 
             if total_pick_up > 0 {
-                player.client.enqueue_packet(CTakeItemEntity::new(
-                    self.entity.entity_id.into(),
-                    player.entity_id().into(),
-                    total_pick_up.into(),
-                ));
+                player
+                    .client
+                    .enqueue_packet(&CTakeItemEntity::new(
+                        self.entity.entity_id.into(),
+                        player.entity_id().into(),
+                        total_pick_up.into(),
+                    ))
+                    .await;
             }
 
             // TODO: Can we batch slot updates?

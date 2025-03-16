@@ -24,7 +24,7 @@ impl<'a> CLoginSuccess<'a> {
 }
 
 impl ClientPacket for CLoginSuccess<'_> {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
         write.write_uuid(self.uuid)?;
         write.write_string(self.username)?;

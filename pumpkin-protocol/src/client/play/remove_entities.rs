@@ -6,13 +6,13 @@ use crate::VarInt;
 
 #[derive(Serialize)]
 #[packet(PLAY_REMOVE_ENTITIES)]
-pub struct CRemoveEntities {
+pub struct CRemoveEntities<'a> {
     entity_count: VarInt,
-    entity_ids: Box<[VarInt]>,
+    entity_ids: &'a [VarInt],
 }
 
-impl CRemoveEntities {
-    pub fn new(entity_ids: Box<[VarInt]>) -> Self {
+impl<'a> CRemoveEntities<'a> {
+    pub fn new(entity_ids: &'a [VarInt]) -> Self {
         Self {
             entity_count: entity_ids.len().into(),
             entity_ids,

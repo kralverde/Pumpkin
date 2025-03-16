@@ -12,7 +12,7 @@ pub struct SHandShake {
 }
 
 impl ClientPacket for SHandShake {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_var_int(&self.protocol_version)?;

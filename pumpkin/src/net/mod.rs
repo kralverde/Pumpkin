@@ -1,5 +1,4 @@
 use std::{
-    borrow::Borrow,
     net::SocketAddr,
     num::NonZeroU8,
     sync::{
@@ -14,6 +13,7 @@ use crate::{
     server::Server,
 };
 
+use bytes::Bytes;
 use crossbeam::atomic::AtomicCell;
 use pumpkin_config::networking::compression::CompressionInfo;
 use pumpkin_protocol::{
@@ -42,7 +42,10 @@ use sha2::Sha256;
 use tokio::{
     io::{BufReader, BufWriter},
     net::tcp::OwnedWriteHalf,
-    sync::Notify,
+    sync::{
+        Notify,
+        mpsc::{Receiver, Sender},
+    },
     task::JoinHandle,
 };
 use tokio::{
@@ -153,12 +156,17 @@ pub struct Client {
     tasks: TaskTracker,
     /// An notifier that is triggered when this client is closed.
     close_interrupt: Arc<Notify>,
+    /// A queue of serialized packets to send to the network
+    outgoing_packet_queue_send: Sender<Bytes>,
+    /// A queue of serialized packets to send to the network
+    outgoing_packet_queue_recv: Option<Receiver<Bytes>>,
 }
 
 impl Client {
     #[must_use]
     pub fn new(tcp_stream: TcpStream, address: SocketAddr, id: usize) -> Self {
         let (read, write) = tcp_stream.into_split();
+        let (send, recv) = tokio::sync::mpsc::channel(128);
         Self {
             id,
             protocol_version: AtomicI32::new(0),
@@ -174,11 +182,59 @@ impl Client {
             make_player: AtomicBool::new(false),
             close_interrupt: Arc::new(Notify::new()),
             tasks: TaskTracker::new(),
+            outgoing_packet_queue_send: send,
+            outgoing_packet_queue_recv: Some(recv),
         }
     }
 
+    pub fn init(&mut self) {
+        self.start_outgoing_packet_task();
+    }
+
+    fn start_outgoing_packet_task(&mut self) {
+        let mut packet_receiver = self
+            .outgoing_packet_queue_recv
+            .take()
+            .expect("This was set in the new fn");
+        let writer = self.network_writer.clone();
+        let close_interrupt = self.close_interrupt.clone();
+        let closed = self.closed.clone();
+        let id = self.id;
+        self.spawn_task(async move {
+            while !closed.load(std::sync::atomic::Ordering::Relaxed) {
+                let recv_result = tokio::select! {
+                    () = close_interrupt.notified() => {
+                        None
+                    },
+                    recv_result = packet_receiver.recv() => {
+                        recv_result
+                    }
+                };
+
+                let Some(packet_data) = recv_result else {
+                    break;
+                };
+
+                if let Err(err) = writer.lock().await.write_packet(packet_data).await {
+                    // It is expected that the packet will fail if we are closed
+                    if !closed.load(std::sync::atomic::Ordering::Relaxed) {
+                        log::warn!(
+                            "Failed to send packet to client {}: {}",
+                            id,
+                            err.to_string()
+                        );
+                        // We now need to close the connection to the client since the stream is in an
+                        // unknown state
+                        Self::thread_safe_close(&close_interrupt, &closed);
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     pub async fn await_close_interrupt(&self) {
-        self.close_interrupt.notified().await
+        self.close_interrupt.notified().await;
     }
 
     pub async fn await_tasks(&self) {
@@ -279,7 +335,7 @@ impl Client {
                     Err(err) => {
                         if !matches!(err, PacketDecodeError::ConnectionClosed) {
                             log::warn!("Failed to decode packet from client {}: {}", self.id, err);
-                            let text = format!("Error while reading incoming packet {}", err);
+                            let text = format!("Error while reading incoming packet {err}");
                             self.kick(TextComponent::text(text)).await;
                         }
                         None
@@ -289,42 +345,34 @@ impl Client {
         }
     }
 
-    /// Queues a clientbound packet to be sent to the connected client.
+    /// Queues a clientbound packet to be sent to the connected client. Queued chunks are sent
+    /// in-order to the client
     ///
     /// # Arguments
     ///
     /// * `packet`: A reference to a packet object implementing the `ClientPacket` trait.
-    pub fn enqueue_packet<P, R>(&self, packet_ref: R)
+    pub async fn enqueue_packet<P>(&self, packet: &P)
     where
-        P: ClientPacket + Sync + Send,
-        R: Borrow<P> + Send + 'static,
+        P: ClientPacket,
     {
-        let network_writer = self.network_writer.clone();
-        let client_id = self.id;
-        let is_closed = self.closed.clone();
-        let notifier = self.close_interrupt.clone();
+        let mut packet_buf = Vec::new();
+        if let Err(err) = packet.write(&mut packet_buf) {
+            log::error!("Failed to serialize packet {}: {}", P::PACKET_ID, err);
+            return;
+        }
+        self.enqueue_packet_data(packet_buf.into()).await;
+    }
 
-        // Ideally this would be some kind of queue, but thats hard to do over generic types
-        self.tasks.spawn(async move {
-            let mut network_writer = network_writer.lock().await;
-            if let Err(err) = network_writer.write_packet(packet_ref.borrow()).await {
-                // It is expected that the packet will fail if we are closed
-                if !is_closed.load(std::sync::atomic::Ordering::Relaxed) {
-                    log::error!(
-                        "Failed to send packet to client {}: {}",
-                        client_id,
-                        err.to_string()
-                    );
-                    // We now need to close the connection to the client since the stream is in an
-                    // unknown state
-                    Self::thread_safe_close(notifier, is_closed);
-                }
-            }
-        });
+    pub async fn enqueue_packet_data(&self, packet_data: Bytes) {
+        self.outgoing_packet_queue_send
+            .send(packet_data)
+            .await
+            .expect("Failed to send enqueued packet data to queue");
     }
 
     /// Sends a clientbound packet to the connected client and awaits until the packet is sent.
-    /// Useful for blocking until the client has received a packet or if the packet is not 'static
+    /// Useful for blocking until the client has received a packet. Ignores the order of
+    /// `enqueue_chunk`.
     ///
     /// # Arguments
     ///
@@ -338,7 +386,19 @@ impl Client {
     ///
     /// Returns an `PacketError` if the packet could not be Send.
     pub async fn send_packet_now<P: ClientPacket>(&self, packet: &P) {
-        if let Err(err) = self.network_writer.lock().await.write_packet(packet).await {
+        let mut packet_buf = Vec::new();
+        if let Err(err) = packet.write(&mut packet_buf) {
+            log::error!("Failed to serialize packet {}: {}", P::PACKET_ID, err);
+            return;
+        };
+
+        if let Err(err) = self
+            .network_writer
+            .lock()
+            .await
+            .write_packet(packet_buf.into())
+            .await
+        {
             // It is expected that the packet will fail if we are closed
             if !self.closed.load(std::sync::atomic::Ordering::Relaxed) {
                 log::warn!(
@@ -567,14 +627,14 @@ impl Client {
                 self.send_packet_now(&CLoginDisconnect::new(
                     &serde_json::to_string(&reason.0).unwrap_or_else(|_| String::new()),
                 ))
-                .await
+                .await;
             }
             ConnectionState::Config => {
                 self.send_packet_now(&CConfigDisconnect::new(&reason.get_text()))
-                    .await
+                    .await;
             }
             // This way players get kicked when players using client functions (e.g. poll, send_packet)
-            ConnectionState::Play => self.send_packet_now(&CPlayDisconnect::new(reason)).await,
+            ConnectionState::Play => self.send_packet_now(&CPlayDisconnect::new(&reason)).await,
             _ => {
                 log::warn!("Can't kick in {:?} State", self.connection_state);
                 return;
@@ -630,7 +690,7 @@ impl Client {
         None
     }
 
-    fn thread_safe_close(interrupt: Arc<Notify>, closed: Arc<AtomicBool>) {
+    fn thread_safe_close(interrupt: &Arc<Notify>, closed: &Arc<AtomicBool>) {
         interrupt.notify_waiters();
         closed.store(true, std::sync::atomic::Ordering::Relaxed);
     }

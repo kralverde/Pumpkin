@@ -124,7 +124,9 @@ impl CommandExecutor for Executor {
             let max_distance = 16.0 * volume; // 16 blocks is base distance at volume 1.0
 
             if distance <= max_distance.into() || _min_volume > 0.0 {
-                target.play_sound(sound as u16, source, &pos, volume, pitch, seed);
+                target
+                    .play_sound(sound as u16, source, &pos, volume, pitch, seed)
+                    .await;
                 players_who_heard += 1;
             }
         }

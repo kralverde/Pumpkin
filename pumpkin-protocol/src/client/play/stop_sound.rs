@@ -17,7 +17,7 @@ impl CStopSound {
 }
 
 impl ClientPacket for CStopSound {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
 
         const NO_CATEGORY_NO_SOUND: u8 = 0;

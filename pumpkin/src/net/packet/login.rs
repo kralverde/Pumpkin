@@ -144,7 +144,7 @@ impl Client {
             };
 
             if advanced_config().networking.packet_compression.enabled {
-                //self.enable_compression().await;
+                self.enable_compression().await;
             }
 
             if BASIC_CONFIG.encryption {

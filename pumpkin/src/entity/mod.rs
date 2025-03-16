@@ -178,7 +178,7 @@ impl Entity {
         self.world
             .read()
             .await
-            .broadcast_packet_all(CEntityVelocity::new(self.entity_id.into(), velocity))
+            .broadcast_packet_all(&CEntityVelocity::new(self.entity_id.into(), velocity))
             .await;
     }
 
@@ -253,7 +253,7 @@ impl Entity {
         self.world
             .read()
             .await
-            .broadcast_packet_all(CUpdateEntityRot::new(
+            .broadcast_packet_all(&CUpdateEntityRot::new(
                 self.entity_id.into(),
                 yaw as u8,
                 pitch as u8,
@@ -263,7 +263,7 @@ impl Entity {
         self.world
             .read()
             .await
-            .broadcast_packet_all(CHeadRot::new(self.entity_id.into(), yaw as u8))
+            .broadcast_packet_all(&CHeadRot::new(self.entity_id.into(), yaw as u8))
             .await;
     }
 
@@ -271,14 +271,14 @@ impl Entity {
         self.world
             .read()
             .await
-            .broadcast_packet_all(CTeleportEntity::new(
+            .broadcast_packet_all(&CTeleportEntity::new(
                 self.entity_id.into(),
                 position,
                 Vector3::new(0.0, 0.0, 0.0),
                 yaw,
                 pitch,
                 // TODO
-                Box::new([]),
+                &[],
                 self.on_ground.load(std::sync::atomic::Ordering::SeqCst),
             ))
             .await;
@@ -412,7 +412,7 @@ impl Entity {
         self.world
             .read()
             .await
-            .broadcast_packet_all(CSetEntityMetadata::new(self.entity_id.into(), buf))
+            .broadcast_packet_all(&CSetEntityMetadata::new(self.entity_id.into(), buf))
             .await;
     }
 

@@ -22,7 +22,7 @@ impl<'a> CCommands<'a> {
 }
 
 impl ClientPacket for CCommands<'_> {
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
         let mut write = write;
         write.write_list(&self.nodes, |bytebuf, node: &ProtoNode| {
             node.write_to(bytebuf)

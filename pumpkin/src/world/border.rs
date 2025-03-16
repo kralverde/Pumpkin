@@ -44,17 +44,19 @@ impl Worldborder {
         }
     }
 
-    pub fn init_client(&self, client: &Client) {
-        client.enqueue_packet(CInitializeWorldBorder::new(
-            self.center_x,
-            self.center_z,
-            self.old_diameter,
-            self.new_diameter,
-            self.speed.into(),
-            self.portal_teleport_boundary.into(),
-            self.warning_blocks.into(),
-            self.warning_time.into(),
-        ));
+    pub async fn init_client(&self, client: &Client) {
+        client
+            .enqueue_packet(&CInitializeWorldBorder::new(
+                self.center_x,
+                self.center_z,
+                self.old_diameter,
+                self.new_diameter,
+                self.speed.into(),
+                self.portal_teleport_boundary.into(),
+                self.warning_blocks.into(),
+                self.warning_time.into(),
+            ))
+            .await;
     }
 
     pub async fn set_center(&mut self, world: &World, x: f64, z: f64) {
@@ -62,7 +64,7 @@ impl Worldborder {
         self.center_z = z;
 
         world
-            .broadcast_packet_all(CSetBorderCenter::new(self.center_x, self.center_z))
+            .broadcast_packet_all(&CSetBorderCenter::new(self.center_x, self.center_z))
             .await;
     }
 
@@ -73,7 +75,7 @@ impl Worldborder {
         match speed {
             Some(speed) => {
                 world
-                    .broadcast_packet_all(CSetBorderLerpSize::new(
+                    .broadcast_packet_all(&CSetBorderLerpSize::new(
                         self.old_diameter,
                         self.new_diameter,
                         speed.into(),
@@ -82,7 +84,7 @@ impl Worldborder {
             }
             None => {
                 world
-                    .broadcast_packet_all(CSetBorderSize::new(self.new_diameter))
+                    .broadcast_packet_all(&CSetBorderSize::new(self.new_diameter))
                     .await;
             }
         }
@@ -97,7 +99,7 @@ impl Worldborder {
         self.warning_time = delay;
 
         world
-            .broadcast_packet_all(CSetBorderWarningDelay::new(self.warning_time.into()))
+            .broadcast_packet_all(&CSetBorderWarningDelay::new(self.warning_time.into()))
             .await;
     }
 
@@ -105,7 +107,7 @@ impl Worldborder {
         self.warning_blocks = distance;
 
         world
-            .broadcast_packet_all(CSetBorderWarningDistance::new(self.warning_blocks.into()))
+            .broadcast_packet_all(&CSetBorderWarningDistance::new(self.warning_blocks.into()))
             .await;
     }
 }

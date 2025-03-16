@@ -34,14 +34,16 @@ impl CommandExecutor for Executor {
         let sound = SoundArgumentConsumer::find_arg(args, ARG_SOUND);
 
         for target in targets {
-            target.stop_sound(
-                sound
-                    .as_ref()
-                    .cloned()
-                    .map(|s| Identifier::vanilla(s.to_name()))
-                    .ok(),
-                category.as_ref().map(|s| **s).ok(),
-            );
+            target
+                .stop_sound(
+                    sound
+                        .as_ref()
+                        .cloned()
+                        .map(|s| Identifier::vanilla(s.to_name()))
+                        .ok(),
+                    category.as_ref().map(|s| **s).ok(),
+                )
+                .await;
         }
         let text = match (category, sound) {
             (Ok(c), Ok(s)) => TextComponent::translate(

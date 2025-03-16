@@ -1,11 +1,12 @@
 use aes::cipher::KeyIvInit;
 use async_compression::{Level, tokio::write::ZlibEncoder};
+use bytes::Bytes;
 use thiserror::Error;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::{
-    Aes128Cfb8Enc, ClientPacket, CompressionLevel, CompressionThreshold, MAX_PACKET_DATA_SIZE,
-    MAX_PACKET_SIZE, StreamEncryptor, VarInt, codec::Codec,
+    Aes128Cfb8Enc, CompressionLevel, CompressionThreshold, MAX_PACKET_DATA_SIZE, MAX_PACKET_SIZE,
+    StreamEncryptor, VarInt, codec::Codec,
 };
 
 // raw -> compress -> encrypt
@@ -135,26 +136,11 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
     /// -   `Data Length`: (Only present in compressed packets) The length of the uncompressed `Packet ID` and `Data`.
     /// -   `Packet ID`: The ID of the packet.
     /// -   `Data`: The packet's data.
-    pub async fn write_packet<P: ClientPacket>(
-        &mut self,
-        packet: &P,
-    ) -> Result<(), PacketEncodeError> {
+    pub async fn write_packet(&mut self, packet_data: Bytes) -> Result<(), PacketEncodeError> {
         // We need to know the length of the compressed buffer and serde is not async :(
         // We need to write to a buffer here 😔
 
-        // TODO: We only need a length here, otherwise we could stream the deserialization (into a
-        // buffer). Add a "serialized_size" or something to packets that gets the serialized length
-        let mut packet_buf = Vec::new();
-        packet.write(&mut packet_buf).map_err(|err| {
-            // TODO: Remove this when we are confident with all of our networking
-
-            panic!("Failed to serialize packet to the network: {}", err);
-            //PacketEncodeError::Message(err.to_string())
-        })?;
-
-        let internal_data_len = packet_buf.len();
-        let packet_id_var_int: VarInt = P::PACKET_ID.into();
-        let data_len = internal_data_len + packet_id_var_int.written_size();
+        let data_len = packet_data.len();
         if data_len > MAX_PACKET_DATA_SIZE {
             return Err(PacketEncodeError::TooLong(data_len));
         }
@@ -174,13 +160,8 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
                     Level::Precise(compression_level as i32),
                 );
 
-                packet_id_var_int
-                    .encode_async(&mut compressor)
-                    .await
-                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
-
                 compressor
-                    .write_all(&packet_buf)
+                    .write_all(&packet_data)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
                 compressor
@@ -233,12 +214,8 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
                     .encode_async(&mut self.writer)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
-                packet_id_var_int
-                    .encode_async(&mut self.writer)
-                    .await
-                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
                 self.writer
-                    .write_all(&packet_buf)
+                    .write_all(&packet_data)
                     .await
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
             }
@@ -258,12 +235,8 @@ impl<W: AsyncWrite + Unpin> NetworkEncoder<W> {
                 .encode_async(&mut self.writer)
                 .await
                 .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
-            packet_id_var_int
-                .encode_async(&mut self.writer)
-                .await
-                .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
             self.writer
-                .write_all(&packet_buf)
+                .write_all(&packet_data)
                 .await
                 .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
         }
@@ -296,6 +269,7 @@ mod tests {
     use std::io::Read;
 
     use super::*;
+    use crate::ClientPacket;
     use crate::client::status::CStatusResponse;
     use crate::ser::packet::Packet;
     use crate::ser::{NetworkRead, ReadingError};
@@ -357,7 +331,9 @@ mod tests {
             encoder.set_encryption(key);
         }
 
-        encoder.write_packet(packet).await.unwrap();
+        let mut packet_buf = Vec::new();
+        packet.write_packet_data(&mut packet_buf).unwrap();
+        encoder.write_packet(packet_buf.into()).await.unwrap();
 
         buf.into_boxed_slice()
     }
@@ -389,7 +365,7 @@ mod tests {
         // Remaining buffer is the payload
         // We need to obtain the expected payload
         let mut expected_payload = Vec::new();
-        packet.write(&mut expected_payload).unwrap();
+        packet.write_packet_data(&mut expected_payload).unwrap();
 
         assert_eq!(buffer, expected_payload);
     }
@@ -417,7 +393,7 @@ mod tests {
         // Read data length VarInt (uncompressed data length)
         let data_length = decode_varint(&mut buffer).expect("Failed to decode data length");
         let mut expected_payload = Vec::new();
-        packet.write(&mut expected_payload).unwrap();
+        packet.write_packet_data(&mut expected_payload).unwrap();
         let uncompressed_data_length =
             VarInt(CStatusResponse::PACKET_ID).written_size() + expected_payload.len();
         assert_eq!(data_length as usize, uncompressed_data_length);
@@ -473,7 +449,7 @@ mod tests {
 
         // Remaining buffer is the payload
         let mut expected_payload = Vec::new();
-        packet.write(&mut expected_payload).unwrap();
+        packet.write_packet_data(&mut expected_payload).unwrap();
         assert_eq!(buffer, expected_payload);
     }
 
@@ -507,7 +483,7 @@ mod tests {
         // Read data length VarInt (uncompressed data length)
         let data_length = decode_varint(&mut buffer).expect("Failed to decode data length");
         let mut expected_payload = Vec::new();
-        packet.write(&mut expected_payload).unwrap();
+        packet.write_packet_data(&mut expected_payload).unwrap();
         let uncompressed_data_length =
             VarInt(CStatusResponse::PACKET_ID).written_size() + expected_payload.len();
         assert_eq!(data_length as usize, uncompressed_data_length);
@@ -557,7 +533,7 @@ mod tests {
 
         // Remaining buffer is the payload (empty)
         let mut expected_payload = Vec::new();
-        packet.write(&mut expected_payload).unwrap();
+        packet.write_packet_data(&mut expected_payload).unwrap();
 
         assert_eq!(
             buffer.len(),
@@ -602,7 +578,7 @@ mod tests {
 
         // Remaining buffer is the payload
         let mut expected_payload = Vec::new();
-        packet.write(&mut expected_payload).unwrap();
+        packet.write_packet_data(&mut expected_payload).unwrap();
 
         assert_eq!(buffer, expected_payload);
     }
@@ -654,7 +630,7 @@ mod tests {
 
         // Remaining buffer is the payload
         let mut expected_payload = Vec::new();
-        packet.write(&mut expected_payload).unwrap();
+        packet.write_packet_data(&mut expected_payload).unwrap();
 
         assert_eq!(buffer, expected_payload);
     }
