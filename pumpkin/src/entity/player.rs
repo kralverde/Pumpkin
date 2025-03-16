@@ -63,7 +63,7 @@ use pumpkin_util::{
     text::TextComponent,
 };
 use pumpkin_world::{cylindrical_chunk_iterator::Cylindrical, item::ItemStack, level::SyncChunk};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use super::{
     Entity, EntityBase, EntityId, NBTStorage,
@@ -304,6 +304,19 @@ impl Player {
             // Default to sending 16 chunks per tick
             chunk_manager: Mutex::new(ChunkManager::new(16)),
         }
+    }
+
+    /// Spawns a task associated with this player-client. All tasks spawned with this method are awaited
+    /// when the client. This means tasks should complete in a reasonable amount of time or select
+    /// on `Self::await_close_interrupt` to cancel the task when the client is closed
+    ///
+    /// Returns an `Option<JoinHandle<F::Output>>`. If the client is closed, this returns `None`.
+    pub fn spawn_task<F>(&self, task: F) -> Option<JoinHandle<F::Output>>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.client.spawn_task(task)
     }
 
     pub fn inventory(&self) -> &Mutex<PlayerInventory> {

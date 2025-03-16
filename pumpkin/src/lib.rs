@@ -18,7 +18,6 @@ use std::{
 };
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tokio::{net::TcpListener, sync::Mutex};
 use tokio_util::task::TaskTracker;
 
@@ -175,7 +174,6 @@ pub struct PumpkinServer {
     pub server: Arc<Server>,
     pub listener: TcpListener,
     pub server_addr: SocketAddr,
-    tasks_to_await: Vec<JoinHandle<()>>,
 }
 
 impl PumpkinServer {
@@ -199,45 +197,41 @@ impl PumpkinServer {
 
         let mut ticker = Ticker::new(BASIC_CONFIG.tps);
 
-        let mut tasks_to_await = Vec::new();
         if let Some((wrapper, _)) = &*LOGGER_IMPL {
             if let Some(rl) = wrapper.take_readline() {
-                let handle = setup_console(rl, server.clone());
-                tasks_to_await.push(handle);
+                setup_console(rl, server.clone());
             }
         }
 
         if rcon.enabled {
-            let server = server.clone();
-            tokio::spawn(async move {
-                RCONServer::new(&rcon, server).await.unwrap();
+            let rcon_server = server.clone();
+            server.spawn_task(async move {
+                RCONServer::new(&rcon, rcon_server).await.unwrap();
             });
         }
 
         if advanced_config().networking.query.enabled {
             log::info!("Query protocol enabled. Starting...");
-            tokio::spawn(query::start_query_handler(server.clone(), addr));
+            server.spawn_task(query::start_query_handler(server.clone(), addr));
         }
 
         if advanced_config().networking.lan_broadcast.enabled {
             log::info!("LAN broadcast enabled. Starting...");
-            tokio::spawn(lan_broadcast::start_lan_broadcast(addr));
+            server.spawn_task(lan_broadcast::start_lan_broadcast(addr));
         }
 
         // Ticker
         {
-            let server = server.clone();
-            let handle = tokio::spawn(async move {
-                ticker.run(&server).await;
+            let ticker_server = server.clone();
+            server.spawn_task(async move {
+                ticker.run(&ticker_server).await;
             });
-            tasks_to_await.push(handle);
         };
 
         Self {
             server: server.clone(),
             listener,
             server_addr: addr,
-            tasks_to_await,
         }
     }
 
@@ -329,14 +323,6 @@ impl PumpkinServer {
             player.kick(kick_message.clone()).await;
         }
 
-        log::info!("Ending server tasks");
-
-        for handle in self.tasks_to_await.into_iter() {
-            if let Err(err) = handle.await {
-                log::error!("Failed to join server task: {}", err.to_string());
-            }
-        }
-
         log::info!("Ending player tasks");
 
         tasks.close();
@@ -355,9 +341,9 @@ impl PumpkinServer {
     }
 }
 
-fn setup_console(rl: Readline, server: Arc<Server>) -> JoinHandle<()> {
+fn setup_console(rl: Readline, server: Arc<Server>) {
     // This needs to be async or it will hog a thread
-    tokio::spawn(async move {
+    server.clone().spawn_task(async move {
         let mut rl = rl;
         while !SHOULD_STOP.load(std::sync::atomic::Ordering::Relaxed) {
             let t1 = rl.readline();
@@ -401,7 +387,7 @@ fn setup_console(rl: Readline, server: Arc<Server>) -> JoinHandle<()> {
         }
 
         log::debug!("Stopped console commands task");
-    })
+    });
 }
 
 fn scrub_address(ip: &str) -> String {

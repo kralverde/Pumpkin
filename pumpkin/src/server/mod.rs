@@ -33,6 +33,8 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
+use tokio_util::task::TaskTracker;
 
 mod connection_cache;
 mod key_store;
@@ -72,6 +74,8 @@ pub struct Server {
     pub bossbars: Mutex<CustomBossbars>,
     /// The default gamemode when a player joins the server (reset every restart)
     pub defaultgamemode: Mutex<DefaultGamemode>,
+
+    tasks: TaskTracker,
 }
 
 impl Server {
@@ -124,6 +128,7 @@ impl Server {
             defaultgamemode: Mutex::new(DefaultGamemode {
                 gamemode: BASIC_CONFIG.default_gamemode,
             }),
+            tasks: TaskTracker::new(),
         }
     }
 
@@ -137,6 +142,16 @@ impl Server {
                     .map(move |z| Vector2::new(x, z))
             })
             .collect()
+    }
+
+    /// Spawns a task associated with this server. All tasks spawned with this method are awaited
+    /// when the server stops. This means tasks should complete in a reasonable (no looping) amount of time.
+    pub fn spawn_task<F>(&self, task: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.tasks.spawn(task)
     }
 
     /// Adds a new player to the server.
@@ -202,6 +217,11 @@ impl Server {
     }
 
     pub async fn save(&self) {
+        self.tasks.close();
+        log::debug!("Awaiting tasks for server");
+        self.tasks.wait().await;
+        log::debug!("Done awaiting tasks for server");
+
         for world in self.worlds.read().await.iter() {
             world.save().await;
         }

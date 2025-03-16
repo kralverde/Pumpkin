@@ -444,7 +444,7 @@ impl Player {
                 let command_clone = command.clone();
                 // Some commands can take a long time to execute. If they do, they block packet processing for the player
                 // Thats why we will spawn a task instead
-                tokio::spawn(async move {
+                server.spawn_task(async move {
                     let dispatcher = server_clone.command_dispatcher.read().await;
                     dispatcher
                         .handle_command(

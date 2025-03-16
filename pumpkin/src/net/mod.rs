@@ -272,8 +272,8 @@ impl Client {
                 match packet_result {
                     Ok(packet) => Some(packet),
                     Err(err) => {
-                        log::warn!("Failed to decode packet from client {}: {}", self.id, err.to_string());
-                        let text = format!("Error while reading incoming packet {}", err.to_string());
+                        log::warn!("Failed to decode packet from client {}: {}", self.id, err);
+                        let text = format!("Error while reading incoming packet {}", err);
                         self.kick(TextComponent::text(text)).await;
                         None
                     }
@@ -298,7 +298,7 @@ impl Client {
         let notifier = self.close_interrupt.clone();
 
         // Ideally this would be some kind of queue, but thats hard to do over generic types
-        let _ = self.tasks.spawn_local(async move {
+        self.tasks.spawn_local(async move {
             let mut network_writer = network_writer.lock().await;
             if let Err(err) = network_writer.write_packet(packet_ref.borrow()).await {
                 // It is expected that the packet will fail if we are closed

@@ -694,7 +694,7 @@ impl World {
         // Only allow 128 chunk packets to be sent at a time to avoid overloading the client.
         // TODO: Bulk chunks?
 
-        tokio::spawn(async move {
+        player.clone().spawn_task(async move {
             'main: while let Some((chunk, first_load)) = receiver.recv().await {
                 let position = chunk.read().await.position;
 
@@ -911,7 +911,7 @@ impl World {
         };
 
         let current_players = self.players.clone();
-        tokio::spawn(async move {
+        player.clone().spawn_task(async move {
             let msg_comp = TextComponent::translate(
                 "multiplayer.player.joined",
                 [TextComponent::text(player.gameprofile.name.clone())],
@@ -1061,7 +1061,7 @@ impl World {
         let (sender, receiver) = mpsc::unbounded_channel();
         // Put this in another thread so we aren't blocking on it
         let level = self.level.clone();
-        tokio::spawn(async move {
+        self.level.spawn_task(async move {
             if new_spawn {
                 if let Some((priority, rest)) = chunks.split_at_checked(9) {
                     // Ensure client gets 9 closest chunks first
