@@ -989,7 +989,7 @@ impl Player {
         }
 
         self.client
-            .enqueue_packet(&CPlayDisconnect::new(&reason))
+            .send_packet_now(&CPlayDisconnect::new(&reason))
             .await;
 
         log::info!(
