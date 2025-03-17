@@ -364,10 +364,16 @@ impl Client {
     }
 
     pub async fn enqueue_packet_data(&self, packet_data: Bytes) {
-        self.outgoing_packet_queue_send
-            .send(packet_data)
-            .await
-            .expect("Failed to send enqueued packet data to queue");
+        if let Err(err) = self.outgoing_packet_queue_send.send(packet_data).await {
+            // This is expected to fail if we are closed
+            if !self.closed.load(std::sync::atomic::Ordering::Relaxed) {
+                log::error!(
+                    "Failed to add packet to the outgoing packet queue for client {}: {}",
+                    self.id,
+                    err.to_string()
+                );
+            }
+        }
     }
 
     /// Sends a clientbound packet to the connected client and awaits until the packet is sent.
