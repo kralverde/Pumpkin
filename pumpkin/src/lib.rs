@@ -396,54 +396,6 @@ fn setup_console(rl: Readline, server: Arc<Server>) {
     });
 }
 
-async fn poll(client: &Client, connection_reader: &mut OwnedReadHalf) -> bool {
-    loop {
-        if client.closed.load(std::sync::atomic::Ordering::Relaxed) {
-            // If we manually close (like a kick), we don't want to keep reading bytes.
-            return false;
-        }
-
-        let mut dec = client.dec.lock().await;
-
-        match dec.decode() {
-            Ok(Some(packet)) => {
-                client.add_packet(packet).await;
-                return true;
-            }
-            Ok(None) => (), //log::debug!("Waiting for more data to complete packet..."),
-            Err(err) => {
-                log::warn!("Failed to decode packet for: {}", err.to_string());
-                client.close().await;
-                return false; // return to avoid reserving additional bytes
-            }
-        }
-
-        dec.reserve(4096);
-        let mut buf = dec.take_capacity();
-
-        let bytes_read = connection_reader.read_buf(&mut buf).await;
-        match bytes_read {
-            Ok(cnt) => {
-                //log::debug!("Read {} bytes", cnt);
-                if cnt == 0 {
-                    client.close().await;
-                    return false;
-                }
-            }
-            Err(error) => {
-                log::error!("Error while reading incoming packet {}", error);
-                client.close().await;
-                return false;
-            }
-        };
-
-        // This should always be an O(1) unsplit because we reserved space earlier and
-        // the call to `read_buf` shouldn't have grown the allocation.
-        dec.queue_bytes(buf);
-    }
->>>>>>> upstream/master
-}
-
 fn scrub_address(ip: &str) -> String {
     ip.chars()
         .map(|ch| if ch == '.' || ch == ':' { ch } else { 'x' })

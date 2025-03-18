@@ -31,7 +31,8 @@ impl ClientPacket for CChunkData<'_> {
 
         let mut data_buf = Vec::new();
         let mut light_buf = Vec::new();
-        self.0.blocks.array_iter_subchunks().for_each(|subchunk| {
+
+        for subchunk in self.0.blocks.array_iter_subchunks() {
             let mut chunk_light = [0u8; 2048];
             for i in 0..subchunk.len() {
                 // if !block .is_air() {
@@ -42,8 +43,8 @@ impl ClientPacket for CChunkData<'_> {
                 chunk_light[index] |= mask;
             }
 
-            light_buf.put_var_int(&VarInt(chunk_light.len() as i32));
-            light_buf.put_slice(&chunk_light);
+            light_buf.write_var_int(&VarInt(chunk_light.len() as i32))?;
+            light_buf.write_slice(&chunk_light)?;
 
             let block_count = subchunk.len() as i16;
             // Block count
@@ -76,15 +77,15 @@ impl ClientPacket for CChunkData<'_> {
 
             match palette_type {
                 PaletteType::Single => {
-                    data_buf.put_u8(0);
-                    data_buf.put_var_int(&VarInt(*palette.first().unwrap() as i32));
-                    data_buf.put_var_int(&VarInt(0));
+                    data_buf.write_u8_be(0)?;
+                    data_buf.write_var_int(&VarInt(*palette.first().unwrap() as i32))?;
+                    data_buf.write_var_int(&VarInt(0))?;
                 }
                 PaletteType::Indirect(block_size) => {
                     // Bits per entry
                     data_buf.write_u8_be(block_size as u8)?;
                     // Palette length
-                    data_buf.put_var_int(&VarInt(palette.len() as i32 - 1));
+                    data_buf.write_var_int(&VarInt(palette.len() as i32 - 1))?;
 
                     for id in palette.iter() {
                         // Palette
@@ -154,8 +155,8 @@ impl ClientPacket for CChunkData<'_> {
         write.write_bitset(&BitSet(Box::new([0])))?;
 
         // Sky light
-        buf.put_var_int(&VarInt(SUBCHUNKS_COUNT as i32));
-        buf.put_slice(&light_buf);
+        write.write_var_int(&VarInt(SUBCHUNKS_COUNT as i32))?;
+        write.write_slice(&light_buf)?;
 
         // Block Lighting
         write.write_var_int(&VarInt(0))

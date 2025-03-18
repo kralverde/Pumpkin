@@ -212,8 +212,6 @@ pub struct Player {
     pub last_attacked_ticks: AtomicU32,
     /// The player's permission level.
     pub permission_lvl: AtomicCell<PermissionLvl>,
-    /// Tell tasks to stop if we are closing.
-    cancel_tasks: Notify,
     /// Whether the client has reported that it has loaded.
     pub client_loaded: AtomicBool,
     /// The amount of time (in ticks) the client has to report having finished loading before being timed out.
