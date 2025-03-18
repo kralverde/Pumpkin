@@ -366,7 +366,7 @@ impl World {
         // Send the login packet for our new player
         player
             .client
-            .enqueue_packet(&CLogin::new(
+            .send_packet_now(&CLogin::new(
                 entity_id,
                 base_config.hardcore,
                 &dimensions,
@@ -431,7 +431,6 @@ impl World {
             }],
         ))
         .await;
-        player.send_client_information().await;
 
         // Here, we send all the infos of players who already joined.
         {
@@ -489,6 +488,7 @@ impl World {
             ),
         )
         .await;
+
         // Spawn players for our client.
         let id = player.gameprofile.id;
         for (_, existing_player) in self.players.read().await.iter().filter(|c| c.0 != &id) {
@@ -511,6 +511,7 @@ impl World {
                 ))
                 .await;
         }
+
         // Entity meta data
         // Set skin parts
         player.send_client_information().await;
@@ -519,7 +520,7 @@ impl World {
         log::debug!("Sending waiting chunks to {}", player.gameprofile.name);
         player
             .client
-            .enqueue_packet(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
+            .send_packet_now(&CGameEvent::new(GameEvent::StartWaitingChunks, 0.0))
             .await;
 
         self.worldborder
@@ -723,10 +724,7 @@ impl World {
             rel_x * rel_x + rel_z * rel_z
         });
 
-        // We are loading a completely new world section; prioritize chunks the player is on top
-        // of
-        let new_spawn = chunks[0] == player.watched_section.load().center;
-        let mut receiver = self.receive_chunks(chunks, new_spawn);
+        let mut receiver = self.receive_chunks(chunks);
         let level = self.level.clone();
 
         player.clone().spawn_task(async move {
@@ -1105,23 +1103,13 @@ impl World {
     pub fn receive_chunks(
         &self,
         chunks: Vec<Vector2<i32>>,
-        new_spawn: bool,
     ) -> UnboundedReceiver<(SyncChunk, bool)> {
         let (sender, receiver) = mpsc::unbounded_channel();
         // Put this in another thread so we aren't blocking on it
         let level = self.level.clone();
         self.level.spawn_task(async move {
             let cancel_notifier = level.shutdown_notifier.notified();
-            let fetch_task = async {
-                if new_spawn {
-                    // Make chunks so the chunks load closest to the player first
-                    for chunk in chunks.chunks(32) {
-                        level.fetch_chunks(chunk, sender.clone()).await;
-                    }
-                } else {
-                    level.fetch_chunks(&chunks, sender).await;
-                }
-            };
+            let fetch_task = level.fetch_chunks(&chunks, sender);
 
             // Don't continue to handle chunks if we are shutting down
             select! {
@@ -1134,7 +1122,7 @@ impl World {
     }
 
     pub async fn receive_chunk(&self, chunk_pos: Vector2<i32>) -> (Arc<RwLock<ChunkData>>, bool) {
-        let mut receiver = self.receive_chunks(vec![chunk_pos], false);
+        let mut receiver = self.receive_chunks(vec![chunk_pos]);
 
         receiver
             .recv()

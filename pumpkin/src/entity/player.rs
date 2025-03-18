@@ -551,15 +551,15 @@ impl Player {
 
         if let Some(chunk_of_chunks) = chunk_of_chunks {
             let chunk_count = chunk_of_chunks.len();
-            self.client.enqueue_packet(&CChunkBatchStart).await;
+            self.client.send_packet_now(&CChunkBatchStart).await;
             for chunk in chunk_of_chunks {
                 let chunk = chunk.read().await;
                 // TODO: Can we check if we still need to send the chunk? Like if it's a fast moving
                 // player or something.
-                self.client.enqueue_packet(&CChunkData(&chunk)).await;
+                self.client.send_packet_now(&CChunkData(&chunk)).await;
             }
             self.client
-                .enqueue_packet(&CChunkBatchEnd::new(chunk_count))
+                .send_packet_now(&CChunkBatchEnd::new(chunk_count))
                 .await;
         }
 
@@ -851,7 +851,7 @@ impl Player {
                     last_pos.z.round() as i32,
                 ));
                 self.client
-                    .enqueue_packet(&CRespawn::new(
+                    .send_packet_now(&CRespawn::new(
                         (new_world.dimension_type as u8).into(),
                         new_world.dimension_type.name(),
                         0, // seed
@@ -902,7 +902,7 @@ impl Player {
                 entity.set_rotation(yaw, pitch);
                 *self.awaiting_teleport.lock().await = Some((teleport_id.into(), position));
                 self.client
-                    .enqueue_packet(&CPlayerPosition::new(
+                    .send_packet_now(&CPlayerPosition::new(
                         teleport_id.into(),
                         position,
                         Vector3::new(0.0, 0.0, 0.0),
