@@ -332,7 +332,7 @@ mod tests {
         }
 
         let mut packet_buf = Vec::new();
-        packet.write_packet_data(&mut packet_buf).unwrap();
+        packet.write(&mut packet_buf).unwrap();
         encoder.write_packet(packet_buf.into()).await.unwrap();
 
         buf.into_boxed_slice()
