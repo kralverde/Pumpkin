@@ -221,7 +221,7 @@ mod tests {
         let mut buffer = Vec::new();
 
         if compress {
-            // Create a buffer that includes packet_id_varint and payload
+            // Create a buffer that includes `packet_id_varint` and payload
             let mut data_to_compress = Vec::new();
             let packet_id_varint = VarInt(packet_id);
             data_to_compress.write_var_int(&packet_id_varint).unwrap();
@@ -234,7 +234,7 @@ mod tests {
             buffer.write_var_int(&data_len_varint).unwrap();
             buffer.write_slice(&compressed_payload).unwrap();
         } else {
-            // No compression; data_len is payload length
+            // No compression; `data_len` is payload length
             let packet_id_varint = VarInt(packet_id);
             buffer.write_var_int(&packet_id_varint).unwrap();
             buffer.write_slice(payload).unwrap();
@@ -255,7 +255,7 @@ mod tests {
         packet.extend_from_slice(&packet_length_encoded);
         packet.extend_from_slice(&buffer);
 
-        // Encrypt if key and iv are provided
+        // Encrypt if key and IV are provided.
         if let (Some(k), Some(v)) = (key, iv) {
             encrypt_aes128(&mut packet, k, v);
             packet

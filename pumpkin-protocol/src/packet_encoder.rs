@@ -296,7 +296,7 @@ mod tests {
         }
     }
 
-    /// Helper function to decode a VarInt from bytes
+    /// Helper function to decode a `VarInt` from bytes
     fn decode_varint(buffer: &mut &[u8]) -> Result<i32, ReadingError> {
         Ok(buffer.get_var_int()?.0)
     }

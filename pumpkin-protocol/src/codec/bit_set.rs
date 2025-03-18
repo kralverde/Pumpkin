@@ -12,7 +12,7 @@ use super::Codec;
 pub struct BitSet(pub Box<[i64]>);
 
 impl Codec<BitSet> for BitSet {
-    /// The maximum size of the BitSet is `remaining / 8`.
+    /// The maximum size of the `BitSet` is `remaining / 8`.
     const MAX_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(usize::MAX) };
 
     fn written_size(&self) -> usize {
@@ -29,7 +29,7 @@ impl Codec<BitSet> for BitSet {
     }
 
     fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {
-        // read length
+        // Read length
         let length = read.get_var_int()?;
         let mut array: Vec<i64> = Vec::with_capacity(length.0 as usize);
         for _ in 0..length.0 {

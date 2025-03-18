@@ -32,7 +32,7 @@ impl ClientPacket for CUpdateTags<'_> {
             let values = get_registry_key_tags(registry_key);
             p.write_var_int(&VarInt::from(values.len()))?;
             for (key, values) in values.iter() {
-                // This is technically a Identifier but same thing
+                // This is technically an `Identifier` but same thing
                 p.write_string_bounded(key, u16::MAX as usize)?;
                 p.write_list(values, |p, string_id| {
                     let id = match registry_key {

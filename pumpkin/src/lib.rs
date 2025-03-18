@@ -38,7 +38,7 @@ pub static PLUGIN_MANAGER: LazyLock<Mutex<PluginManager>> =
     LazyLock::new(|| Mutex::new(PluginManager::new()));
 
 /// A wrapper for our logger to hold the terminal input while no input is expected in order to
-/// properly flush logs to output while they happen instead of batched
+/// properly flush logs to the output while they happen instead of batched
 pub struct ReadlineLogWrapper {
     internal: Box<dyn Log>,
     readline: std::sync::Mutex<Option<Readline>>,
@@ -68,7 +68,7 @@ impl ReadlineLogWrapper {
     }
 }
 
-// writing to stdout is expensive anyway, so I dont think having a mutex here is a big deal.
+// Writing to `stdout` is expensive anyway, so I don't think having a `Mutex` here is a big deal.
 impl Log for ReadlineLogWrapper {
     fn log(&self, record: &log::Record) {
         self.internal.log(record);
@@ -111,7 +111,7 @@ pub static LOGGER_IMPL: LazyLock<Option<(ReadlineLogWrapper, LevelFilter)>> = La
                 config.set_level_color(level, None);
             }
         } else {
-            // We are technically logging to a file like object
+            // We are technically logging to a file-like object.
             config.set_write_log_enable_colors(true);
         }
 
@@ -136,7 +136,7 @@ pub static LOGGER_IMPL: LazyLock<Option<(ReadlineLogWrapper, LevelFilter)>> = La
                 }
                 Err(e) => {
                     log::warn!(
-                        "Failed to initialize console input ({}), falling back to simple logger",
+                        "Failed to initialize console input ({}); falling back to simple logger",
                         e
                     );
                     let logger = simplelog::SimpleLogger::new(level, config.build());
@@ -187,11 +187,11 @@ impl PumpkinServer {
         // Setup the TCP server socket.
         let listener = tokio::net::TcpListener::bind(BASIC_CONFIG.server_address)
             .await
-            .expect("Failed to start TcpListener");
+            .expect("Failed to start `TcpListener`");
         // In the event the user puts 0 for their port, this will allow us to know what port it is running on
         let addr = listener
             .local_addr()
-            .expect("Unable to get the address of server!");
+            .expect("Unable to get the address of the server!");
 
         let rcon = advanced_config().networking.rcon.clone();
 
@@ -211,12 +211,12 @@ impl PumpkinServer {
         }
 
         if advanced_config().networking.query.enabled {
-            log::info!("Query protocol enabled. Starting...");
+            log::info!("Query protocol is enabled. Starting...");
             server.spawn_task(query::start_query_handler(server.clone(), addr));
         }
 
         if advanced_config().networking.lan_broadcast.enabled {
-            log::info!("LAN broadcast enabled. Starting...");
+            log::info!("LAN broadcast is enabled. Starting...");
             server.spawn_task(lan_broadcast::start_lan_broadcast(addr));
         }
 
@@ -264,7 +264,7 @@ impl PumpkinServer {
             };
 
             if let Err(e) = connection.set_nodelay(true) {
-                log::warn!("failed to set TCP_NODELAY {e}");
+                log::warn!("Failed to set TCP_NODELAY {e}");
             }
 
             let id = master_client_id;
@@ -285,7 +285,6 @@ impl PumpkinServer {
             client.init();
             let server = self.server.clone();
 
-            // We need to await these to verify all cleanup code is complete
             tasks.spawn(async move {
                 // TODO: We need to add a time-out here for un-cooperative clients
                 client.process_packets(&server).await;
@@ -302,6 +301,13 @@ impl PumpkinServer {
 
                         player.process_packets(&server).await;
                         player.close().await;
+
+                        //TODO: Move these somewhere less likely to be forgotten
+
+                        // Remove the player from its world
+                        player.remove().await;
+                        // Tick down the online count
+                        server.remove_player().await;
                     }
                 } else {
                     // Also handle case of client connects but does not become a player (like a server
@@ -332,7 +338,7 @@ impl PumpkinServer {
 
         log::info!("Completed save!");
 
-        // Explicitly drop the line reader to return the terminal to the original state
+        // Explicitly drop the line reader to return the terminal to the original state.
         if let Some((wrapper, _)) = &*LOGGER_IMPL {
             if let Some(rl) = wrapper.take_readline() {
                 let _ = rl;
@@ -342,7 +348,7 @@ impl PumpkinServer {
 }
 
 fn setup_console(rl: Readline, server: Arc<Server>) {
-    // This needs to be async or it will hog a thread
+    // This needs to be async, or it will hog a thread.
     server.clone().spawn_task(async move {
         let mut rl = rl;
         while !SHOULD_STOP.load(std::sync::atomic::Ordering::Relaxed) {
@@ -388,6 +394,54 @@ fn setup_console(rl: Readline, server: Arc<Server>) {
 
         log::debug!("Stopped console commands task");
     });
+}
+
+async fn poll(client: &Client, connection_reader: &mut OwnedReadHalf) -> bool {
+    loop {
+        if client.closed.load(std::sync::atomic::Ordering::Relaxed) {
+            // If we manually close (like a kick), we don't want to keep reading bytes.
+            return false;
+        }
+
+        let mut dec = client.dec.lock().await;
+
+        match dec.decode() {
+            Ok(Some(packet)) => {
+                client.add_packet(packet).await;
+                return true;
+            }
+            Ok(None) => (), //log::debug!("Waiting for more data to complete packet..."),
+            Err(err) => {
+                log::warn!("Failed to decode packet for: {}", err.to_string());
+                client.close().await;
+                return false; // return to avoid reserving additional bytes
+            }
+        }
+
+        dec.reserve(4096);
+        let mut buf = dec.take_capacity();
+
+        let bytes_read = connection_reader.read_buf(&mut buf).await;
+        match bytes_read {
+            Ok(cnt) => {
+                //log::debug!("Read {} bytes", cnt);
+                if cnt == 0 {
+                    client.close().await;
+                    return false;
+                }
+            }
+            Err(error) => {
+                log::error!("Error while reading incoming packet {}", error);
+                client.close().await;
+                return false;
+            }
+        };
+
+        // This should always be an O(1) unsplit because we reserved space earlier and
+        // the call to `read_buf` shouldn't have grown the allocation.
+        dec.queue_bytes(buf);
+    }
+>>>>>>> upstream/master
 }
 
 fn scrub_address(ip: &str) -> String {
