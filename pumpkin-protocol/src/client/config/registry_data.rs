@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::CONFIG_REGISTRY_DATA;
 use pumpkin_macros::packet;
 use serde::Serialize;
@@ -5,7 +7,7 @@ use serde::Serialize;
 use crate::{
     ClientPacket,
     codec::identifier::Identifier,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(CONFIG_REGISTRY_DATA)]
@@ -40,7 +42,7 @@ impl RegistryEntry {
 }
 
 impl ClientPacket for CRegistryData<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
         write.write_identifier(self.registry_id)?;
         write.write_list::<RegistryEntry>(self.entries, |p, v| {

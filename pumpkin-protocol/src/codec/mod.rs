@@ -1,6 +1,9 @@
-use std::num::NonZeroUsize;
+use std::{
+    io::{Read, Write},
+    num::NonZeroUsize,
+};
 
-use crate::ser::{NetworkRead, NetworkWrite, ReadingError, WritingError};
+use crate::ser::{ReadingError, WritingError};
 
 pub mod bit_set;
 pub mod identifier;
@@ -13,7 +16,7 @@ pub trait Codec<T> {
 
     fn written_size(&self) -> usize;
 
-    fn encode(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError>;
+    fn encode(&self, write: &mut impl Write) -> Result<(), WritingError>;
 
-    fn decode(read: &mut impl NetworkRead) -> Result<T, ReadingError>;
+    fn decode(read: &mut impl Read) -> Result<T, ReadingError>;
 }

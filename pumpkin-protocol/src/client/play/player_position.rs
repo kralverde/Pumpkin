@@ -1,10 +1,12 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::PLAY_PLAYER_POSITION;
 use pumpkin_macros::packet;
 use pumpkin_util::math::vector3::Vector3;
 
 use crate::{
-    ClientPacket, PositionFlag, ServerPacket, VarInt,
-    ser::{NetworkRead, NetworkWrite, WritingError},
+    ClientPacket, PositionFlag, VarInt,
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(PLAY_PLAYER_POSITION)]
@@ -37,33 +39,8 @@ impl<'a> CPlayerPosition<'a> {
     }
 }
 
-impl ServerPacket for CPlayerPosition<'_> {
-    fn read(read: impl NetworkRead) -> Result<Self, crate::ser::ReadingError> {
-        let mut read = read;
-
-        fn get_vec(
-            read_helper: &mut impl NetworkRead,
-        ) -> Result<Vector3<f64>, crate::ser::ReadingError> {
-            Ok(Vector3::new(
-                read_helper.get_f64_be()?,
-                read_helper.get_f64_be()?,
-                read_helper.get_f64_be()?,
-            ))
-        }
-
-        Ok(Self {
-            teleport_id: read.get_var_int()?,
-            position: get_vec(&mut read)?,
-            delta: get_vec(&mut read)?,
-            yaw: read.get_f32_be()?,
-            pitch: read.get_f32_be()?,
-            releatives: &[], // TODO
-        })
-    }
-}
-
 impl ClientPacket for CPlayerPosition<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_var_int(&self.teleport_id)?;

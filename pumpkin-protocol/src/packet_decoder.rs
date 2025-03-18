@@ -186,7 +186,7 @@ mod tests {
 
     use std::io::Write;
 
-    use crate::ser::NetworkWrite;
+    use crate::ser::NetworkWriteExt;
 
     use super::*;
     use aes::Aes128;

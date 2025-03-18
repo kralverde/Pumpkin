@@ -272,7 +272,7 @@ mod tests {
     use crate::ClientPacket;
     use crate::client::status::CStatusResponse;
     use crate::ser::packet::Packet;
-    use crate::ser::{NetworkRead, ReadingError};
+    use crate::ser::{NetworkReadExt, ReadingError};
     use aes::Aes128;
     use cfb8::Decryptor as Cfb8Decryptor;
     use cfb8::cipher::AsyncStreamCipher;

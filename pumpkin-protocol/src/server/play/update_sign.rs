@@ -1,10 +1,12 @@
+use std::io::Read;
+
 use pumpkin_data::packet::serverbound::PLAY_SIGN_UPDATE;
 use pumpkin_macros::packet;
 use pumpkin_util::math::position::BlockPos;
 
 use crate::{
     ServerPacket,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 
 #[packet(PLAY_SIGN_UPDATE)]
@@ -20,7 +22,7 @@ pub struct SUpdateSign {
 const MAX_LINE_LENGTH: usize = 386;
 
 impl ServerPacket for SUpdateSign {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         Ok(Self {

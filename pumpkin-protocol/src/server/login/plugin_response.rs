@@ -1,6 +1,8 @@
+use std::io::Read;
+
 use crate::{
     ServerPacket, VarInt,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 use pumpkin_data::packet::serverbound::LOGIN_CUSTOM_QUERY_ANSWER;
 use pumpkin_macros::packet;
@@ -14,7 +16,7 @@ pub struct SLoginPluginResponse {
 }
 
 impl ServerPacket for SLoginPluginResponse {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         Ok(Self {

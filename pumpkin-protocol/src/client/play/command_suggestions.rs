@@ -1,10 +1,12 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::PLAY_COMMAND_SUGGESTIONS;
 use pumpkin_macros::packet;
 use pumpkin_util::text::TextComponent;
 
 use crate::{
     ClientPacket, VarInt,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(PLAY_COMMAND_SUGGESTIONS)]
@@ -27,7 +29,7 @@ impl CCommandSuggestions {
 }
 
 impl ClientPacket for CCommandSuggestions {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
         write.write_var_int(&self.id)?;
         write.write_var_int(&self.start)?;

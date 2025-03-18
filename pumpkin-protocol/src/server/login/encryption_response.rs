@@ -1,9 +1,11 @@
+use std::io::Read;
+
 use pumpkin_data::packet::serverbound::LOGIN_KEY;
 use pumpkin_macros::packet;
 
 use crate::{
     ServerPacket,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 
 #[packet(LOGIN_KEY)]
@@ -13,7 +15,7 @@ pub struct SEncryptionResponse {
 }
 
 impl ServerPacket for SEncryptionResponse {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         let shared_secret_length = read.get_var_int()?.0 as usize;

@@ -1,10 +1,12 @@
+use std::io::Read;
+
 use pumpkin_data::packet::serverbound::PLAY_INTERACT;
 use pumpkin_macros::packet;
 use pumpkin_util::math::vector3::Vector3;
 
 use crate::{
     ServerPacket, VarInt,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 
 #[packet(PLAY_INTERACT)]
@@ -18,7 +20,7 @@ pub struct SInteract {
 
 // Great job Mojang ;D
 impl ServerPacket for SInteract {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         let entity_id = read.get_var_int()?;

@@ -1,6 +1,10 @@
-use std::{num::NonZeroUsize, ops::Deref};
+use std::{
+    io::{Read, Write},
+    num::NonZeroUsize,
+    ops::Deref,
+};
 
-use crate::ser::{NetworkRead, NetworkWrite, ReadingError, WritingError};
+use crate::ser::{NetworkReadExt, NetworkWriteExt, ReadingError, WritingError};
 
 use super::Codec;
 use bytes::BufMut;
@@ -30,7 +34,7 @@ impl Codec<Self> for VarLong {
         }
     }
 
-    fn encode(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
+    fn encode(&self, write: &mut impl Write) -> Result<(), WritingError> {
         let mut x = self.0;
         for _ in 0..Self::MAX_SIZE.get() {
             let byte = (x & 0x7F) as u8;
@@ -45,7 +49,7 @@ impl Codec<Self> for VarLong {
         Ok(())
     }
 
-    fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {
+    fn decode(read: &mut impl Read) -> Result<Self, ReadingError> {
         let mut val = 0;
         for i in 0..Self::MAX_SIZE.get() {
             let byte = read.get_u8_be()?;

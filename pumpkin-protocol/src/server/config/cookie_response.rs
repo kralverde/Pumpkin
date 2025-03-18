@@ -1,10 +1,12 @@
+use std::io::Read;
+
 use pumpkin_data::packet::serverbound::CONFIG_COOKIE_RESPONSE;
 use pumpkin_macros::packet;
 
 use crate::{
     ServerPacket,
     codec::identifier::Identifier,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 
 #[packet(CONFIG_COOKIE_RESPONSE)]
@@ -19,7 +21,7 @@ pub struct SConfigCookieResponse {
 const MAX_COOKIE_LENGTH: usize = 5120;
 
 impl ServerPacket for SConfigCookieResponse {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         let key = read.get_identifier()?;

@@ -1,10 +1,14 @@
-use std::{marker::PhantomData, num::NonZeroU16};
+use std::{
+    io::{Read, Write},
+    marker::PhantomData,
+    num::NonZeroU16,
+};
 
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, BlockSizeUser, generic_array::GenericArray};
 use bytes::Bytes;
 use codec::{identifier::Identifier, var_int::VarInt};
 use pumpkin_util::text::{TextComponent, style::Style};
-use ser::{NetworkRead, NetworkWrite, ReadingError, WritingError, packet::Packet};
+use ser::{NetworkWriteExt, ReadingError, WritingError, packet::Packet};
 use serde::{
     Deserialize, Serialize, Serializer,
     de::{DeserializeSeed, Visitor},
@@ -321,9 +325,9 @@ pub struct RawPacket {
 }
 
 pub trait ClientPacket: Packet {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError>;
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError>;
 
-    fn write(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
         write.write_var_int(&VarInt(Self::PACKET_ID))?;
         self.write_packet_data(write)
@@ -331,7 +335,7 @@ pub trait ClientPacket: Packet {
 }
 
 pub trait ServerPacket: Packet + Sized {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError>;
+    fn read(read: impl Read) -> Result<Self, ReadingError>;
 }
 
 #[derive(Serialize)]

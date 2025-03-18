@@ -1,5 +1,7 @@
+use std::io::Write;
+
 use crate::client::play::bossevent_action::BosseventAction;
-use crate::ser::{NetworkWrite, WritingError};
+use crate::ser::{NetworkWriteExt, WritingError};
 use crate::{ClientPacket, VarInt};
 use pumpkin_data::packet::clientbound::PLAY_BOSS_EVENT;
 use pumpkin_macros::packet;
@@ -17,7 +19,7 @@ impl<'a> CBossEvent<'a> {
 }
 
 impl ClientPacket for CBossEvent<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_uuid(self.uuid)?;

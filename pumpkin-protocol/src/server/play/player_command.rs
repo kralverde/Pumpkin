@@ -1,9 +1,11 @@
+use std::io::Read;
+
 use pumpkin_data::packet::serverbound::PLAY_PLAYER_COMMAND;
 use pumpkin_macros::packet;
 
 use crate::{
     ServerPacket, VarInt,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 
 #[packet(PLAY_PLAYER_COMMAND)]
@@ -47,7 +49,7 @@ impl TryFrom<i32> for Action {
 }
 
 impl ServerPacket for SPlayerCommand {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         Ok(Self {

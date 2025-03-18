@@ -1,7 +1,9 @@
+use std::io::Write;
+
 use crate::{
     ClientPacket, VarInt,
     codec::bit_set::BitSet,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 use pumpkin_data::packet::clientbound::PLAY_LEVEL_CHUNK_WITH_LIGHT;
@@ -16,7 +18,7 @@ use pumpkin_world::{
 pub struct CChunkData<'a>(pub &'a ChunkData);
 
 impl ClientPacket for CChunkData<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
 
         // Chunk X
@@ -24,10 +26,8 @@ impl ClientPacket for CChunkData<'_> {
         // Chunk Z
         write.write_i32_be(self.0.position.z)?;
 
-        // TODO: Have packets impl write not network write
-        let mut height_map_buf = Vec::new();
-        pumpkin_nbt::serializer::to_bytes_unnamed(&self.0.heightmap, &mut height_map_buf).unwrap();
-        write.write_slice(&height_map_buf)?;
+        pumpkin_nbt::serializer::to_bytes_unnamed(&self.0.heightmap, &mut write)
+            .map_err(|err| WritingError::Serde(err.to_string()))?;
 
         let mut data_buf = Vec::new();
         let mut light_buf = Vec::new();

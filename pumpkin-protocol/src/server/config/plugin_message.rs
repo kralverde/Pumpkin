@@ -1,10 +1,12 @@
+use std::io::Read;
+
 use pumpkin_data::packet::serverbound::CONFIG_CUSTOM_PAYLOAD;
 use pumpkin_macros::packet;
 
 use crate::{
     ServerPacket,
     codec::identifier::Identifier,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 const MAX_PAYLOAD_SIZE: usize = 1048576;
 
@@ -15,7 +17,7 @@ pub struct SPluginMessage {
 }
 
 impl ServerPacket for SPluginMessage {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         Ok(Self {

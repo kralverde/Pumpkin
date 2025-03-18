@@ -1,10 +1,12 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::PLAY_TELEPORT_ENTITY;
 use pumpkin_macros::packet;
 use pumpkin_util::math::vector3::Vector3;
 
 use crate::{
     ClientPacket, PositionFlag, VarInt,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(PLAY_TELEPORT_ENTITY)]
@@ -41,7 +43,7 @@ impl<'a> CTeleportEntity<'a> {
 }
 
 impl ClientPacket for CTeleportEntity<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_var_int(&self.entity_id)?;

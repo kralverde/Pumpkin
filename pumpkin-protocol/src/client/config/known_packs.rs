@@ -1,9 +1,11 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::CONFIG_SELECT_KNOWN_PACKS;
 use pumpkin_macros::packet;
 
 use crate::{
     ClientPacket, KnownPack,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(CONFIG_SELECT_KNOWN_PACKS)]
@@ -18,7 +20,7 @@ impl<'a> CKnownPacks<'a> {
 }
 
 impl ClientPacket for CKnownPacks<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
         write.write_list::<KnownPack>(self.known_packs, |p, v| {
             p.write_string(v.namespace)?;

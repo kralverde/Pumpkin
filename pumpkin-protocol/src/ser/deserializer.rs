@@ -1,9 +1,11 @@
 use std::fmt::Display;
 
-use super::{NetworkRead, ReadingError};
+use crate::ser::NetworkReadExt;
+
+use super::{Read, ReadingError};
 use serde::de::{self, DeserializeSeed, SeqAccess};
 
-pub struct Deserializer<R: NetworkRead> {
+pub struct Deserializer<R: Read> {
     inner: R,
 }
 
@@ -13,13 +15,13 @@ impl de::Error for ReadingError {
     }
 }
 
-impl<R: NetworkRead> Deserializer<R> {
+impl<R: Read> Deserializer<R> {
     pub fn new(read: R) -> Self {
         Self { inner: read }
     }
 }
 
-impl<'de, R: NetworkRead> de::Deserializer<'de> for &mut Deserializer<R> {
+impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     type Error = ReadingError;
 
     fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
@@ -187,11 +189,11 @@ impl<'de, R: NetworkRead> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        struct Access<'a, R: NetworkRead> {
+        struct Access<'a, R: Read> {
             deserializer: &'a mut Deserializer<R>,
         }
 
-        impl<'de, R: NetworkRead> SeqAccess<'de> for Access<'_, R> {
+        impl<'de, R: Read> SeqAccess<'de> for Access<'_, R> {
             type Error = ReadingError;
 
             fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -212,12 +214,12 @@ impl<'de, R: NetworkRead> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        struct Access<'a, R: NetworkRead> {
+        struct Access<'a, R: Read> {
             deserializer: &'a mut Deserializer<R>,
             len: usize,
         }
 
-        impl<'de, R: NetworkRead> SeqAccess<'de> for Access<'_, R> {
+        impl<'de, R: Read> SeqAccess<'de> for Access<'_, R> {
             type Error = ReadingError;
 
             fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>

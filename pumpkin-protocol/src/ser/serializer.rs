@@ -5,13 +5,13 @@ use serde::{
     ser::{self},
 };
 
-use super::{NetworkWrite, WritingError};
+use super::{NetworkWriteExt, Write, WritingError};
 
-pub struct Serializer<W: NetworkWrite> {
+pub struct Serializer<W: Write> {
     pub write: W,
 }
 
-impl<W: NetworkWrite> Serializer<W> {
+impl<W: Write> Serializer<W> {
     pub fn new(w: W) -> Self {
         Self { write: w }
     }
@@ -31,7 +31,7 @@ impl ser::Error for WritingError {
 // Structs are ignored
 // Iterables' values are written in order, but NO information (e.g. size) about the
 // iterable itself is written (list sizes should be a separate field)
-impl<W: NetworkWrite> ser::Serializer for &mut Serializer<W> {
+impl<W: Write> ser::Serializer for &mut Serializer<W> {
     type Ok = ();
     type Error = WritingError;
 
@@ -201,7 +201,7 @@ impl<W: NetworkWrite> ser::Serializer for &mut Serializer<W> {
     }
 }
 
-impl<W: NetworkWrite> ser::SerializeSeq for &mut Serializer<W> {
+impl<W: Write> ser::SerializeSeq for &mut Serializer<W> {
     // Must match the `Ok` type of the serializer.
     type Ok = ();
     // Must match the `Error` type of the serializer.
@@ -221,7 +221,7 @@ impl<W: NetworkWrite> ser::SerializeSeq for &mut Serializer<W> {
     }
 }
 
-impl<W: NetworkWrite> ser::SerializeTuple for &mut Serializer<W> {
+impl<W: Write> ser::SerializeTuple for &mut Serializer<W> {
     type Ok = ();
     type Error = WritingError;
 
@@ -238,7 +238,7 @@ impl<W: NetworkWrite> ser::SerializeTuple for &mut Serializer<W> {
 }
 
 // Same thing but for tuple structs.
-impl<W: NetworkWrite> ser::SerializeTupleStruct for &mut Serializer<W> {
+impl<W: Write> ser::SerializeTupleStruct for &mut Serializer<W> {
     type Ok = ();
     type Error = WritingError;
 
@@ -263,7 +263,7 @@ impl<W: NetworkWrite> ser::SerializeTupleStruct for &mut Serializer<W> {
 //
 // So the `end` method in this impl is responsible for closing both the `]` and
 // the `}`.
-impl<W: NetworkWrite> ser::SerializeTupleVariant for &mut Serializer<W> {
+impl<W: Write> ser::SerializeTupleVariant for &mut Serializer<W> {
     type Ok = ();
     type Error = WritingError;
 
@@ -287,7 +287,7 @@ impl<W: NetworkWrite> ser::SerializeTupleVariant for &mut Serializer<W> {
 // `serialize_entry` method allows serializers to optimize for the case where
 // key and value are both available simultaneously. In JSON it doesn't make a
 // difference, so the default behavior for `serialize_entry` is fine.
-impl<W: NetworkWrite> ser::SerializeMap for &mut Serializer<W> {
+impl<W: Write> ser::SerializeMap for &mut Serializer<W> {
     type Ok = ();
     type Error = WritingError;
 
@@ -323,7 +323,7 @@ impl<W: NetworkWrite> ser::SerializeMap for &mut Serializer<W> {
 
 // Structs are like maps in which the keys are constrained to be compile-time
 // constant strings.
-impl<W: NetworkWrite> ser::SerializeStruct for &mut Serializer<W> {
+impl<W: Write> ser::SerializeStruct for &mut Serializer<W> {
     type Ok = ();
     type Error = WritingError;
 
@@ -346,7 +346,7 @@ impl<W: NetworkWrite> ser::SerializeStruct for &mut Serializer<W> {
 
 // Similar to `SerializeTupleVariant`, here the `end` method is responsible for
 // closing both of the curly braces opened by `serialize_struct_variant`.
-impl<W: NetworkWrite> ser::SerializeStructVariant for &mut Serializer<W> {
+impl<W: Write> ser::SerializeStructVariant for &mut Serializer<W> {
     type Ok = ();
     type Error = WritingError;
 

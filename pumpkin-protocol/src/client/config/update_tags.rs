@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use pumpkin_data::{
     fluid::Fluid,
     packet::clientbound::CONFIG_UPDATE_TAGS,
@@ -9,7 +11,7 @@ use pumpkin_world::block::registry;
 use crate::{
     ClientPacket,
     codec::{identifier::Identifier, var_int::VarInt},
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(CONFIG_UPDATE_TAGS)]
@@ -24,7 +26,7 @@ impl<'a> CUpdateTags<'a> {
 }
 
 impl ClientPacket for CUpdateTags<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
         write.write_list(self.tags, |p, registry_key| {
             p.write_identifier(&Identifier::vanilla(registry_key.identifier_string()))?;

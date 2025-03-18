@@ -1,13 +1,16 @@
 /// Proxy implementation for Velocity <https://papermc.io/software/velocity> by `PaperMC`
 /// Sadly, `PaperMC` does not care about 3rd parties providing support for Velocity. There is no documentation.
 /// I had to understand the code logic by looking at `PaperMC`'s Velocity implementation: <https://github.com/PaperMC/Paper/blob/master/patches/server/0731-Add-Velocity-IP-Forwarding-Support.patch>
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    io::Read,
+    net::{IpAddr, SocketAddr},
+};
 
 use bytes::{BufMut, BytesMut};
 use hmac::{Hmac, Mac};
 use pumpkin_config::networking::proxy::VelocityConfig;
 use pumpkin_protocol::{
-    Property, client::login::CLoginPluginRequest, ser::NetworkRead,
+    Property, client::login::CLoginPluginRequest, ser::NetworkReadExt,
     server::login::SLoginPluginResponse,
 };
 use rand::Rng;
@@ -68,7 +71,7 @@ pub fn check_integrity(data: (&[u8], &[u8]), secret: &str) -> bool {
     mac.verify_slice(signature).is_ok()
 }
 
-fn read_game_profile(read: impl NetworkRead) -> Result<GameProfile, VelocityError> {
+fn read_game_profile(read: impl Read) -> Result<GameProfile, VelocityError> {
     let mut read = read;
     let id = read
         .get_uuid()
@@ -82,7 +85,7 @@ fn read_game_profile(read: impl NetworkRead) -> Result<GameProfile, VelocityErro
         .get_list(|data| {
             let name = data.get_string()?;
             let value = data.get_string()?;
-            let signature = data.get_option(NetworkRead::get_string)?;
+            let signature = data.get_option(NetworkReadExt::get_string)?;
 
             Ok(Property {
                 name,

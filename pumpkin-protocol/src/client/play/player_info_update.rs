@@ -1,9 +1,11 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::PLAY_PLAYER_INFO_UPDATE;
 use pumpkin_macros::packet;
 
 use crate::{
     ClientPacket, Property,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 use super::PlayerAction;
@@ -26,7 +28,7 @@ impl<'a> CPlayerInfoUpdate<'a> {
 }
 
 impl ClientPacket for CPlayerInfoUpdate<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
 
         write.write_i8_be(self.actions)?;

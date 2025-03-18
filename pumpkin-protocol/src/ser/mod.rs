@@ -33,7 +33,7 @@ pub enum WritingError {
     Message(String),
 }
 
-pub trait NetworkRead {
+pub trait NetworkReadExt {
     fn get_i8_be(&mut self) -> Result<i8, ReadingError>;
     fn get_u8_be(&mut self) -> Result<u8, ReadingError>;
     fn get_i16_be(&mut self) -> Result<i16, ReadingError>;
@@ -68,7 +68,7 @@ pub trait NetworkRead {
     ) -> Result<Vec<G>, ReadingError>;
 }
 
-impl<R: Read> NetworkRead for R {
+impl<R: Read> NetworkReadExt for R {
     //TODO: Macroize this
     fn get_i8_be(&mut self) -> Result<i8, ReadingError> {
         let mut buf = [0u8];
@@ -249,7 +249,7 @@ impl<R: Read> NetworkRead for R {
     }
 }
 
-pub trait NetworkWrite {
+pub trait NetworkWriteExt {
     fn write_i8_be(&mut self, data: i8) -> Result<(), WritingError>;
     fn write_u8_be(&mut self, data: u8) -> Result<(), WritingError>;
     fn write_i16_be(&mut self, data: i16) -> Result<(), WritingError>;
@@ -284,7 +284,7 @@ pub trait NetworkWrite {
     ) -> Result<(), WritingError>;
 }
 
-impl<W: Write> NetworkWrite for W {
+impl<W: Write> NetworkWriteExt for W {
     fn write_i8_be(&mut self, data: i8) -> Result<(), WritingError> {
         self.write_all(&data.to_be_bytes())
             .map_err(WritingError::IoError)

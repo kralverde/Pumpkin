@@ -1,5 +1,7 @@
-use crate::ser::{NetworkRead, NetworkWrite, WritingError};
-use crate::{ClientPacket, ConnectionState, ServerPacket, VarInt, ser::ReadingError};
+use std::io::Read;
+
+use crate::ser::NetworkReadExt;
+use crate::{ConnectionState, ServerPacket, VarInt, ser::ReadingError};
 use pumpkin_data::packet::serverbound::HANDSHAKE_INTENTION;
 use pumpkin_macros::packet;
 
@@ -11,19 +13,8 @@ pub struct SHandShake {
     pub next_state: ConnectionState,
 }
 
-impl ClientPacket for SHandShake {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
-        let mut write = write;
-
-        write.write_var_int(&self.protocol_version)?;
-        write.write_string_bounded(&self.server_address, 255)?;
-        write.write_u16_be(self.server_port)?;
-        write.write_var_int(&VarInt(self.next_state as i32))
-    }
-}
-
 impl ServerPacket for SHandShake {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         Ok(Self {

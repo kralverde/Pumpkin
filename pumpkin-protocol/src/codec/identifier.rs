@@ -1,8 +1,11 @@
-use std::num::NonZeroUsize;
+use std::{
+    io::{Read, Write},
+    num::NonZeroUsize,
+};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor};
 
-use crate::ser::{NetworkRead, NetworkWrite, ReadingError, WritingError};
+use crate::ser::{NetworkReadExt, NetworkWriteExt, ReadingError, WritingError};
 
 use super::Codec;
 
@@ -28,11 +31,11 @@ impl Codec<Self> for Identifier {
         todo!()
     }
 
-    fn encode(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
+    fn encode(&self, write: &mut impl Write) -> Result<(), WritingError> {
         write.write_string_bounded(&self.to_string(), Self::MAX_SIZE.get())
     }
 
-    fn decode(read: &mut impl NetworkRead) -> Result<Self, ReadingError> {
+    fn decode(read: &mut impl Read) -> Result<Self, ReadingError> {
         let identifier = read.get_string_bounded(Self::MAX_SIZE.get())?;
         match identifier.split_once(":") {
             Some((namespace, path)) => Ok(Identifier {

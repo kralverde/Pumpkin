@@ -1,9 +1,11 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::LOGIN_LOGIN_FINISHED;
 use pumpkin_macros::packet;
 
 use crate::{
     ClientPacket, Property,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(LOGIN_LOGIN_FINISHED)]
@@ -24,7 +26,7 @@ impl<'a> CLoginSuccess<'a> {
 }
 
 impl ClientPacket for CLoginSuccess<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
         write.write_uuid(self.uuid)?;
         write.write_string(self.username)?;

@@ -1,10 +1,12 @@
+use std::io::Read;
+
 use pumpkin_data::packet::serverbound::PLAY_CHAT;
 use pumpkin_macros::packet;
 use serde::Serialize;
 
 use crate::{
     ServerPacket, VarInt,
-    ser::{NetworkRead, ReadingError},
+    ser::{NetworkReadExt, ReadingError},
 };
 
 #[derive(Serialize)]
@@ -20,7 +22,7 @@ pub struct SChatMessage {
 
 // TODO
 impl ServerPacket for SChatMessage {
-    fn read(read: impl NetworkRead) -> Result<Self, ReadingError> {
+    fn read(read: impl Read) -> Result<Self, ReadingError> {
         let mut read = read;
 
         Ok(Self {

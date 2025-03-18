@@ -1,9 +1,11 @@
+use std::io::Write;
+
 use pumpkin_data::packet::clientbound::PLAY_COMMANDS;
 use pumpkin_macros::packet;
 
 use crate::{
     ClientPacket, VarInt,
-    ser::{NetworkWrite, WritingError},
+    ser::{NetworkWriteExt, WritingError},
 };
 
 #[packet(PLAY_COMMANDS)]
@@ -22,7 +24,7 @@ impl<'a> CCommands<'a> {
 }
 
 impl ClientPacket for CCommands<'_> {
-    fn write_packet_data(&self, write: impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;
         write.write_list(&self.nodes, |bytebuf, node: &ProtoNode| {
             node.write_to(bytebuf)
@@ -56,7 +58,7 @@ impl ProtoNode<'_> {
     const FLAG_HAS_REDIRECT: u8 = 8;
     const FLAG_HAS_SUGGESTION_TYPE: u8 = 16;
 
-    pub fn write_to(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
+    pub fn write_to(&self, write: &mut impl Write) -> Result<(), WritingError> {
         // flags
         let flags = match self.node_type {
             ProtoNodeType::Root => 0,
@@ -204,7 +206,7 @@ impl ArgumentType<'_> {
 
     pub const SCORE_HOLDER_FLAG_ALLOW_MULTIPLE: u8 = 1;
 
-    pub fn write_to_buffer(&self, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
+    pub fn write_to_buffer(&self, write: &mut impl Write) -> Result<(), WritingError> {
         let id = unsafe { *(self as *const Self as *const i32) };
         write.write_var_int(&(id).into())?;
         match self {
@@ -234,7 +236,7 @@ impl ArgumentType<'_> {
     fn write_number_arg<T: NumberCmdArg>(
         min: Option<T>,
         max: Option<T>,
-        write: &mut impl NetworkWrite,
+        write: &mut impl Write,
     ) -> Result<(), WritingError> {
         let mut flags: u8 = 0;
         if min.is_some() {
@@ -255,13 +257,13 @@ impl ArgumentType<'_> {
         Ok(())
     }
 
-    fn write_with_flags(flags: u8, write: &mut impl NetworkWrite) -> Result<(), WritingError> {
+    fn write_with_flags(flags: u8, write: &mut impl Write) -> Result<(), WritingError> {
         write.write_u8_be(flags)
     }
 
     fn write_with_identifier(
         extra_identifier: &str,
-        write: &mut impl NetworkWrite,
+        write: &mut impl Write,
     ) -> Result<(), WritingError> {
         write.write_string(extra_identifier)
     }
@@ -276,29 +278,29 @@ pub enum StringProtoArgBehavior {
 }
 
 trait NumberCmdArg {
-    fn write(self, write: &mut impl NetworkWrite) -> std::result::Result<(), WritingError>;
+    fn write(self, write: &mut impl Write) -> std::result::Result<(), WritingError>;
 }
 
 impl NumberCmdArg for f32 {
-    fn write(self, write: &mut impl NetworkWrite) -> std::result::Result<(), WritingError> {
+    fn write(self, write: &mut impl Write) -> std::result::Result<(), WritingError> {
         write.write_f32_be(self)
     }
 }
 
 impl NumberCmdArg for f64 {
-    fn write(self, write: &mut impl NetworkWrite) -> std::result::Result<(), WritingError> {
+    fn write(self, write: &mut impl Write) -> std::result::Result<(), WritingError> {
         write.write_f64_be(self)
     }
 }
 
 impl NumberCmdArg for i32 {
-    fn write(self, write: &mut impl NetworkWrite) -> std::result::Result<(), WritingError> {
+    fn write(self, write: &mut impl Write) -> std::result::Result<(), WritingError> {
         write.write_i32_be(self)
     }
 }
 
 impl NumberCmdArg for i64 {
-    fn write(self, write: &mut impl NetworkWrite) -> std::result::Result<(), WritingError> {
+    fn write(self, write: &mut impl Write) -> std::result::Result<(), WritingError> {
         write.write_i64_be(self)
     }
 }
