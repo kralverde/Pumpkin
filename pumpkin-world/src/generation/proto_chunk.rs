@@ -397,29 +397,42 @@ impl<'a> ProtoChunk<'a> {
             random,
             &terrain_builder,
         );
-        for x in 0..16 {
-            for z in 0..16 {
-                let x = start_x + x;
-                let z = start_z + z;
-                let top = self.noise_sampler.height(); // TODO: use heightmaps
+        for local_x in 0..16 {
+            for local_z in 0..16 {
+                let x = start_x + local_x;
+                let z = start_z + local_z;
+
+                // TODO: use heightmaps
+                let top_y = self.top_y() as i32;
+                let mut top = i32::MIN;
+                for y in (self.bottom_y() as i32..=top_y).rev() {
+                    let state = self.get_block_state(&Vector3::new(local_x, y, local_z));
+                    if !state.is_air() {
+                        // +1 happens in the height map and another +1 happens when it's sampled
+                        top = y + 2;
+                        break;
+                    }
+                }
+
                 let biome_y = if self.settings.legacy_random_source {
                     0
                 } else {
                     top
                 };
+
                 let seed_biome_pos = biome::get_biome_blend(
                     self.bottom_y(),
                     self.height(),
                     self.random_config.seed,
                     &context.block_pos,
                 );
-                let this_biome = self.get_biome(&Vector3::new(x, biome_y as i32, z));
+                let this_biome = self.get_biome(&Vector3::new(x, biome_y, z));
                 if this_biome == Biome::ErodedBadlands {
                     terrain_builder.place_badlands_pillar(
                         self,
                         x,
                         z,
-                        top as i32,
+                        top,
                         min_y as i32,
                         self.default_block,
                     );
@@ -430,7 +443,7 @@ impl<'a> ProtoChunk<'a> {
                 let mut stone_depth_above = -1; // Because pre increment
                 let mut min = i32::MAX;
                 let mut fluid_height = i32::MIN;
-                for y in (min_y as i32..=top as i32).rev() {
+                for y in (min_y as i32..=top).rev() {
                     let mut stone_depth_below;
                     pos.y = y;
 
@@ -490,7 +503,7 @@ impl<'a> ProtoChunk<'a> {
                         min_y,
                         x,
                         z,
-                        top as i32,
+                        top,
                         self.settings.sea_level,
                         &self.random_config.base_random_deriver,
                     );
