@@ -2,26 +2,8 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use pumpkin_util::math::vector2::Vector2;
-use pumpkin_world::{
-    GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
-    NOISE_ROUTER_ASTS, bench_create_and_populate_noise, chunk::ChunkData, global_path,
-    level::Level,
-};
+use pumpkin_world::{chunk::ChunkData, global_path, level::Level};
 use tokio::{runtime::Runtime, sync::RwLock};
-
-fn bench_populate_noise(c: &mut Criterion) {
-    let seed = 0;
-    let random_config = GlobalRandomConfig::new(seed, false);
-    let base_router =
-        GlobalProtoNoiseRouter::generate(NOISE_ROUTER_ASTS.overworld(), &random_config);
-    let surface_config = GENERATION_SETTINGS
-        .get(&GeneratorSetting::Overworld)
-        .unwrap();
-
-    c.bench_function("overworld noise", |b| {
-        b.iter(|| bench_create_and_populate_noise(&base_router, &random_config, surface_config));
-    });
-}
 
 async fn test_reads(level: &Arc<Level>, positions: Vec<Vector2<i32>>) {
     let (send, mut recv) = tokio::sync::mpsc::unbounded_channel();
@@ -160,6 +142,7 @@ fn bench_chunk_io_parallel(c: &mut Criterion) {
     for n_requests in iters {
         let root_dir = root_dir.clone();
 
+
         read_group.bench_with_input(
             BenchmarkId::new("Parallel", n_requests),
             &positions,
@@ -248,5 +231,5 @@ fn bench_chunk_io(c: &mut Criterion) {
     fs::remove_dir_all(&root_dir).unwrap(); // cleanup
 }
 
-criterion_group!(benches, bench_populate_noise, bench_chunk_io);
+criterion_group!(benches, bench_chunk_io);
 criterion_main!(benches);

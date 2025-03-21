@@ -26,6 +26,7 @@ pub static BIOME_ENTRIES: LazyLock<SearchTree<Biome>> = LazyLock::new(|| {
     let data: HashMap<Dimension, BiomeEntries> =
         serde_json::from_str(include_str!("../../../assets/multi_noise.json"))
             .expect("Could not parse multi_noise.json.");
+
     // TODO: support non overworld biomes
     let overworld_data = data
         .get(&Dimension::Overworld)
@@ -67,13 +68,26 @@ impl BiomeSupplier for MultiNoiseBiomeSupplier {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
     use pumpkin_data::chunk::Biome;
+    use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
+    use serde::Deserialize;
 
     use crate::{
-        GlobalProtoNoiseRouter, GlobalRandomConfig, NOISE_ROUTER_ASTS,
-        generation::noise_router::multi_noise_sampler::{
-            MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
+        GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
+        NOISE_ROUTER_ASTS, ProtoChunk, biome,
+        generation::{
+            biome_coords,
+            chunk_noise::CHUNK_DIM,
+            height_limit::HeightLimitView,
+            noise_router::multi_noise_sampler::{
+                MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
+            },
+            positions::chunk_pos,
+            section_coords,
         },
+        read_data_from_file,
     };
 
     use super::{BiomeSupplier, MultiNoiseBiomeSupplier};
@@ -91,5 +105,68 @@ mod test {
             &mut sampler,
         );
         assert_eq!(biome, Biome::Desert)
+    }
+
+    #[test]
+    fn test_wide_area_surface() {
+        #[derive(Deserialize)]
+        struct BiomeData {
+            x: i32,
+            z: i32,
+            data: Vec<u16>,
+        }
+
+        let expected_data: Vec<BiomeData> =
+            read_data_from_file!("../../assets/biome_no_blend_no_beard_0.json");
+
+        let seed = 0;
+        let random_config = GlobalRandomConfig::new(seed, false);
+        let noise_rounter =
+            GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
+
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+
+        for data in expected_data.into_iter() {
+            let chunk_pos = Vector2::new(data.x, data.z);
+            let mut chunk =
+                ProtoChunk::new(chunk_pos, &noise_rounter, &random_config, surface_config);
+            chunk.populate_biomes();
+
+            for x in 0..16 {
+                for y in 0..chunk.height() as usize {
+                    for z in 0..16 {
+                        let global_block_x = chunk_pos::start_block_x(&chunk_pos) + x as i32;
+                        let global_block_z = chunk_pos::start_block_z(&chunk_pos) + z as i32;
+                        let global_block_y = chunk.bottom_y() as i32 + y as i32;
+
+                        let global_biome_x = biome_coords::from_block(global_block_x);
+                        let global_biome_y = biome_coords::from_block(global_block_y);
+                        let global_biome_z = biome_coords::from_block(global_block_z);
+
+                        let calculated_biome = chunk.get_biome(&Vector3::new(
+                            global_biome_x,
+                            global_biome_y,
+                            global_biome_z,
+                        ));
+
+                        let local_biome_x = biome_coords::from_block(x);
+                        let local_biome_y = biome_coords::from_block(y);
+                        let local_biome_z = biome_coords::from_block(z);
+
+                        let index = (((local_biome_y << 2) | local_biome_z) << 2) | local_biome_x;
+
+                        let expected_biome_id = data.data[index];
+
+                        assert_eq!(
+                            expected_biome_id, calculated_biome as u16,
+                            "Expected {} was {} ({:?}) at {},{},{}",
+                            expected_biome_id, calculated_biome as u16, calculated_biome, x, y, z
+                        );
+                    }
+                }
+            }
+        }
     }
 }
