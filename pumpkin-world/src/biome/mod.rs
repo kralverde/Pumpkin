@@ -68,24 +68,20 @@ impl BiomeSupplier for MultiNoiseBiomeSupplier {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
     use pumpkin_data::chunk::Biome;
     use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
     use serde::Deserialize;
 
     use crate::{
         GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
-        NOISE_ROUTER_ASTS, ProtoChunk, biome,
+        NOISE_ROUTER_ASTS, ProtoChunk,
         generation::{
             biome_coords,
-            chunk_noise::CHUNK_DIM,
             height_limit::HeightLimitView,
             noise_router::multi_noise_sampler::{
                 MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
             },
             positions::chunk_pos,
-            section_coords,
         },
         read_data_from_file,
     };
@@ -160,9 +156,18 @@ mod test {
                         let expected_biome_id = data.data[index];
 
                         assert_eq!(
-                            expected_biome_id, calculated_biome as u16,
-                            "Expected {} was {} ({:?}) at {},{},{}",
-                            expected_biome_id, calculated_biome as u16, calculated_biome, x, y, z
+                            expected_biome_id,
+                            calculated_biome.to_id(),
+                            "Expected {} ({:?}) was {} ({:?}) at {},{},{} ({},{})",
+                            expected_biome_id,
+                            Biome::from_id(expected_biome_id),
+                            calculated_biome.to_id(),
+                            calculated_biome,
+                            x,
+                            y,
+                            z,
+                            chunk_pos.x,
+                            chunk_pos.z
                         );
                     }
                 }
