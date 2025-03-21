@@ -1,49 +1,21 @@
-use std::{cell::RefCell, collections::HashMap, sync::LazyLock};
+use std::{cell::RefCell, sync::LazyLock};
 
 use enum_dispatch::enum_dispatch;
-use multi_noise::{NoiseHypercube, SearchTree, TreeLeafNode};
+use multi_noise::BiomeTree;
 use pumpkin_data::chunk::Biome;
 use pumpkin_util::math::vector3::Vector3;
-use serde::Deserialize;
 
-use crate::{
-    dimension::Dimension, generation::noise_router::multi_noise_sampler::MultiNoiseSampler,
-};
+use crate::generation::noise_router::multi_noise_sampler::MultiNoiseSampler;
 pub mod multi_noise;
 
-#[derive(Deserialize)]
-pub struct BiomeEntries {
-    biomes: Vec<BiomeEntry>,
-}
-
-#[derive(Deserialize)]
-pub struct BiomeEntry {
-    parameters: NoiseHypercube,
-    biome: Biome,
-}
-
-pub static BIOME_ENTRIES: LazyLock<SearchTree<Biome>> = LazyLock::new(|| {
-    let data: HashMap<Dimension, BiomeEntries> =
-        serde_json::from_str(include_str!("../../../assets/multi_noise.json"))
-            .expect("Could not parse multi_noise.json.");
-
-    // TODO: support non overworld biomes
-    let overworld_data = data
-        .get(&Dimension::Overworld)
-        .expect("Overworld dimension not found");
-
-    let entries: Vec<(Biome, &NoiseHypercube)> = overworld_data
-        .biomes
-        .iter()
-        .map(|entry| (entry.biome, &entry.parameters))
-        .collect();
-
-    SearchTree::create(entries)
+pub static BIOME_SEARCH_TREE: LazyLock<BiomeTree> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../../assets/multi_noise_biome_tree.json"))
+        .expect("Could not parse multi_noise_biome_tree.json")
 });
 
 thread_local! {
     /// A shortcut; check if last used biome is what we should use
-    static LAST_RESULT_NODE: RefCell<Option<TreeLeafNode<Biome>>> = const {RefCell::new(None) };
+    static LAST_RESULT_NODE: RefCell<Option<&'static BiomeTree>> = const {RefCell::new(None) };
 }
 
 #[enum_dispatch]
@@ -53,17 +25,12 @@ pub trait BiomeSupplier {
 
 pub struct MultiNoiseBiomeSupplier;
 
-// TODO: Add End supplier
+// TODO: Add Nether & End supplier
 
 impl BiomeSupplier for MultiNoiseBiomeSupplier {
     fn biome(global_biome_pos: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> Biome {
-        //panic!("{}:{}:{}", at.x, at.y, at.z);
         let point = noise.sample(global_biome_pos.x, global_biome_pos.y, global_biome_pos.z);
-        LAST_RESULT_NODE.with_borrow_mut(|last_result| {
-            BIOME_ENTRIES
-                .get(&point, last_result)
-                .expect("failed to get biome entry")
-        })
+        LAST_RESULT_NODE.with_borrow_mut(|last_result| BIOME_SEARCH_TREE.get(&point, last_result))
     }
 }
 
@@ -74,11 +41,9 @@ mod test {
     use serde::Deserialize;
 
     use crate::{
-        GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
-        NOISE_ROUTER_ASTS, ProtoChunk,
+        GlobalProtoNoiseRouter, GlobalRandomConfig, NOISE_ROUTER_ASTS,
         generation::{
             biome_coords,
-            height_limit::HeightLimitView,
             noise_router::multi_noise_sampler::{
                 MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
             },
@@ -110,7 +75,7 @@ mod test {
         struct BiomeData {
             x: i32,
             z: i32,
-            data: Vec<u16>,
+            data: Vec<(i32, i32, i32, u16)>,
         }
 
         let expected_data: Vec<BiomeData> =
@@ -118,60 +83,37 @@ mod test {
 
         let seed = 0;
         let random_config = GlobalRandomConfig::new(seed, false);
-        let noise_rounter =
+        let noise_router =
             GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
-
-        let surface_config = GENERATION_SETTINGS
-            .get(&GeneratorSetting::Overworld)
-            .unwrap();
 
         for data in expected_data.into_iter() {
             let chunk_pos = Vector2::new(data.x, data.z);
-            let mut chunk =
-                ProtoChunk::new(chunk_pos, &noise_rounter, &random_config, surface_config);
-            chunk.populate_biomes();
+            let start_block_x = chunk_pos::start_block_x(&chunk_pos);
+            let start_biome_x = biome_coords::from_block(start_block_x);
+            let start_block_z = chunk_pos::start_block_z(&chunk_pos);
+            let start_biome_z = biome_coords::from_block(start_block_z);
 
-            for x in 0..16 {
-                for y in 0..chunk.height() as usize {
-                    for z in 0..16 {
-                        let global_block_x = chunk_pos::start_block_x(&chunk_pos) + x as i32;
-                        let global_block_z = chunk_pos::start_block_z(&chunk_pos) + z as i32;
-                        let global_block_y = chunk.bottom_y() as i32 + y as i32;
+            let mut sampler = MultiNoiseSampler::generate(
+                &noise_router,
+                &MultiNoiseSamplerBuilderOptions::new(start_biome_x, start_biome_z, 4),
+            );
+            for (biome_x, biome_y, biome_z, biome_id) in data.data {
+                let global_biome_pos = Vector3::new(biome_x, biome_y, biome_z);
+                let calculated_biome =
+                    MultiNoiseBiomeSupplier::biome(&global_biome_pos, &mut sampler);
 
-                        let global_biome_x = biome_coords::from_block(global_block_x);
-                        let global_biome_y = biome_coords::from_block(global_block_y);
-                        let global_biome_z = biome_coords::from_block(global_block_z);
-
-                        let calculated_biome = chunk.get_biome(&Vector3::new(
-                            global_biome_x,
-                            global_biome_y,
-                            global_biome_z,
-                        ));
-
-                        let local_biome_x = biome_coords::from_block(x);
-                        let local_biome_y = biome_coords::from_block(y);
-                        let local_biome_z = biome_coords::from_block(z);
-
-                        let index = (((local_biome_y << 2) | local_biome_z) << 2) | local_biome_x;
-
-                        let expected_biome_id = data.data[index];
-
-                        assert_eq!(
-                            expected_biome_id,
-                            calculated_biome.to_id(),
-                            "Expected {} ({:?}) was {} ({:?}) at {},{},{} ({},{})",
-                            expected_biome_id,
-                            Biome::from_id(expected_biome_id),
-                            calculated_biome.to_id(),
-                            calculated_biome,
-                            x,
-                            y,
-                            z,
-                            chunk_pos.x,
-                            chunk_pos.z
-                        );
-                    }
-                }
+                assert_eq!(
+                    biome_id,
+                    calculated_biome.to_id(),
+                    "Expected {:?} was {:?} at {},{},{} ({},{})",
+                    Biome::from_id(biome_id),
+                    calculated_biome,
+                    biome_x,
+                    biome_y,
+                    biome_z,
+                    data.x,
+                    data.z
+                );
             }
         }
     }
