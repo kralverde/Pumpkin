@@ -394,7 +394,14 @@ fn squared_distance(a: &[ParameterRange; 7], b: &[i64; 7]) -> i64 {
 
 #[cfg(test)]
 mod test {
-    use crate::biome::multi_noise::{TreeNode, create_node};
+    use pumpkin_util::math::vector2::Vector2;
+
+    use crate::{
+        GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
+        NOISE_ROUTER_ASTS, ProtoChunk,
+        biome::multi_noise::{TreeNode, create_node},
+        read_data_from_file,
+    };
 
     use super::{NoiseHypercube, ParameterRange};
 
@@ -445,6 +452,35 @@ mod test {
             assert_eq!(children[1], leaves[1]);
         } else {
             panic!("Expected a branch node");
+        }
+    }
+
+    #[test]
+    fn test_sample_chunk() {
+        type PosToPoint = (i32, i32, i32, i64, i64, i64, i64, i64, i64);
+        let expected_data: Vec<PosToPoint> =
+            read_data_from_file!("../../assets/multi_noise_sample_no_blend_no_beard_0_0_0.json");
+
+        let seed = 0;
+        let chunk_pos = Vector2::new(0, 0);
+        let random_config = GlobalRandomConfig::new(seed, false);
+        let noise_rounter =
+            GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
+
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+
+        let mut chunk = ProtoChunk::new(chunk_pos, &noise_rounter, &random_config, surface_config);
+
+        for (x, y, z, tem, hum, con, ero, dep, wei) in expected_data.into_iter() {
+            let point = chunk.multi_noise_sampler.sample(x, y, z);
+            assert_eq!(point.temperature, tem);
+            assert_eq!(point.humidity, hum);
+            assert_eq!(point.continentalness, con);
+            assert_eq!(point.erosion, ero);
+            assert_eq!(point.depth, dep);
+            assert_eq!(point.weirdness, wei);
         }
     }
 }

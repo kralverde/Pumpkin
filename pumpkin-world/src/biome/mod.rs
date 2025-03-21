@@ -42,6 +42,7 @@ pub static BIOME_ENTRIES: LazyLock<SearchTree<Biome>> = LazyLock::new(|| {
 });
 
 thread_local! {
+    /// A shortcut; check if last used biome is what we should use
     static LAST_RESULT_NODE: RefCell<Option<TreeLeafNode<Biome>>> = const {RefCell::new(None) };
 }
 
@@ -55,9 +56,9 @@ pub struct MultiNoiseBiomeSupplier;
 // TODO: Add End supplier
 
 impl BiomeSupplier for MultiNoiseBiomeSupplier {
-    fn biome(at: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> Biome {
+    fn biome(global_biome_pos: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> Biome {
         //panic!("{}:{}:{}", at.x, at.y, at.z);
-        let point = noise.sample(at.x, at.y, at.z);
+        let point = noise.sample(global_biome_pos.x, global_biome_pos.y, global_biome_pos.z);
         LAST_RESULT_NODE.with_borrow_mut(|last_result| {
             BIOME_ENTRIES
                 .get(&point, last_result)
