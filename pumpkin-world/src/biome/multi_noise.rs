@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -125,7 +126,7 @@ impl<T: Clone> SearchTree<T> {
             .collect();
 
         SearchTree {
-            root: create_node(7, leaves),
+            root: create_node(leaves),
         }
     }
 
@@ -150,94 +151,77 @@ impl<T: Clone> SearchTree<T> {
     }
 }
 
-fn create_node<T: Clone>(parameter_number: usize, mut sub_tree: Vec<TreeNode<T>>) -> TreeNode<T> {
+fn create_node<T: Clone>(mut sub_tree: Vec<TreeNode<T>>) -> TreeNode<T> {
     assert!(
         !sub_tree.is_empty(),
         "Need at least one child to build a node"
     );
+
     if sub_tree.len() == 1 {
-        return sub_tree.first().unwrap().clone();
+        return sub_tree[0].clone();
     }
+
     if sub_tree.len() <= 6 {
         let mut sorted_sub_tree = sub_tree;
-        sorted_sub_tree.sort_by_key(|a| calculate_bounds_sum(a.bounds()));
+        sorted_sub_tree.sort_by_key(|a| calculate_parameters_average_sum(a.parameters()));
         let bounds = get_enclosing_parameters(&sorted_sub_tree);
         return TreeNode::Branch {
             children: sorted_sub_tree,
             bounds,
         };
     }
+
     let mut best_range_sum = i64::MAX;
-    let mut best_param = 0;
+    let mut best_parameter_offset = 0;
     let mut best_batched = Vec::new();
 
-    for param_idx in 0..parameter_number {
-        sort_tree(&mut sub_tree, parameter_number, param_idx, false);
+    let parameter_count = sub_tree[0].parameters().len();
+    for parameter_offset in 0..parameter_count {
+        sort_tree(&mut sub_tree, parameter_offset, false);
         let batched_tree = get_batched_tree(sub_tree.clone());
         let range_sum: i64 = batched_tree
             .iter()
-            .map(|node| get_range_length_sum(node.bounds()))
+            .map(|node| get_range_length_sum(node.parameters()))
             .sum();
 
         if best_range_sum > range_sum {
             best_range_sum = range_sum;
-            best_param = param_idx;
+            best_parameter_offset = parameter_offset;
             best_batched = batched_tree;
         }
     }
 
-    sort_tree(&mut best_batched, parameter_number, best_param, true);
+    sort_tree(&mut best_batched, best_parameter_offset, true);
 
     let children: Vec<TreeNode<T>> = best_batched
         .into_iter()
-        .map(|batch| create_node(parameter_number, batch.children()))
+        .map(|batch| create_node(batch.children()))
         .collect();
 
     let bounds = get_enclosing_parameters(&children);
     TreeNode::Branch { children, bounds }
 }
 
-fn create_node_comparator<T: Clone>(
-    current_parameter: usize,
-    abs: bool,
-) -> impl Fn(&TreeNode<T>, &TreeNode<T>) -> Ordering {
-    move |a: &TreeNode<T>, b: &TreeNode<T>| {
-        let range_a = &a.bounds()[current_parameter];
-        let range_b = &b.bounds()[current_parameter];
-
-        let mid_a = (range_a.min + range_a.max) / 2;
-        let mid_b = (range_b.min + range_b.max) / 2;
-
-        let val_a = if abs { mid_a.abs() } else { mid_a };
-        let val_b = if abs { mid_b.abs() } else { mid_b };
-
-        val_a.cmp(&val_b)
-    }
-}
-
 fn sort_tree<T: Clone>(
     sub_tree: &mut [TreeNode<T>],
-    parameter_number: usize,
     current_parameter: usize,
-    abs: bool,
+    absolute_value: bool,
 ) {
     sub_tree.sort_by(|a, b| {
-        let mut comparator = create_node_comparator(current_parameter, abs);
+        let parameter_count = a.parameters().len();
+        for parameter_offset in 0..parameter_count {
+            let current_index = (current_parameter + parameter_offset) % parameter_count;
 
-        for i in 1..parameter_number {
-            let next_parameter = (current_parameter + i) % parameter_number;
+            let a_avg = a.bound_average(current_index, absolute_value);
+            let b_avg = b.bound_average(current_index, absolute_value);
 
-            let next_comparator = create_node_comparator(next_parameter, abs);
-
-            let result = comparator(a, b);
-
-            if result != Ordering::Equal {
-                return result;
+            let comp = a_avg.cmp(&b_avg);
+            if comp != Ordering::Equal {
+                return comp;
             }
-            comparator = next_comparator;
         }
 
-        comparator(a, b)
+        Ordering::Equal
     });
 }
 
@@ -247,7 +231,8 @@ fn get_batched_tree<T: Clone>(nodes: Vec<TreeNode<T>>) -> Vec<TreeNode<T>> {
 
     // Calculate batch size based on the formula
     let node_count = nodes.len();
-    let batch_size = (6.0f64.powf((node_count as f64 - 0.01).log(6.0).floor())) as usize;
+    let logged_size_div = (node_count as f64 - 0.01).ln() / 6.0f64.ln();
+    let batch_size = 6.0f64.powf(logged_size_div.floor()) as i32 as usize;
 
     for node in nodes {
         current_batch.push(node);
@@ -274,13 +259,13 @@ fn get_batched_tree<T: Clone>(nodes: Vec<TreeNode<T>>) -> Vec<TreeNode<T>> {
 
 fn get_enclosing_parameters<T: Clone>(nodes: &[TreeNode<T>]) -> [ParameterRange; 7] {
     assert!(!nodes.is_empty(), "SubTree needs at least one child");
-    let mut bounds = *nodes[0].bounds();
+    let mut parameters_acc = *nodes[0].parameters();
     for node in nodes.iter().skip(1) {
-        for (i, range) in node.bounds().iter().enumerate() {
-            bounds[i] = bounds[i].combine(range);
+        for (parameter_acc, node_parameter) in parameters_acc.iter_mut().zip_eq(node.parameters()) {
+            *parameter_acc = node_parameter.combine(parameter_acc);
         }
     }
-    bounds
+    parameters_acc
 }
 
 fn get_range_length_sum(bounds: &[ParameterRange]) -> i64 {
@@ -290,8 +275,8 @@ fn get_range_length_sum(bounds: &[ParameterRange]) -> i64 {
         .sum()
 }
 
-fn calculate_bounds_sum(bounds: &[ParameterRange]) -> i64 {
-    bounds
+fn calculate_parameters_average_sum(parameters: &[ParameterRange]) -> i64 {
+    parameters
         .iter()
         .map(|range| ((range.min + range.max) / 2).abs())
         .sum()
@@ -341,33 +326,29 @@ impl<T: Clone> TreeNode<T> {
                     .unwrap_or(i64::MAX);
                 let mut tree_leaf_node = alternative.clone();
                 for node in children {
-                    let distance = squared_distance(node.bounds(), point);
-                    if min <= distance {
-                        continue;
+                    let distance = squared_distance(node.parameters(), point);
+                    if min > distance {
+                        let tree_leaf_node2 = node
+                            .get_node(point, &tree_leaf_node)
+                            .expect("get_node should always return a value on a non empty tree");
+                        let distance = if node.is_leaf(&tree_leaf_node2) {
+                            distance
+                        } else {
+                            squared_distance(&tree_leaf_node2.point, point)
+                        };
+
+                        if min > distance {
+                            min = distance;
+                            tree_leaf_node = Some(tree_leaf_node2);
+                        }
                     }
-                    let tree_leaf_node2 = node
-                        .get_node(point, &tree_leaf_node)
-                        .expect("get_node should always return a value on a non empty tree");
-
-                    let n = if node.is_leaf(&tree_leaf_node2) {
-                        distance
-                    } else {
-                        squared_distance(&tree_leaf_node2.point, point)
-                    };
-
-                    if min <= n {
-                        continue;
-                    }
-
-                    min = n;
-                    tree_leaf_node = Some(tree_leaf_node2)
                 }
                 tree_leaf_node
             }
         }
     }
 
-    pub fn bounds(&self) -> &[ParameterRange; 7] {
+    pub fn parameters(&self) -> &[ParameterRange; 7] {
         match self {
             TreeNode::Leaf(TreeLeafNode { point, .. }) => point,
             TreeNode::Branch { bounds, .. } => bounds,
@@ -378,6 +359,16 @@ impl<T: Clone> TreeNode<T> {
         match self {
             TreeNode::Leaf(TreeLeafNode { .. }) => vec![],
             TreeNode::Branch { children, .. } => children,
+        }
+    }
+
+    pub fn bound_average(&self, parameter_index: usize, absolute_value: bool) -> i64 {
+        let parameter = self.parameters()[parameter_index];
+        let average = (parameter.min + parameter.max) / 2;
+        if absolute_value {
+            average.abs()
+        } else {
+            average
         }
     }
 }
@@ -417,7 +408,7 @@ mod test {
             offset: 0.0,
         };
         let leaves = vec![TreeNode::new_leaf(1, hypercube.to_parameters())];
-        let node = create_node(7, leaves.clone());
+        let node = create_node(leaves.clone());
         assert_eq!(node, leaves[0]);
     }
 
@@ -445,7 +436,7 @@ mod test {
             TreeNode::new_leaf(1, hypercube1.to_parameters()),
             TreeNode::new_leaf(2, hypercube2.to_parameters()),
         ];
-        let node = create_node(7, leaves.clone());
+        let node = create_node(leaves.clone());
         if let TreeNode::Branch { children, .. } = node {
             assert_eq!(children.len(), 2);
             assert_eq!(children[0], leaves[0]);
