@@ -41,13 +41,10 @@ mod test {
     use serde::Deserialize;
 
     use crate::{
-        GlobalProtoNoiseRouter, GlobalRandomConfig, NOISE_ROUTER_ASTS,
-        generation::{
-            biome_coords,
-            noise_router::multi_noise_sampler::{
-                MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
-            },
-            positions::chunk_pos,
+        GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
+        NOISE_ROUTER_ASTS, ProtoChunk,
+        generation::noise_router::multi_noise_sampler::{
+            MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
         },
         read_data_from_file,
     };
@@ -85,22 +82,19 @@ mod test {
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_router =
             GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
+        let surface_settings = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
 
         for data in expected_data.into_iter() {
             let chunk_pos = Vector2::new(data.x, data.z);
-            let start_block_x = chunk_pos::start_block_x(&chunk_pos);
-            let start_biome_x = biome_coords::from_block(start_block_x);
-            let start_block_z = chunk_pos::start_block_z(&chunk_pos);
-            let start_biome_z = biome_coords::from_block(start_block_z);
+            let mut chunk =
+                ProtoChunk::new(chunk_pos, &noise_router, &random_config, surface_settings);
+            chunk.populate_biomes();
 
-            let mut sampler = MultiNoiseSampler::generate(
-                &noise_router,
-                &MultiNoiseSamplerBuilderOptions::new(start_biome_x, start_biome_z, 4),
-            );
             for (biome_x, biome_y, biome_z, biome_id) in data.data {
                 let global_biome_pos = Vector3::new(biome_x, biome_y, biome_z);
-                let calculated_biome =
-                    MultiNoiseBiomeSupplier::biome(&global_biome_pos, &mut sampler);
+                let calculated_biome = chunk.get_biome(&global_biome_pos);
 
                 assert_eq!(
                     biome_id,
