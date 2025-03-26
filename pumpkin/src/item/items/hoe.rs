@@ -16,11 +16,12 @@ impl ItemMetadata for HoeItem {
             .expect("This is a valid vanilla tag")
             .iter()
             .map(|key| {
-                Item::from_registry_key(*key)
+                Item::from_registry_key(key)
                     .expect("We just got this key from the registry")
                     .id
             })
-            .into()
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 }
 
