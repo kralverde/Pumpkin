@@ -1,7 +1,7 @@
 use pumpkin_macros::block_state;
 use pumpkin_util::{
     math::vector3::Vector3,
-    random::{RandomDeriver, RandomGenerator},
+    random::{RandomDeriver, RandomDeriverImpl, RandomGenerator, RandomImpl},
 };
 
 use crate::{

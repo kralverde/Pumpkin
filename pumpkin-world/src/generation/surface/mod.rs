@@ -1,7 +1,7 @@
 use pumpkin_data::chunk::Biome;
 use pumpkin_util::{
     math::{lerp2, vector2::Vector2, vector3::Vector3, vertical_surface_type::VerticalSurfaceType},
-    random::RandomDeriver,
+    random::{RandomDeriver, RandomDeriverImpl, RandomImpl},
 };
 use serde::Deserialize;
 use terrain::SurfaceTerrainBuilder;

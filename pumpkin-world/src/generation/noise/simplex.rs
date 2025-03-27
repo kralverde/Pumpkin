@@ -1,9 +1,10 @@
 use std::hash::Hash;
 
 use num_traits::Pow;
-use pumpkin_util::random::{RandomImpl, legacy_rand::LegacyRand};
-
-use super::GRADIENTS;
+use pumpkin_util::{
+    noise::GRADIENTS,
+    random::{RandomImpl, legacy_rand::LegacyRand},
+};
 
 #[derive(Clone)]
 pub struct SimplexNoiseSampler {
