@@ -3,11 +3,16 @@ use pumpkin_util::math::{floor_mod, square, vector3::Vector3};
 use super::biome_coords;
 
 // This blends biome boundaries, returning which biome to populate the surface on based on the seed
-pub fn get_biome_blend(bottom_y: i8, height: u16, seed: u64, pos: &Vector3<i32>) -> Vector3<i32> {
+pub fn get_biome_blend(
+    bottom_y: i8,
+    height: u16,
+    seed: u64,
+    global_block_pos: &Vector3<i32>,
+) -> Vector3<i32> {
     // This is the "left" side of the biome boundary
-    let offset_x = pos.x - 2;
-    let offset_y = pos.y - 2;
-    let offset_z = pos.z - 2;
+    let offset_x = global_block_pos.x - 2;
+    let offset_y = global_block_pos.y - 2;
+    let offset_z = global_block_pos.z - 2;
     let biome_x = biome_coords::from_block(offset_x);
     let biome_y = biome_coords::from_block(offset_y);
     let biome_z = biome_coords::from_block(offset_z);

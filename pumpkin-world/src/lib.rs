@@ -63,3 +63,14 @@ pub fn bench_create_and_populate_biome(
     let mut chunk = ProtoChunk::new(Vector2::new(0, 0), base_router, random_config, settings);
     chunk.populate_biomes();
 }
+
+pub fn bench_create_and_populate_noise_with_surface(
+    base_router: &GlobalProtoNoiseRouter,
+    random_config: &GlobalRandomConfig,
+    settings: &GenerationSettings,
+) {
+    let mut chunk = ProtoChunk::new(Vector2::new(0, 0), base_router, random_config, settings);
+    chunk.populate_biomes();
+    chunk.populate_noise();
+    chunk.build_surface();
+}

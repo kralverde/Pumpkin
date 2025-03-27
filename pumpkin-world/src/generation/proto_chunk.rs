@@ -844,4 +844,32 @@ mod test {
                 .collect::<Vec<u16>>()
         );
     }
+
+    #[test]
+    fn test_no_blend_no_beard_surface() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_surface_0_0.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(0, 0),
+            &BASE_NOISE_ROUTER,
+            &RANDOM_CONFIG,
+            surface_config,
+        );
+
+        chunk.populate_biomes();
+        chunk.populate_noise();
+        chunk.build_surface();
+
+        assert_eq!(
+            expected_data,
+            chunk
+                .flat_block_map
+                .into_iter()
+                .map(|state| state.state_id)
+                .collect::<Vec<u16>>()
+        );
+    }
 }
