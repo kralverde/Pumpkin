@@ -211,14 +211,11 @@ impl<'a> ProtoChunk<'a> {
     pub fn get_block_state(&self, local_pos: &Vector3<i32>) -> ChunkBlockState {
         let local_pos = Vector3::new(
             local_pos.x & 15,
-            local_pos.y - self.noise_sampler.min_y() as i32,
+            local_pos.y - self.bottom_y() as i32,
             local_pos.z & 15,
         );
-        if local_pos.y < 0 || local_pos.y >= self.noise_sampler.height() as i32 {
-            ChunkBlockState::AIR
-        } else {
-            self.flat_block_map[self.local_pos_to_block_index(&local_pos)]
-        }
+        let index = self.local_pos_to_block_index(&local_pos);
+        self.flat_block_map[index]
     }
 
     #[inline]
@@ -412,12 +409,11 @@ impl<'a> ProtoChunk<'a> {
 
                 // TODO: use heightmaps
                 let top_y = self.top_y() as i32;
-                let mut top = i32::MIN;
-                for y in (self.bottom_y() as i32..=top_y).rev() {
+                let mut top_block = i32::MIN;
+                for y in (self.bottom_y() as i32..top_y).rev() {
                     let state = self.get_block_state(&Vector3::new(local_x, y, local_z));
                     if !state.is_air() {
-                        // +1 happens in the height map and another +1 happens when it's sampled
-                        top = y + 2;
+                        top_block = y + 1;
                         break;
                     }
                 }
@@ -425,7 +421,7 @@ impl<'a> ProtoChunk<'a> {
                 let biome_y = if self.settings.legacy_random_source {
                     0
                 } else {
-                    top
+                    top_block
                 };
 
                 let this_biome = self.get_biome_for_terrain_gen(&Vector3::new(x, biome_y, z));
@@ -434,20 +430,28 @@ impl<'a> ProtoChunk<'a> {
                         self,
                         x,
                         z,
-                        top,
-                        min_y as i32,
+                        top_block,
                         self.default_block,
                     );
+                    // Get the top block again if we placed a pillar!
+
+                    //TODO: Validate that we can only add to the height
+                    for y in (top_block..top_y).rev() {
+                        let state = self.get_block_state(&Vector3::new(local_x, y, local_z));
+                        if !state.is_air() {
+                            top_block = y + 1;
+                            break;
+                        }
+                    }
                 }
-                let mut pos = Vector3::new(local_x, 0, local_z);
+
                 context.init_horizontal(x, z);
 
                 let mut stone_depth_above = 0;
                 let mut min = i32::MAX;
                 let mut fluid_height = i32::MIN;
-                for y in (min_y as i32..=top).rev() {
-                    pos.y = y;
-
+                for y in (min_y as i32..top_block).rev() {
+                    let pos = Vector3::new(x, y, z);
                     let state = self.get_block_state(&pos);
                     let state = get_state_by_state_id(state.state_id).unwrap();
                     if state.air {
@@ -466,9 +470,19 @@ impl<'a> ProtoChunk<'a> {
                         min = shift as i32;
 
                         for search_y in (min_y as i32 - 1..=y - 1).rev() {
+                            if search_y < min_y as i32 {
+                                min = search_y + 1;
+                                break;
+                            }
+
                             let state =
                                 self.get_block_state(&Vector3::new(local_x, search_y, local_z));
-                            if self.default_block != state {
+
+                            // TODO: Is there a better way to check that its not a fluid?
+                            if !(!state.is_air()
+                                && !state.of_block(WATER_BLOCK.block_id)
+                                && !state.of_block(LAVA_BLOCK.block_id))
+                            {
                                 min = search_y + 1;
                                 break;
                             }
@@ -503,7 +517,7 @@ impl<'a> ProtoChunk<'a> {
                         min_y,
                         x,
                         z,
-                        top,
+                        top_block,
                         self.settings.sea_level,
                         &self.random_config.base_random_deriver,
                     );
@@ -846,6 +860,31 @@ mod test {
     }
 
     #[test]
+    fn test_no_blend_no_beard_badlands() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_-595_544.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-595, 544),
+            &BASE_NOISE_ROUTER,
+            &RANDOM_CONFIG,
+            surface_config,
+        );
+        chunk.populate_noise();
+
+        assert_eq!(
+            expected_data,
+            chunk
+                .flat_block_map
+                .into_iter()
+                .map(|state| state.state_id)
+                .collect::<Vec<u16>>()
+        );
+    }
+
+    #[test]
     fn test_no_blend_no_beard_surface() {
         let expected_data: Vec<u16> =
             read_data_from_file!("../../assets/no_blend_no_beard_surface_0_0.chunk");
@@ -871,5 +910,37 @@ mod test {
                 .map(|state| state.state_id)
                 .collect::<Vec<u16>>()
         );
+    }
+
+    #[test]
+    fn test_no_blend_no_beard_surface_badlands() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_surface_badlands_-595_544.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-595, 544),
+            &BASE_NOISE_ROUTER,
+            &RANDOM_CONFIG,
+            surface_config,
+        );
+
+        chunk.populate_biomes();
+        chunk.populate_noise();
+        chunk.build_surface();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
     }
 }
