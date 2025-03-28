@@ -574,6 +574,13 @@ mod test {
         GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &RANDOM_CONFIG)
     });
 
+    const SEED2: u64 = 13579;
+    static RANDOM_CONFIG2: LazyLock<GlobalRandomConfig> =
+        LazyLock::new(|| GlobalRandomConfig::new(SEED2, false)); // TODO: use legacy when needed
+    static BASE_NOISE_ROUTER2: LazyLock<GlobalProtoNoiseRouter> = LazyLock::new(|| {
+        GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &RANDOM_CONFIG2)
+    });
+
     #[test]
     fn test_no_blend_no_beard_only_cell_cache() {
         // We say no wrapper, but it technically has a top-level cell cache
@@ -917,6 +924,35 @@ mod test {
     }
 
     #[test]
+    fn test_no_blend_no_beard_badlands2() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_13579_-6_11.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-6, 11),
+            &BASE_NOISE_ROUTER2,
+            &RANDOM_CONFIG2,
+            surface_config,
+        );
+        chunk.populate_noise();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
+    }
+
+    #[test]
     fn test_no_blend_no_beard_surface() {
         let expected_data: Vec<u16> =
             read_data_from_file!("../../assets/no_blend_no_beard_surface_0_0.chunk");
@@ -959,6 +995,38 @@ mod test {
             Vector2::new(-595, 544),
             &BASE_NOISE_ROUTER,
             &RANDOM_CONFIG,
+            surface_config,
+        );
+
+        chunk.populate_biomes();
+        chunk.populate_noise();
+        chunk.build_surface();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
+    }
+
+    #[test]
+    fn test_no_blend_no_beard_surface_badlands2() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_surface_13579_-6_11.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-6, 11),
+            &BASE_NOISE_ROUTER2,
+            &RANDOM_CONFIG2,
             surface_config,
         );
 
