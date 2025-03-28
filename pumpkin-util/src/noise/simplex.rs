@@ -1,10 +1,10 @@
 use std::hash::Hash;
 
 use num_traits::Pow;
-use pumpkin_util::{
-    noise::GRADIENTS,
-    random::{RandomImpl, legacy_rand::LegacyRand},
-};
+
+use crate::random::{RandomImpl, legacy_rand::LegacyRand};
+
+use super::GRADIENTS;
 
 #[derive(Clone)]
 pub struct SimplexNoiseSampler {
@@ -275,9 +275,10 @@ impl OctaveSimplexNoiseSampler {
 
 #[cfg(test)]
 mod octave_simplex_noise_sampler_test {
-    use pumpkin_util::random::{RandomImpl, xoroshiro128::Xoroshiro};
-
-    use crate::generation::noise::simplex::OctaveSimplexNoiseSampler;
+    use crate::{
+        noise::simplex::OctaveSimplexNoiseSampler,
+        random::{RandomImpl, xoroshiro128::Xoroshiro},
+    };
 
     #[test]
     fn test_new() {
@@ -410,10 +411,10 @@ mod octave_simplex_noise_sampler_test {
 }
 #[cfg(test)]
 mod simplex_noise_sampler_test {
-
-    use pumpkin_util::random::{RandomImpl, xoroshiro128::Xoroshiro};
-
-    use crate::generation::noise::simplex::SimplexNoiseSampler;
+    use crate::{
+        noise::simplex::SimplexNoiseSampler,
+        random::{RandomImpl, xoroshiro128::Xoroshiro},
+    };
 
     #[test]
     fn test_create() {

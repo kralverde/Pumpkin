@@ -1,4 +1,5 @@
 pub mod perlin;
+pub mod simplex;
 
 pub struct Gradient {
     x: f64,

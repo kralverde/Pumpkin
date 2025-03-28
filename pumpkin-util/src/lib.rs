@@ -1,3 +1,4 @@
+pub mod biome;
 pub mod gamemode;
 pub mod loot_table;
 pub mod math;

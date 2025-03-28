@@ -508,15 +508,16 @@ impl<'a> ProtoChunk<'a> {
                     }
                 }
                 if this_biome == Biome::FrozenOcean || this_biome == Biome::DeepFrozenOcean {
-                    let min_y = estimate_surface_height(
+                    let surface_estimate = estimate_surface_height(
                         &mut context,
                         &mut self.surface_height_estimate_sampler,
                     );
                     terrain_builder.place_iceberg(
                         self,
-                        min_y,
+                        this_biome,
                         x,
                         z,
+                        surface_estimate,
                         top_block,
                         self.settings.sea_level,
                         &self.random_config.base_random_deriver,
@@ -885,6 +886,35 @@ mod test {
     }
 
     #[test]
+    fn test_no_blend_no_beard_frozen_ocean() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_-119_183.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-119, 183),
+            &BASE_NOISE_ROUTER,
+            &RANDOM_CONFIG,
+            surface_config,
+        );
+        chunk.populate_noise();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
+    }
+
+    #[test]
     fn test_no_blend_no_beard_surface() {
         let expected_data: Vec<u16> =
             read_data_from_file!("../../assets/no_blend_no_beard_surface_0_0.chunk");
@@ -921,6 +951,39 @@ mod test {
             .unwrap();
         let mut chunk = ProtoChunk::new(
             Vector2::new(-595, 544),
+            &BASE_NOISE_ROUTER,
+            &RANDOM_CONFIG,
+            surface_config,
+        );
+
+        chunk.populate_biomes();
+        chunk.populate_noise();
+        chunk.build_surface();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
+    }
+
+    #[test]
+    fn test_no_blend_no_beard_surface_frozen_ocean() {
+        let expected_data: Vec<u16> = read_data_from_file!(
+            "../../assets/no_blend_no_beard_surface_frozen_ocean_-119_183.chunk"
+        );
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-119, 183),
             &BASE_NOISE_ROUTER,
             &RANDOM_CONFIG,
             surface_config,
