@@ -193,10 +193,9 @@ impl SurfaceTerrainBuilder {
         sea_level: i32,
         random_deriver: &RandomDeriver,
     ) {
-        let iceburg_surface_noise = self
-            .iceberg_surface_noise
-            .sample(x as f64, 0.0, z as f64)
-            .abs();
+        let iceburg_surface_noise =
+            (self.iceberg_surface_noise.sample(x as f64, 0.0, z as f64) * 8.25).abs();
+
         let iceburg_pillar_noise =
             self.iceberg_pillar_noise
                 .sample(x as f64 * 1.28, 0.0, z as f64 * 1.28)
@@ -236,7 +235,8 @@ impl SurfaceTerrainBuilder {
             let mut snow_blocks = 0;
 
             let top_y = current_top_y.max(top_block + 1);
-            for y in (top_y..=estimated_surface_y).rev() {
+
+            for y in (estimated_surface_y..=top_y).rev() {
                 let pos = Vector3::new(x, y, z);
                 let block_state = chunk.get_block_state(&pos);
                 if (block_state.is_air() && y < top_block && rand.next_f64() > 0.01)
@@ -246,7 +246,7 @@ impl SurfaceTerrainBuilder {
                         && bottom_block != 0
                         && rand.next_f64() > 0.15)
                 {
-                    if snow_blocks < snow_block_count && y > snow_bottom {
+                    if snow_blocks <= snow_block_count && y > snow_bottom {
                         chunk.set_block_state(&pos, Self::SNOW_BLOCK);
                         snow_blocks += 1;
                     } else {

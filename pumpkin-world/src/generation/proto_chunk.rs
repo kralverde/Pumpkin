@@ -507,11 +507,13 @@ impl<'a> ProtoChunk<'a> {
                         }
                     }
                 }
+
                 if this_biome == Biome::FrozenOcean || this_biome == Biome::DeepFrozenOcean {
                     let surface_estimate = estimate_surface_height(
                         &mut context,
                         &mut self.surface_height_estimate_sampler,
                     );
+
                     terrain_builder.place_iceberg(
                         self,
                         this_biome,
