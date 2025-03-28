@@ -68,10 +68,12 @@ impl WorldGenerator for VanillaGenerator {
         }
 
         ChunkData {
-            blocks,
+            sections: blocks,
             heightmap: Default::default(),
             position: at,
             dirty: true,
+            block_ticks: Default::default(),
+            fluid_ticks: Default::default(),
         }
     }
 }

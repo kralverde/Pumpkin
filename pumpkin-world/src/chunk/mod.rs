@@ -1,5 +1,5 @@
 use pumpkin_nbt::nbt_long_array;
-use pumpkin_util::math::vector2::Vector2;
+use pumpkin_util::math::{position::BlockPos, vector2::Vector2};
 use serde::{Deserialize, Serialize};
 use std::iter::repeat_with;
 use thiserror::Error;
@@ -56,14 +56,64 @@ pub enum CompressionError {
     ZstdError(std::io::Error),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
+#[repr(i32)]
+pub enum TickPriority {
+    ExtremelyHigh = -3,
+    VeryHigh = -2,
+    High = -1,
+    Normal = 0,
+    Low = 1,
+    VeryLow = 2,
+    ExtremelyLow = 3,
+}
+
+impl TickPriority {
+    pub fn values() -> [TickPriority; 7] {
+        [
+            TickPriority::ExtremelyHigh,
+            TickPriority::VeryHigh,
+            TickPriority::High,
+            TickPriority::Normal,
+            TickPriority::Low,
+            TickPriority::VeryLow,
+            TickPriority::ExtremelyLow,
+        ]
+    }
+}
+
+impl From<i32> for TickPriority {
+    fn from(value: i32) -> Self {
+        match value {
+            -3 => TickPriority::ExtremelyHigh,
+            -2 => TickPriority::VeryHigh,
+            -1 => TickPriority::High,
+            0 => TickPriority::Normal,
+            1 => TickPriority::Low,
+            2 => TickPriority::VeryLow,
+            3 => TickPriority::ExtremelyLow,
+            _ => panic!("Invalid tick priority: {}", value),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduledTick {
+    pub block_pos: BlockPos,
+    pub delay: u16,
+    pub priority: TickPriority,
+    pub target_block_id: u16,
+}
+
 pub struct ChunkData {
     /// See description in [`ChunkBlocks`]
-    pub blocks: ChunkBlocks,
+    pub sections: ChunkBlocks,
     /// See `https://minecraft.wiki/w/Heightmap` for more info
     pub heightmap: ChunkHeightmaps,
     pub position: Vector2<i32>,
     pub dirty: bool,
+    pub block_ticks: Vec<ScheduledTick>,
+    pub fluid_ticks: Vec<ScheduledTick>,
 }
 
 /// Represents pure block data for a chunk.
@@ -96,9 +146,9 @@ pub enum SubchunkBlocks {
 #[serde(rename_all = "UPPERCASE")]
 pub struct ChunkHeightmaps {
     #[serde(serialize_with = "nbt_long_array")]
-    motion_blocking: Box<[i64]>,
+    pub world_surface: Box<[i64]>,
     #[serde(serialize_with = "nbt_long_array")]
-    world_surface: Box<[i64]>,
+    pub motion_blocking: Box<[i64]>,
 }
 
 /// The Heightmap for a completely empty chunk
@@ -233,13 +283,13 @@ impl ChunkBlocks {
 impl ChunkData {
     /// Gets the given block in the chunk
     pub fn get_block(&self, position: ChunkRelativeBlockCoordinates) -> Option<u16> {
-        self.blocks.get_block(position)
+        self.sections.get_block(position)
     }
 
     /// Sets the given block in the chunk, returning the old block
     pub fn set_block(&mut self, position: ChunkRelativeBlockCoordinates, block_id: u16) {
         // TODO @LUK_ESC? update the heightmap
-        self.blocks.set_block(position, block_id);
+        self.sections.set_block(position, block_id);
     }
 
     /// Sets the given block in the chunk, returning the old block
@@ -252,7 +302,7 @@ impl ChunkData {
         position: ChunkRelativeBlockCoordinates,
         block: u16,
     ) {
-        self.blocks.set_block_no_heightmap_update(position, block);
+        self.sections.set_block_no_heightmap_update(position, block);
     }
 
     #[expect(dead_code)]
@@ -262,7 +312,6 @@ impl ChunkData {
         todo!()
     }
 }
-
 #[derive(Error, Debug)]
 pub enum ChunkParsingError {
     #[error("Failed reading chunk status {0}")]

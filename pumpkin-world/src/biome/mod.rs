@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::{cell::RefCell, sync::LazyLock};
 
 use enum_dispatch::enum_dispatch;
@@ -32,6 +33,13 @@ impl BiomeSupplier for MultiNoiseBiomeSupplier {
         let point = noise.sample(global_biome_pos.x, global_biome_pos.y, global_biome_pos.z);
         LAST_RESULT_NODE.with_borrow_mut(|last_result| BIOME_SEARCH_TREE.get(&point, last_result))
     }
+}
+
+pub fn hash_seed(seed: i64) -> i64 {
+    let mut hasher = Sha256::new();
+    hasher.update(seed.to_be_bytes());
+    let result = hasher.finalize();
+    i64::from_be_bytes(result[..8].try_into().unwrap())
 }
 
 #[cfg(test)]
