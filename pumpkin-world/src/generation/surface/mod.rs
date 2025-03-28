@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use pumpkin_data::chunk::Biome;
 use pumpkin_util::{
     math::{lerp2, vector2::Vector2, vector3::Vector3, vertical_surface_type::VerticalSurfaceType},
@@ -363,16 +365,22 @@ pub struct VerticalGradientMaterialCondition {
     random_name: String,
     true_at_and_below: YOffset,
     false_at_and_above: YOffset,
+    #[serde(skip)]
+    random_deriver: OnceLock<RandomDeriver>,
 }
 
 impl VerticalGradientMaterialCondition {
     pub fn test(&self, context: &MaterialRuleContext) -> bool {
         let true_at = self.true_at_and_below.get_y(context.min_y, context.height);
         let false_at = self.false_at_and_above.get_y(context.min_y, context.height);
-        let splitter = context
-            .random_deriver
-            .split_string(&self.random_name)
-            .next_splitter();
+
+        let splitter = self.random_deriver.get_or_init(|| {
+            context
+                .random_deriver
+                .split_string(&self.random_name)
+                .next_splitter()
+        });
+
         let block_y = context.block_pos.y;
         if block_y <= true_at as i32 {
             return true;
