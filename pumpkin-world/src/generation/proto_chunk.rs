@@ -953,6 +953,35 @@ mod test {
     }
 
     #[test]
+    fn test_no_blend_no_beard_badlands3() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_13579_-2_15.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-2, 15),
+            &BASE_NOISE_ROUTER2,
+            &RANDOM_CONFIG2,
+            surface_config,
+        );
+        chunk.populate_noise();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
+    }
+
+    #[test]
     fn test_no_blend_no_beard_surface() {
         let expected_data: Vec<u16> =
             read_data_from_file!("../../assets/no_blend_no_beard_surface_0_0.chunk");
@@ -1025,6 +1054,38 @@ mod test {
             .unwrap();
         let mut chunk = ProtoChunk::new(
             Vector2::new(-6, 11),
+            &BASE_NOISE_ROUTER2,
+            &RANDOM_CONFIG2,
+            surface_config,
+        );
+
+        chunk.populate_biomes();
+        chunk.populate_noise();
+        chunk.build_surface();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
+    }
+
+    #[test]
+    fn test_no_blend_no_beard_surface_biome_blend() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_surface_13579_-2_15.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-2, 15),
             &BASE_NOISE_ROUTER2,
             &RANDOM_CONFIG2,
             surface_config,
