@@ -934,14 +934,18 @@ mod test {
         chunk.populate_noise();
         chunk.build_surface();
 
-        assert_eq!(
-            expected_data,
-            chunk
-                .flat_block_map
-                .into_iter()
-                .map(|state| state.state_id)
-                .collect::<Vec<u16>>()
-        );
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
     }
 
     #[test]
