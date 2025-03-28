@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use serde::Deserialize;
 
 use super::{MaterialCondition, MaterialRuleContext};
@@ -54,11 +56,15 @@ impl BadLandsMaterialRule {
 #[derive(Deserialize)]
 pub struct BlockMaterialRule {
     result_state: BlockStateCodec,
+    #[serde(skip)]
+    block_state: OnceLock<Option<ChunkBlockState>>,
 }
 
 impl BlockMaterialRule {
     pub fn try_apply(&self) -> Option<ChunkBlockState> {
-        ChunkBlockState::new(&self.result_state.name)
+        *self
+            .block_state
+            .get_or_init(|| ChunkBlockState::new(&self.result_state.name))
     }
 }
 
