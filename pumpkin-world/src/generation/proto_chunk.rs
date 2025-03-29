@@ -1,4 +1,5 @@
 use pumpkin_data::chunk::Biome;
+use pumpkin_macros::block_state;
 use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
 
 use crate::{
@@ -507,7 +508,7 @@ impl<'a> ProtoChunk<'a> {
                                 self.get_block_state(&Vector3::new(local_x, search_y, local_z));
 
                             // TODO: Is there a better way to check that its not a fluid?
-                            if !(!state.of_block(AIR_B)
+                            if !(!state.of_block(AIR_BLOCK.block_id)
                                 && !state.of_block(WATER_BLOCK.block_id)
                                 && !state.of_block(LAVA_BLOCK.block_id))
                             {
