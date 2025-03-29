@@ -35,11 +35,11 @@ impl BiomeSupplier for MultiNoiseBiomeSupplier {
     }
 }
 
-pub fn hash_seed(seed: i64) -> i64 {
+pub fn hash_seed(seed: u64) -> i64 {
     let mut hasher = Sha256::new();
-    hasher.update(seed.to_be_bytes());
+    hasher.update(seed.to_le_bytes());
     let result = hasher.finalize();
-    i64::from_be_bytes(result[..8].try_into().unwrap())
+    i64::from_le_bytes(result[..8].try_into().unwrap())
 }
 
 #[cfg(test)]
@@ -57,7 +57,7 @@ mod test {
         read_data_from_file,
     };
 
-    use super::{BiomeSupplier, MultiNoiseBiomeSupplier};
+    use super::{BiomeSupplier, MultiNoiseBiomeSupplier, hash_seed};
 
     #[test]
     fn test_biome_desert() {
@@ -118,5 +118,14 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_hash_seed() {
+        let hashed_seed = hash_seed(0);
+        assert_eq!(8794265229978523055, hashed_seed);
+
+        let hashed_seed = hash_seed((-777i64) as u64);
+        assert_eq!(-1087248400229165450, hashed_seed);
     }
 }

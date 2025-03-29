@@ -2,7 +2,7 @@ use pumpkin_data::chunk::Biome;
 use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
 
 use crate::{
-    biome::{BiomeSupplier, MultiNoiseBiomeSupplier},
+    biome::{BiomeSupplier, MultiNoiseBiomeSupplier, hash_seed},
     block::{ChunkBlockState, registry::get_state_by_state_id},
     chunk::CHUNK_AREA,
     generation::{biome, positions::chunk_pos},
@@ -91,9 +91,12 @@ pub struct ProtoChunk<'a> {
     random_config: &'a GlobalRandomConfig,
     settings: &'a GenerationSettings,
     default_block: ChunkBlockState,
+    biome_mixer_seed: i64,
     // These are local positions
     flat_block_map: Box<[ChunkBlockState]>,
     flat_biome_map: Box<[Biome]>,
+    /// Top block that is not air
+    flat_height_map: Box<[i32]>,
     // may want to use chunk status
 }
 
@@ -172,7 +175,35 @@ impl<'a> ProtoChunk<'a> {
                     * biome_coords::from_block(height as usize)
             ]
             .into_boxed_slice(),
+            flat_height_map: vec![i32::MIN; CHUNK_AREA].into_boxed_slice(),
+            biome_mixer_seed: hash_seed(random_config.seed),
         }
+    }
+
+    pub fn generation_settings(&self) -> &GenerationSettings {
+        self.settings
+    }
+
+    fn maybe_update_height_map(&mut self, pos: &Vector3<i32>) {
+        let local_x = (pos.x & 15) as usize;
+        let local_z = (pos.z & 15) as usize;
+        let index = Self::local_position_to_height_map_index(local_x, local_z);
+        let current_height = self.flat_height_map[index];
+
+        if pos.y > current_height {
+            self.flat_height_map[index] = pos.y;
+        }
+    }
+
+    pub fn top_block_height_exclusive(&self, pos: &Vector2<i32>) -> i32 {
+        let local_x = (pos.x & 15) as usize;
+        let local_z = (pos.z & 15) as usize;
+        let index = Self::local_position_to_height_map_index(local_x, local_z);
+        self.flat_height_map[index] + 1
+    }
+
+    fn local_position_to_height_map_index(x: usize, z: usize) -> usize {
+        x * CHUNK_DIM as usize + z
     }
 
     #[inline]
@@ -218,8 +249,11 @@ impl<'a> ProtoChunk<'a> {
         self.flat_block_map[index]
     }
 
-    #[inline]
     pub fn set_block_state(&mut self, local_pos: &Vector3<i32>, block_state: ChunkBlockState) {
+        if !block_state.is_air() {
+            self.maybe_update_height_map(local_pos);
+        }
+
         let local_pos = Vector3::new(
             local_pos.x & 15,
             local_pos.y - self.bottom_y() as i32,
@@ -381,7 +415,7 @@ impl<'a> ProtoChunk<'a> {
         let seed_biome_pos = biome::get_biome_blend(
             self.bottom_y(),
             self.height(),
-            self.random_config.seed,
+            self.biome_mixer_seed,
             global_block_pos,
         );
         self.get_biome(&seed_biome_pos)
@@ -407,16 +441,8 @@ impl<'a> ProtoChunk<'a> {
                 let x = start_x + local_x;
                 let z = start_z + local_z;
 
-                // TODO: use heightmaps
-                let top_y = self.top_y() as i32;
-                let mut top_block = i32::MIN;
-                for y in (self.bottom_y() as i32..top_y).rev() {
-                    let state = self.get_block_state(&Vector3::new(local_x, y, local_z));
-                    if !state.is_air() {
-                        top_block = y + 1;
-                        break;
-                    }
-                }
+                let mut top_block =
+                    self.top_block_height_exclusive(&Vector2::new(local_x, local_z));
 
                 let biome_y = if self.settings.legacy_random_source {
                     0
@@ -435,14 +461,7 @@ impl<'a> ProtoChunk<'a> {
                     );
                     // Get the top block again if we placed a pillar!
 
-                    //TODO: Validate that we can only add to the height
-                    for y in (top_block..top_y).rev() {
-                        let state = self.get_block_state(&Vector3::new(local_x, y, local_z));
-                        if !state.is_air() {
-                            top_block = y + 1;
-                            break;
-                        }
-                    }
+                    top_block = self.top_block_height_exclusive(&Vector2::new(local_x, local_z));
                 }
 
                 context.init_horizontal(x, z);
@@ -497,10 +516,7 @@ impl<'a> ProtoChunk<'a> {
 
                     if state.id == self.default_block.state_id {
                         context.biome = self.get_biome_for_terrain_gen(&context.block_pos);
-                        let new_state = self
-                            .settings
-                            .surface_rule
-                            .try_apply(&mut context, &mut self.surface_height_estimate_sampler);
+                        let new_state = self.settings.surface_rule.try_apply(self, &mut context);
 
                         if let Some(state) = new_state {
                             self.set_block_state(&pos, state);
@@ -1054,6 +1070,38 @@ mod test {
             .unwrap();
         let mut chunk = ProtoChunk::new(
             Vector2::new(-6, 11),
+            &BASE_NOISE_ROUTER2,
+            &RANDOM_CONFIG2,
+            surface_config,
+        );
+
+        chunk.populate_biomes();
+        chunk.populate_noise();
+        chunk.build_surface();
+
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
+    }
+
+    #[test]
+    fn test_no_blend_no_beard_surface_badlands3() {
+        let expected_data: Vec<u16> =
+            read_data_from_file!("../../assets/no_blend_no_beard_surface_13579_-7_9.chunk");
+        let surface_config = GENERATION_SETTINGS
+            .get(&GeneratorSetting::Overworld)
+            .unwrap();
+        let mut chunk = ProtoChunk::new(
+            Vector2::new(-7, 9),
             &BASE_NOISE_ROUTER2,
             &RANDOM_CONFIG2,
             surface_config,
