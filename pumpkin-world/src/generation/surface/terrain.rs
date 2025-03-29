@@ -185,7 +185,7 @@ impl SurfaceTerrainBuilder {
     pub fn place_iceberg(
         &self,
         chunk: &mut ProtoChunk,
-        biome: Biome,
+        biome: &Biome,
         x: i32,
         z: i32,
         estimated_surface_y: i32,
@@ -217,7 +217,7 @@ impl SurfaceTerrainBuilder {
 
             // TODO: Cache this
             let pos = Vector3::new(x, sea_level, z);
-            let temperature = biome.weather().compute_temperature(&pos, sea_level);
+            let temperature = biome.weather.compute_temperature(&pos, sea_level);
             if temperature > 0.1f32 {
                 block_threshold -= 2.0;
             }

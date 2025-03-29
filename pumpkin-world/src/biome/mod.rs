@@ -21,7 +21,7 @@ thread_local! {
 
 #[enum_dispatch]
 pub trait BiomeSupplier {
-    fn biome(at: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> Biome;
+    fn biome(at: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> &'static Biome;
 }
 
 pub struct MultiNoiseBiomeSupplier;
@@ -29,7 +29,7 @@ pub struct MultiNoiseBiomeSupplier;
 // TODO: Add Nether & End supplier
 
 impl BiomeSupplier for MultiNoiseBiomeSupplier {
-    fn biome(global_biome_pos: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> Biome {
+    fn biome(global_biome_pos: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> &'static Biome {
         let point = noise.sample(global_biome_pos.x, global_biome_pos.y, global_biome_pos.z);
         LAST_RESULT_NODE.with_borrow_mut(|last_result| BIOME_SEARCH_TREE.get(&point, last_result))
     }
@@ -71,7 +71,7 @@ mod test {
             &pumpkin_util::math::vector3::Vector3 { x: -24, y: 1, z: 8 },
             &mut sampler,
         );
-        assert_eq!(biome, Biome::Desert)
+        assert_eq!(biome, &Biome::DESERT)
     }
 
     #[test]
@@ -80,7 +80,7 @@ mod test {
         struct BiomeData {
             x: i32,
             z: i32,
-            data: Vec<(i32, i32, i32, u16)>,
+            data: Vec<(i32, i32, i32, u8)>,
         }
 
         let expected_data: Vec<BiomeData> =
@@ -106,7 +106,7 @@ mod test {
 
                 assert_eq!(
                     biome_id,
-                    calculated_biome.to_id(),
+                    calculated_biome.id,
                     "Expected {:?} was {:?} at {},{},{} ({},{})",
                     Biome::from_id(biome_id),
                     calculated_biome,

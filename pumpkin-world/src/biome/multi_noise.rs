@@ -59,7 +59,7 @@ impl ParameterRange {
 pub enum BiomeTree {
     Leaf {
         parameters: [ParameterRange; 7],
-        biome: Biome,
+        biome: &'static Biome,
     },
     Branch {
         parameters: [ParameterRange; 7],
@@ -73,13 +73,13 @@ impl BiomeTree {
         &'a self,
         point: &NoiseValuePoint,
         previous_result_node: &mut Option<&'a BiomeTree>,
-    ) -> Biome {
+    ) -> &'static Biome {
         let point_as_list = point.convert_to_list();
         let result_node = self.get_resulting_node(&point_as_list, *previous_result_node);
         match result_node {
             BiomeTree::Leaf { biome, .. } => {
                 *previous_result_node = Some(result_node);
-                *biome
+                biome
             }
             _ => unreachable!(),
         }
@@ -183,7 +183,7 @@ mod test {
 
     #[test]
     fn test_sample_multinoise_biome() {
-        let expected_data: Vec<(i32, i32, i32, u16)> =
+        let expected_data: Vec<(i32, i32, i32, u8)> =
             read_data_from_file!("../../assets/multi_noise_biome_source_test.json");
 
         let seed = 0;
@@ -202,7 +202,7 @@ mod test {
 
             assert_eq!(
                 biome_id,
-                calculated_biome.to_id(),
+                calculated_biome.id,
                 "Expected {:?} was {:?} at {},{},{}",
                 Biome::from_id(biome_id),
                 calculated_biome,

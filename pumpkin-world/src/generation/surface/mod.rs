@@ -8,6 +8,7 @@ use pumpkin_util::{
     random::{RandomDeriver, RandomDeriverImpl, RandomImpl},
 };
 use serde::Deserialize;
+
 use terrain::SurfaceTerrainBuilder;
 
 use crate::{
@@ -33,7 +34,7 @@ pub struct MaterialRuleContext<'a> {
     pub random_deriver: &'a RandomDeriver,
     fluid_height: i32,
     pub block_pos: Vector3<i32>,
-    pub biome: Biome,
+    pub biome: &'a Biome,
     pub run_depth: i32,
     pub secondary_depth: f64,
     noise_builder: DoublePerlinNoiseBuilder<'a>,
@@ -72,7 +73,7 @@ impl<'a> MaterialRuleContext<'a> {
             terrain_builder,
             fluid_height: 0,
             block_pos: Vector3::new(0, 0, 0),
-            biome: Biome::Plains,
+            biome: &Biome::PLAINS,
             run_depth: 0,
             secondary_depth: 0.0,
             surface_noise: noise_builder.get_noise_sampler_for_id("surface"),
@@ -168,7 +169,7 @@ impl MaterialCondition {
             MaterialCondition::Temperature => {
                 let temperature = context
                     .biome
-                    .weather()
+                    .weather
                     .compute_temperature(&context.block_pos, chunk.generation_settings().sea_level);
                 temperature < 0.15f32
             }
@@ -306,7 +307,7 @@ pub fn estimate_surface_height(
 
 #[derive(Deserialize)]
 pub struct BiomeMaterialCondition {
-    biome_is: Vec<Biome>,
+    biome_is: Box<[&'static Biome]>,
 }
 
 impl BiomeMaterialCondition {

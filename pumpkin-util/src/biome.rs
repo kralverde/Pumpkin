@@ -55,6 +55,7 @@ impl TemperatureModifier {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Weather {
     #[allow(dead_code)]
     has_precipitation: bool,

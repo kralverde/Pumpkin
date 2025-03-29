@@ -27,6 +27,10 @@ use super::{
     surface::{MaterialRuleContext, estimate_surface_height, terrain::SurfaceTerrainBuilder},
 };
 
+const AIR_BLOCK: ChunkBlockState = block_state!("air");
+const CAVE_AIR_BLOCK: ChunkBlockState = block_state!("cave_air");
+const VOID_AIR_BLOCK: ChunkBlockState = block_state!("void_air");
+
 pub struct StandardChunkFluidLevelSampler {
     top_fluid: FluidLevel,
     bottom_fluid: FluidLevel,
@@ -94,7 +98,7 @@ pub struct ProtoChunk<'a> {
     biome_mixer_seed: i64,
     // These are local positions
     flat_block_map: Box<[ChunkBlockState]>,
-    flat_biome_map: Box<[Biome]>,
+    flat_biome_map: Box<[&'static Biome]>,
     /// Top block that is not air
     flat_height_map: Box<[i32]>,
     // may want to use chunk status
@@ -169,7 +173,7 @@ impl<'a> ProtoChunk<'a> {
             flat_block_map: vec![ChunkBlockState::AIR; CHUNK_AREA * height as usize]
                 .into_boxed_slice(),
             flat_biome_map: vec![
-                Biome::Plains;
+                &Biome::PLAINS;
                 biome_coords::from_block(CHUNK_DIM as usize)
                     * biome_coords::from_block(CHUNK_DIM as usize)
                     * biome_coords::from_block(height as usize)
@@ -250,7 +254,10 @@ impl<'a> ProtoChunk<'a> {
     }
 
     pub fn set_block_state(&mut self, local_pos: &Vector3<i32>, block_state: ChunkBlockState) {
-        if !block_state.is_air() {
+        if !(block_state.of_block(AIR_BLOCK.block_id)
+            || block_state.of_block(CAVE_AIR_BLOCK.block_id)
+            || block_state.of_block(VOID_AIR_BLOCK.block_id))
+        {
             self.maybe_update_height_map(local_pos);
         }
 
@@ -264,13 +271,14 @@ impl<'a> ProtoChunk<'a> {
     }
 
     #[inline]
-    pub fn get_biome(&self, global_biome_pos: &Vector3<i32>) -> Biome {
+    pub fn get_biome(&self, global_biome_pos: &Vector3<i32>) -> &'static Biome {
         let local_pos = Vector3::new(
             global_biome_pos.x & biome_coords::from_block(15),
             global_biome_pos.y - biome_coords::from_block(self.bottom_y() as i32),
             global_biome_pos.z & biome_coords::from_block(15),
         );
         let index = self.local_biome_pos_to_biome_index(&local_pos);
+
         self.flat_biome_map[index]
     }
 
@@ -411,13 +419,14 @@ impl<'a> ProtoChunk<'a> {
         }
     }
 
-    fn get_biome_for_terrain_gen(&self, global_block_pos: &Vector3<i32>) -> Biome {
+    fn get_biome_for_terrain_gen(&self, global_block_pos: &Vector3<i32>) -> &'static Biome {
         let seed_biome_pos = biome::get_biome_blend(
             self.bottom_y(),
             self.height(),
             self.biome_mixer_seed,
             global_block_pos,
         );
+
         self.get_biome(&seed_biome_pos)
     }
 
@@ -451,7 +460,7 @@ impl<'a> ProtoChunk<'a> {
                 };
 
                 let this_biome = self.get_biome_for_terrain_gen(&Vector3::new(x, biome_y, z));
-                if this_biome == Biome::ErodedBadlands {
+                if this_biome == &Biome::ERODED_BADLANDS {
                     terrain_builder.place_badlands_pillar(
                         self,
                         x,
@@ -498,7 +507,7 @@ impl<'a> ProtoChunk<'a> {
                                 self.get_block_state(&Vector3::new(local_x, search_y, local_z));
 
                             // TODO: Is there a better way to check that its not a fluid?
-                            if !(!state.is_air()
+                            if !(!state.of_block(AIR_B)
                                 && !state.of_block(WATER_BLOCK.block_id)
                                 && !state.of_block(LAVA_BLOCK.block_id))
                             {
@@ -523,8 +532,7 @@ impl<'a> ProtoChunk<'a> {
                         }
                     }
                 }
-
-                if this_biome == Biome::FrozenOcean || this_biome == Biome::DeepFrozenOcean {
+                if this_biome == &Biome::FROZEN_OCEAN || this_biome == &Biome::DEEP_FROZEN_OCEAN {
                     let surface_estimate = estimate_surface_height(
                         &mut context,
                         &mut self.surface_height_estimate_sampler,
