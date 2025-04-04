@@ -7,7 +7,6 @@ use pumpkin_protocol::{
         config::{CConfigAddResourcePack, CConfigServerLinks, CKnownPacks, CUpdateTags},
         login::{CLoginSuccess, CSetCompression},
     },
-    codec::var_int::VarInt,
     server::login::{SEncryptionResponse, SLoginCookieResponse, SLoginPluginResponse, SLoginStart},
 };
 use pumpkin_util::text::TextComponent;
@@ -340,15 +339,11 @@ impl Client {
         self.send_packet_now(&server.get_branding()).await;
 
         if advanced_config().server_links.enabled {
-            self.send_packet_now(&CConfigServerLinks::new(
-                &VarInt(LINKS.len() as i32),
-                &LINKS,
-            ))
-            .await;
+            self.send_packet_now(&CConfigServerLinks::new(&LINKS)).await;
         }
 
-        // TODO: Is this the right place to send them?
         // Send tags.
+        // TODO: Is this the right place to send them?
 
         self.send_packet_now(&CUpdateTags::new(&[
             pumpkin_data::tag::RegistryKey::Block,

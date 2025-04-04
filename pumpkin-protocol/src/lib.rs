@@ -383,6 +383,7 @@ pub struct Property {
     pub signature: Option<String>,
 }
 
+#[derive(Serialize)]
 pub struct KnownPack<'a> {
     pub namespace: &'a str,
     pub id: &'a str,

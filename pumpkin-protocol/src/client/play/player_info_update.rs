@@ -27,6 +27,7 @@ impl<'a> CPlayerInfoUpdate<'a> {
     }
 }
 
+// TODO: Check if we need this custom impl
 impl ClientPacket for CPlayerInfoUpdate<'_> {
     fn write_packet_data(&self, write: impl Write) -> Result<(), WritingError> {
         let mut write = write;

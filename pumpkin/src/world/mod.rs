@@ -1248,11 +1248,8 @@ impl World {
             .remove(&player.gameprofile.id)
             .unwrap();
         let uuid = player.gameprofile.id;
-        self.broadcast_packet_except(
-            &[player.gameprofile.id],
-            &CRemovePlayerInfo::new(1.into(), &[uuid]),
-        )
-        .await;
+        self.broadcast_packet_except(&[player.gameprofile.id], &CRemovePlayerInfo::new(&[uuid]))
+            .await;
         self.broadcast_packet_all(&CRemoveEntities::new(&[player.entity_id().into()]))
             .await;
 

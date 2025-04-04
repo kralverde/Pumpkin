@@ -1399,7 +1399,7 @@ impl Player {
             packet.id,
             (last_word_start + 2).into(),
             (cmd.len() - last_word_start - 1).into(),
-            suggestions,
+            suggestions.into(),
         );
 
         self.client.enqueue_packet(&response).await;
