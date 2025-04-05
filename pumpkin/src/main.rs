@@ -88,7 +88,7 @@ async fn main() {
         let profiler = dhat::Profiler::new_heap();
         let mut static_loc = HEAP_PROFILER.lock().await;
         *static_loc = Some(profiler);
-    }
+    };
 
     let time = Instant::now();
 
