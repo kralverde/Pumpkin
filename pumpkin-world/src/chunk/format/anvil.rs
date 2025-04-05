@@ -264,7 +264,7 @@ impl AnvilChunkData {
         if length > bytes.len() {
             return Err(ChunkReadingError::ParsingError(
                 ChunkParsingError::ErrorDeserializingChunk(format!(
-                    "Chunk length is greater than avaliable bytes ({} vs {})",
+                    "Chunk length is greater than available bytes ({} vs {})",
                     length,
                     bytes.len()
                 )),
@@ -588,7 +588,7 @@ impl ChunkSerializer for AnvilChunkFile {
             if bytes_offset + bytes_count > raw_file_bytes.len() {
                 return Err(ChunkReadingError::ParsingError(
                     ChunkParsingError::ErrorDeserializingChunk(format!(
-                        "Not enough bytes avaliable for the chunk {} ({} vs {})",
+                        "Not enough bytes available for the chunk {} ({} vs {})",
                         i,
                         bytes_count,
                         raw_file_bytes.len().saturating_sub(bytes_offset)

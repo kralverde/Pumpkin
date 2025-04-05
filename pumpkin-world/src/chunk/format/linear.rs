@@ -296,9 +296,9 @@ impl ChunkSerializer for LinearFile {
             if header.size != 0 {
                 let last_index = bytes_offset;
                 bytes_offset += header.size as usize;
-                if bytes_offset >= buffer.len() {
+                if bytes_offset > buffer.len() {
                     log::warn!(
-                        "Not enough bytes are avaliable for chunk {} ({} vs {})",
+                        "Not enough bytes are available for chunk {} ({} vs {})",
                         i,
                         header.size,
                         buffer.len() - last_index
