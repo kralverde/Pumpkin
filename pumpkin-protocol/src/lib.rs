@@ -11,7 +11,6 @@ use ser::{NetworkWriteExt, ReadingError, WritingError, packet::Packet};
 use serde::{
     Deserialize, Serialize, Serializer,
     de::{DeserializeSeed, Visitor},
-    ser::SerializeSeq,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -172,10 +171,16 @@ impl<T: Serialize> Serialize for IdOr<T> {
         match self {
             IdOr::Id(id) => VarInt::from(*id + 1).serialize(serializer),
             IdOr::Value(value) => {
-                let mut seq = serializer.serialize_seq(None)?;
-                seq.serialize_element(&VarInt::from(0))?;
-                seq.serialize_element(value)?;
-                seq.end()
+                #[derive(Serialize)]
+                struct NetworkRepr<T: Serialize> {
+                    zero_id: VarInt,
+                    value: T,
+                }
+                NetworkRepr {
+                    zero_id: 0.into(),
+                    value,
+                }
+                .serialize(serializer)
             }
         }
     }
