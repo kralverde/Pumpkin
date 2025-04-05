@@ -48,7 +48,7 @@ pub async fn send_c_commands_packet(player: &Arc<Player>, dispatcher: &CommandDi
     let mut proto_nodes = Vec::new();
     let root_node_index = root.build(&mut proto_nodes);
 
-    let packet = CCommands::new(proto_nodes.into(), root_node_index.into());
+    let packet = CCommands::new(proto_nodes.into(), root_node_index.try_into().unwrap());
     player.client.enqueue_packet(&packet).await;
 }
 
@@ -63,7 +63,7 @@ impl<'a> ProtoNodeBuilder<'a> {
         let mut children = Vec::new();
         for node in self.child_nodes {
             let i = node.build(buffer);
-            children.push(i.into());
+            children.push(i.try_into().unwrap());
         }
 
         let i = buffer.len();

@@ -120,23 +120,19 @@ impl<W: Write> ser::Serializer for NonPrefixedSeqSerializer<'_, W> {
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        Err(WritingError::Serde(
-            "Expected a sequence but found None!".into(),
-        ))
+        self.wrapped.serialize_none()
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
         Ok(self)
     }
 
-    fn serialize_some<T>(self, _value: &T) -> Result<Self::Ok, Self::Error>
+    fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        Err(WritingError::Serde(format!(
-            "Expected a sequence but found Some {}!",
-            stringify!(T)
-        )))
+        self.wrapped.serialize_bool(true)?;
+        value.serialize(self)
     }
 
     fn serialize_struct(
@@ -304,7 +300,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
     where
         T: ?Sized + Serialize,
     {
-        self.write.write_var_int(&variant_index.into())?;
+        self.write
+            .write_var_int(&variant_index.try_into().map_err(|_| {
+                WritingError::Message(format!("{} isn't representable as a VarInt", variant_index))
+            })?)?;
         value.serialize(self)
     }
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
@@ -317,9 +316,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
             ));
         };
 
-        // here is where all arrays/list getting written, usually we prefix the length of every length with an var int. The problem is
-        // that byte arrays also getting thrown in here, and we don't want to prefix them
-        self.write.write_var_int(&len.into())?;
+        self.write.write_var_int(&len.try_into().map_err(|_| {
+            WritingError::Message(format!("{} isn't representable as a VarInt", len))
+        })?)?;
+
         Ok(self)
     }
     fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
@@ -366,7 +366,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
         // Serialize ENUM index as varint
-        self.write.write_var_int(&variant_index.into())?;
+        self.write
+            .write_var_int(&variant_index.try_into().map_err(|_| {
+                WritingError::Message(format!("{} isn't representable as a VarInt", variant_index))
+            })?)?;
         Ok(self)
     }
     fn serialize_u128(self, _v: u128) -> Result<Self::Ok, Self::Error> {
@@ -397,7 +400,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<W> {
         _variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
         // For ENUMs, only write enum index as varint
-        self.write.write_var_int(&variant_index.into())
+        self.write
+            .write_var_int(&variant_index.try_into().map_err(|_| {
+                WritingError::Message(format!("{} isn't representable as a VarInt", variant_index))
+            })?)
     }
     fn is_human_readable(&self) -> bool {
         false

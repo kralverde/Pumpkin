@@ -246,8 +246,10 @@ impl Client {
     async fn enable_compression(&self) {
         let compression = advanced_config().networking.packet_compression.info.clone();
         // We want to wait until we have sent the compression packet to the client
-        self.send_packet_now(&CSetCompression::new(compression.threshold.into()))
-            .await;
+        self.send_packet_now(&CSetCompression::new(
+            compression.threshold.try_into().unwrap(),
+        ))
+        .await;
         self.set_compression(compression).await;
     }
 

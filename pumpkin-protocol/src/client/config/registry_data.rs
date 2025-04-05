@@ -2,7 +2,7 @@ use pumpkin_data::packet::clientbound::CONFIG_REGISTRY_DATA;
 use pumpkin_macros::packet;
 use serde::Serialize;
 
-use crate::codec::identifier::Identifier;
+use crate::{codec::identifier::Identifier, ser::network_serialize_no_prefix};
 
 #[derive(Serialize)]
 #[packet(CONFIG_REGISTRY_DATA)]
@@ -23,9 +23,11 @@ impl<'a> CRegistryData<'a> {
 #[derive(Serialize)]
 pub struct RegistryEntry {
     pub entry_id: Identifier,
+    #[serde(serialize_with = "network_serialize_no_prefix")]
     pub data: Option<Box<[u8]>>,
 }
 
+// TODO: No unwraps
 impl RegistryEntry {
     pub fn from_nbt(name: &str, nbt: &impl Serialize) -> Self {
         let mut data_buf = Vec::new();

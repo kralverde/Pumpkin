@@ -86,7 +86,7 @@ where
     {
         enum IdOrStateDeserializer<T> {
             Init,
-            Id(u32),
+            Id(u16),
             Value(T),
         }
 
@@ -104,11 +104,15 @@ where
                     IdOrStateDeserializer::Init => {
                         // Get the VarInt
                         let id = VarInt::deserialize(deserializer)?;
-                        assert!(id.0 >= 0);
-                        *self = IdOrStateDeserializer::<T>::Id(id.0 as u32);
+                        *self = IdOrStateDeserializer::<T>::Id(id.0.try_into().map_err(|_| {
+                            serde::de::Error::custom(format!(
+                                "{} cannot be mapped to a registry id",
+                                id.0
+                            ))
+                        })?);
                     }
                     IdOrStateDeserializer::Id(id) => {
-                        assert!(*id == 0);
+                        debug_assert!(*id == 0);
                         // Get the data
                         let value = T::deserialize(deserializer)?;
                         *self = IdOrStateDeserializer::Value(value);
@@ -144,7 +148,7 @@ where
 
 #[derive(PartialEq, Clone)]
 pub enum IdOr<T> {
-    Id(u32),
+    Id(u16),
     Value(T),
 }
 
