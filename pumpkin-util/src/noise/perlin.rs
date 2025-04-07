@@ -158,16 +158,18 @@ impl OctavePerlinNoiseSampler {
         self.max_value
     }
 
-    pub(crate) fn get_total_amplitude(scale: f64, persistence: f64, amplitudes: &[f64]) -> f64 {
-        let mut d = 0f64;
-        let mut e = persistence;
-
-        for amplitude in amplitudes.iter() {
-            d += amplitude * scale * e;
-            e /= 2f64;
-        }
-
-        d
+    fn get_total_amplitude_generic(scale: f64, persistences: &[f64], amplitudes: &[f64]) -> f64 {
+        amplitudes
+            .iter()
+            .zip(persistences)
+            .map(|(amplitude, persistence)| {
+                if *amplitude != 0.0 {
+                    scale * *amplitude * *persistence
+                } else {
+                    0.0
+                }
+            })
+            .sum()
     }
 
     #[inline]
@@ -204,10 +206,7 @@ impl OctavePerlinNoiseSampler {
         let i = amplitudes.len();
         let j = -first_octave;
 
-        let mut samplers: Vec<Option<PerlinNoiseSampler>> = Vec::with_capacity(i);
-        for _ in 0..i {
-            samplers.push(None);
-        }
+        let mut samplers: Box<[Option<PerlinNoiseSampler>]> = vec![None; i].into();
 
         if legacy {
             let sampler = PerlinNoiseSampler::new(random);
@@ -244,7 +243,6 @@ impl OctavePerlinNoiseSampler {
 
         let mut persistence = 2f64.powi(i as i32 - 1) / (2f64.powi(i as i32) - 1f64);
         let mut lacunarity = 2f64.powi(-j);
-        let max_value = Self::get_total_amplitude(2f64, persistence, amplitudes);
 
         let persistences: Vec<f64> = (0..amplitudes.len())
             .map(|_| {
@@ -261,13 +259,20 @@ impl OctavePerlinNoiseSampler {
             })
             .collect();
 
+        let max_value = Self::get_total_amplitude_generic(2f64, &persistences, amplitudes);
+
         Self {
-            octave_samplers: samplers.into(),
+            octave_samplers: samplers,
             amplitudes: amplitudes.into(),
             persistences: persistences.into(),
             lacunarities: lacunarities.into(),
             max_value,
         }
+    }
+
+    #[inline]
+    pub fn get_total_amplitude(&self, scale: f64) -> f64 {
+        Self::get_total_amplitude_generic(scale, &self.persistences, &self.amplitudes)
     }
 
     pub fn sample(&self, x: f64, y: f64, z: f64) -> f64 {

@@ -579,6 +579,7 @@ impl<'a> ProtoChunk<'a> {
 mod test {
     use std::sync::LazyLock;
 
+    use pumpkin_data::noise_router::{OVERWORLD_BASE_NOISE_ROUTER, WrapperType};
     use pumpkin_util::math::vector2::Vector2;
 
     use crate::{
@@ -590,7 +591,6 @@ mod test {
             },
             settings::{GENERATION_SETTINGS, GeneratorSetting},
         },
-        noise_router::{NOISE_ROUTER_ASTS, density_function_ast::WrapperType},
         read_data_from_file,
     };
 
@@ -600,14 +600,14 @@ mod test {
     static RANDOM_CONFIG: LazyLock<GlobalRandomConfig> =
         LazyLock::new(|| GlobalRandomConfig::new(SEED, false)); // TODO: use legacy when needed
     static BASE_NOISE_ROUTER: LazyLock<GlobalProtoNoiseRouter> = LazyLock::new(|| {
-        GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &RANDOM_CONFIG)
+        GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &RANDOM_CONFIG)
     });
 
     const SEED2: u64 = 13579;
     static RANDOM_CONFIG2: LazyLock<GlobalRandomConfig> =
         LazyLock::new(|| GlobalRandomConfig::new(SEED2, false)); // TODO: use legacy when needed
     static BASE_NOISE_ROUTER2: LazyLock<GlobalProtoNoiseRouter> = LazyLock::new(|| {
-        GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &RANDOM_CONFIG2)
+        GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &RANDOM_CONFIG2)
     });
 
     #[test]
@@ -625,11 +625,12 @@ mod test {
                     match wrapper.wrapper_type() {
                         WrapperType::CellCache => (),
                         _ => {
-                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
-                                input_index: wrapper.input_index(),
-                                min_value: wrapper.min(),
-                                max_value: wrapper.max(),
-                            });
+                            *component =
+                                ProtoNoiseFunctionComponent::PassThrough(PassThrough::new(
+                                    wrapper.input_index(),
+                                    wrapper.min(),
+                                    wrapper.max(),
+                                ));
                         }
                     }
                 }
@@ -673,11 +674,12 @@ mod test {
                         WrapperType::CellCache => (),
                         WrapperType::Cache2D => (),
                         _ => {
-                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
-                                input_index: wrapper.input_index(),
-                                min_value: wrapper.min(),
-                                max_value: wrapper.max(),
-                            });
+                            *component =
+                                ProtoNoiseFunctionComponent::PassThrough(PassThrough::new(
+                                    wrapper.input_index(),
+                                    wrapper.min(),
+                                    wrapper.max(),
+                                ));
                         }
                     }
                 }
@@ -721,11 +723,12 @@ mod test {
                         WrapperType::CellCache => (),
                         WrapperType::CacheFlat => (),
                         _ => {
-                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
-                                input_index: wrapper.input_index(),
-                                min_value: wrapper.min(),
-                                max_value: wrapper.max(),
-                            });
+                            *component =
+                                ProtoNoiseFunctionComponent::PassThrough(PassThrough::new(
+                                    wrapper.input_index(),
+                                    wrapper.min(),
+                                    wrapper.max(),
+                                ));
                         }
                     }
                 }
@@ -769,11 +772,12 @@ mod test {
                         WrapperType::CellCache => (),
                         WrapperType::CacheOnce => (),
                         _ => {
-                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
-                                input_index: wrapper.input_index(),
-                                min_value: wrapper.min(),
-                                max_value: wrapper.max(),
-                            });
+                            *component =
+                                ProtoNoiseFunctionComponent::PassThrough(PassThrough::new(
+                                    wrapper.input_index(),
+                                    wrapper.min(),
+                                    wrapper.max(),
+                                ));
                         }
                     }
                 }
@@ -817,11 +821,12 @@ mod test {
                         WrapperType::CellCache => (),
                         WrapperType::Interpolated => (),
                         _ => {
-                            *component = ProtoNoiseFunctionComponent::PassThrough(PassThrough {
-                                input_index: wrapper.input_index(),
-                                min_value: wrapper.min(),
-                                max_value: wrapper.max(),
-                            });
+                            *component =
+                                ProtoNoiseFunctionComponent::PassThrough(PassThrough::new(
+                                    wrapper.input_index(),
+                                    wrapper.min(),
+                                    wrapper.max(),
+                                ));
                         }
                     }
                 }
@@ -913,14 +918,18 @@ mod test {
         );
         chunk.populate_noise();
 
-        assert_eq!(
-            expected_data,
-            chunk
-                .flat_block_map
-                .into_iter()
-                .map(|state| state.state_id)
-                .collect::<Vec<u16>>()
-        );
+        expected_data
+            .into_iter()
+            .zip(chunk.flat_block_map)
+            .enumerate()
+            .for_each(|(index, (expected, actual))| {
+                if expected != actual.state_id {
+                    panic!(
+                        "expected {}, was {} (at {})",
+                        expected, actual.state_id, index
+                    );
+                }
+            });
     }
 
     #[test]

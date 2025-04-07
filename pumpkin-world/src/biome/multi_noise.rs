@@ -139,12 +139,12 @@ impl BiomeTree {
 
 #[cfg(test)]
 mod test {
-    use pumpkin_data::chunk::Biome;
+    use pumpkin_data::{chunk::Biome, noise_router::OVERWORLD_BASE_NOISE_ROUTER};
     use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
 
     use crate::{
         GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
-        NOISE_ROUTER_ASTS, ProtoChunk,
+        ProtoChunk,
         biome::{BiomeSupplier, MultiNoiseBiomeSupplier},
         generation::noise_router::multi_noise_sampler::{
             MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
@@ -162,7 +162,7 @@ mod test {
         let chunk_pos = Vector2::new(0, 0);
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_rounter =
-            GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
 
         let surface_config = GENERATION_SETTINGS
             .get(&GeneratorSetting::Overworld)
@@ -189,7 +189,7 @@ mod test {
         let seed = 0;
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_router =
-            GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
 
         let mut sampler = MultiNoiseSampler::generate(
             &noise_router,

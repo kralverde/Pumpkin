@@ -44,13 +44,13 @@ pub fn hash_seed(seed: u64) -> i64 {
 
 #[cfg(test)]
 mod test {
-    use pumpkin_data::chunk::Biome;
+    use pumpkin_data::{chunk::Biome, noise_router::OVERWORLD_BASE_NOISE_ROUTER};
     use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
     use serde::Deserialize;
 
     use crate::{
         GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
-        NOISE_ROUTER_ASTS, ProtoChunk,
+        ProtoChunk,
         chunk::palette::BIOME_NETWORK_MAX_BITS,
         generation::noise_router::multi_noise_sampler::{
             MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
@@ -65,7 +65,7 @@ mod test {
         let seed = 13579;
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_rounter =
-            GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
         let multi_noise_config = MultiNoiseSamplerBuilderOptions::new(1, 1, 1);
         let mut sampler = MultiNoiseSampler::generate(&noise_rounter, &multi_noise_config);
         let biome = MultiNoiseBiomeSupplier::biome(
@@ -90,7 +90,7 @@ mod test {
         let seed = 0;
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_router =
-            GlobalProtoNoiseRouter::generate(&NOISE_ROUTER_ASTS.overworld, &random_config);
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
         let surface_settings = GENERATION_SETTINGS
             .get(&GeneratorSetting::Overworld)
             .unwrap();

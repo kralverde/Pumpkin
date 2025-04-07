@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use pumpkin_data::noise_router::WrapperType;
 use pumpkin_util::math::vector2::Vector2;
 
 use crate::{
     GlobalProtoNoiseRouter,
     generation::{biome_coords, positions::chunk_pos},
-    noise_router::density_function_ast::WrapperType,
 };
 
 use super::{
@@ -120,31 +120,25 @@ impl<'a> SurfaceHeightEstimateSampler<'a> {
                     ChunkNoiseFunctionComponent::Independent(independent)
                 }
                 ProtoNoiseFunctionComponent::PassThrough(pass_through) => {
-                    let min_value = component_stack[pass_through.input_index].min();
-                    let max_value = component_stack[pass_through.input_index].max();
-                    ChunkNoiseFunctionComponent::PassThrough(PassThrough {
-                        input_index: pass_through.input_index,
-                        max_value,
-                        min_value,
-                    })
+                    ChunkNoiseFunctionComponent::PassThrough(pass_through.clone())
                 }
                 ProtoNoiseFunctionComponent::Wrapper(wrapper) => {
                     //NOTE: Due to our previous invariant with the proto-function, it is guaranteed
                     // that the wrapped function is already on the stack
-                    let min_value = component_stack[wrapper.input_index].min();
-                    let max_value = component_stack[wrapper.input_index].max();
+                    let min_value = component_stack[wrapper.input_index()].min();
+                    let max_value = component_stack[wrapper.input_index()].max();
 
-                    match wrapper.wrapper_type {
+                    match wrapper.wrapper_type() {
                         WrapperType::Cache2D => ChunkNoiseFunctionComponent::Chunk(Box::new(
                             ChunkSpecificNoiseFunctionComponent::Cache2D(Cache2D::new(
-                                wrapper.input_index,
+                                wrapper.input_index(),
                                 min_value,
                                 max_value,
                             )),
                         )),
                         WrapperType::CacheFlat => {
                             let mut flat_cache = FlatCache::new(
-                                wrapper.input_index,
+                                wrapper.input_index(),
                                 min_value,
                                 max_value,
                                 build_options.start_biome_x,
@@ -180,7 +174,7 @@ impl<'a> SurfaceHeightEstimateSampler<'a> {
                                     //NOTE: Due to our stack invariant, what is on the stack is a
                                     // valid density function
                                     let sample = ChunkNoiseFunctionComponent::sample_from_stack(
-                                        &mut component_stack[..=wrapper.input_index],
+                                        &mut component_stack[..=wrapper.input_index()],
                                         &pos,
                                         &sample_options,
                                     );
@@ -197,11 +191,11 @@ impl<'a> SurfaceHeightEstimateSampler<'a> {
                         }
                         // Java passes thru if the noise pos is not the chunk itself, which it is
                         // never for the Height estimator
-                        _ => ChunkNoiseFunctionComponent::PassThrough(PassThrough {
-                            input_index: wrapper.input_index,
+                        _ => ChunkNoiseFunctionComponent::PassThrough(PassThrough::new(
+                            wrapper.input_index(),
                             min_value,
                             max_value,
-                        }),
+                        )),
                     }
                 }
             };

@@ -648,6 +648,7 @@ pub trait AquiferSamplerImpl {
 mod test {
     use std::{mem, sync::LazyLock};
 
+    use pumpkin_data::noise_router::OVERWORLD_BASE_NOISE_ROUTER;
     use pumpkin_util::math::vector2::Vector2;
 
     use crate::{
@@ -671,7 +672,6 @@ mod test {
             proto_chunk::StandardChunkFluidLevelSampler,
             settings::{GENERATION_SETTINGS, GeneratorSetting},
         },
-        noise_router::NOISE_ROUTER_ASTS,
     };
 
     use super::{AquiferSampler, FluidLevel, FluidLevelSampler, WorldAquiferSampler};
@@ -680,7 +680,7 @@ mod test {
     static RANDOM_CONFIG: LazyLock<GlobalRandomConfig> =
         LazyLock::new(|| GlobalRandomConfig::new(SEED, false));
     static PROTO_ROUTER: LazyLock<GlobalProtoNoiseRouter> = LazyLock::new(|| {
-        let router_ast = NOISE_ROUTER_ASTS.overworld();
+        let router_ast = &OVERWORLD_BASE_NOISE_ROUTER;
         GlobalProtoNoiseRouter::generate(router_ast, &RANDOM_CONFIG)
     });
 

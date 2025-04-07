@@ -11,7 +11,6 @@ mod generation;
 pub mod item;
 pub mod level;
 mod lock;
-mod noise_router;
 pub mod world_info;
 
 #[macro_export]
@@ -43,7 +42,6 @@ pub use generation::{
     GlobalRandomConfig, noise_router::proto_noise_router::GlobalProtoNoiseRouter,
     proto_chunk::ProtoChunk, settings::GENERATION_SETTINGS, settings::GeneratorSetting,
 };
-pub use noise_router::NOISE_ROUTER_ASTS;
 
 pub fn bench_create_and_populate_noise(
     base_router: &GlobalProtoNoiseRouter,

@@ -1,6 +1,7 @@
 use enum_dispatch::enum_dispatch;
+use pumpkin_data::noise_router::WrapperType;
 
-use crate::{generation::biome_coords, noise_router::density_function_ast::WrapperType};
+use crate::generation::biome_coords;
 
 use super::{
     chunk_density_function::{
@@ -111,7 +112,7 @@ impl MutableChunkNoiseFunctionComponentImpl for ChunkNoiseFunctionComponent<'_> 
             Self::Dependent(dependent) => dependent.sample(component_stack, pos, sample_options),
             Self::Chunk(chunk) => chunk.sample(component_stack, pos, sample_options),
             Self::PassThrough(pass_through) => ChunkNoiseFunctionComponent::sample_from_stack(
-                &mut component_stack[..=pass_through.input_index],
+                &mut component_stack[..=pass_through.input_index()],
                 pos,
                 sample_options,
             ),
@@ -134,7 +135,7 @@ impl MutableChunkNoiseFunctionComponentImpl for ChunkNoiseFunctionComponent<'_> 
             }
             Self::Chunk(chunk) => chunk.fill(component_stack, array, mapper, sample_options),
             Self::PassThrough(pass_through) => ChunkNoiseFunctionComponent::fill_from_stack(
-                &mut component_stack[..=pass_through.input_index],
+                &mut component_stack[..=pass_through.input_index()],
                 array,
                 mapper,
                 sample_options,
@@ -283,27 +284,24 @@ impl<'a> ChunkNoiseRouter<'a> {
                     ChunkNoiseFunctionComponent::Independent(independent)
                 }
                 ProtoNoiseFunctionComponent::PassThrough(pass_through) => {
-                    let min_value = component_stack[pass_through.input_index].min();
-                    let max_value = component_stack[pass_through.input_index].max();
-                    ChunkNoiseFunctionComponent::PassThrough(PassThrough {
-                        input_index: pass_through.input_index,
-                        max_value,
-                        min_value,
-                    })
+                    ChunkNoiseFunctionComponent::PassThrough(pass_through.clone())
                 }
                 ProtoNoiseFunctionComponent::Wrapper(wrapper) => {
                     //NOTE: Due to our previous invariant with the proto-function, it is guaranteed
                     // that the wrapped function is already on the stack
-                    let min_value = component_stack[wrapper.input_index].min();
-                    let max_value = component_stack[wrapper.input_index].max();
 
-                    match wrapper.wrapper_type {
+                    // NOTE: Current wrapped functions do not give different values than what they
+                    // wrap. If they do, maxs and mins need to be changed here
+                    let min_value = component_stack[wrapper.input_index()].min();
+                    let max_value = component_stack[wrapper.input_index()].max();
+
+                    match wrapper.wrapper_type() {
                         WrapperType::Interpolated => {
                             interpolator_indices.push(component_index);
                             ChunkNoiseFunctionComponent::Chunk(Box::new(
                                 ChunkSpecificNoiseFunctionComponent::DensityInterpolator(
                                     DensityInterpolator::new(
-                                        wrapper.input_index,
+                                        wrapper.input_index(),
                                         min_value,
                                         max_value,
                                         build_options,
@@ -315,7 +313,7 @@ impl<'a> ChunkNoiseRouter<'a> {
                             cell_cache_indices.push(component_index);
                             ChunkNoiseFunctionComponent::Chunk(Box::new(
                                 ChunkSpecificNoiseFunctionComponent::CellCache(CellCache::new(
-                                    wrapper.input_index,
+                                    wrapper.input_index(),
                                     min_value,
                                     max_value,
                                     build_options,
@@ -324,21 +322,21 @@ impl<'a> ChunkNoiseRouter<'a> {
                         }
                         WrapperType::CacheOnce => ChunkNoiseFunctionComponent::Chunk(Box::new(
                             ChunkSpecificNoiseFunctionComponent::CacheOnce(CacheOnce::new(
-                                wrapper.input_index,
+                                wrapper.input_index(),
                                 min_value,
                                 max_value,
                             )),
                         )),
                         WrapperType::Cache2D => ChunkNoiseFunctionComponent::Chunk(Box::new(
                             ChunkSpecificNoiseFunctionComponent::Cache2D(Cache2D::new(
-                                wrapper.input_index,
+                                wrapper.input_index(),
                                 min_value,
                                 max_value,
                             )),
                         )),
                         WrapperType::CacheFlat => {
                             let mut flat_cache = FlatCache::new(
-                                wrapper.input_index,
+                                wrapper.input_index(),
                                 min_value,
                                 max_value,
                                 build_options.start_biome_x,
@@ -374,7 +372,7 @@ impl<'a> ChunkNoiseRouter<'a> {
                                     //NOTE: Due to our stack invariant, what is on the stack is a
                                     // valid density function
                                     let sample = ChunkNoiseFunctionComponent::sample_from_stack(
-                                        &mut component_stack[..=wrapper.input_index],
+                                        &mut component_stack[..=wrapper.input_index()],
                                         &pos,
                                         &sample_options,
                                     );

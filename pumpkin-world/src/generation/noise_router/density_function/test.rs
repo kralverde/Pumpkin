@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::generation::GlobalRandomConfig;
+use crate::generation::noise_router::chunk_density_function::ChunkNoiseFunctionBuilderOptions;
 use crate::generation::noise_router::chunk_density_function::{
     ChunkNoiseFunctionSampleOptions, SampleAction,
 };
@@ -13,14 +14,9 @@ use crate::generation::noise_router::chunk_noise_router::{
     ChunkNoiseDensityFunction, ChunkNoiseFunctionComponent,
 };
 use crate::generation::noise_router::proto_noise_router::{
-    DoublePerlinNoiseBuilder, ProtoNoiseFunctionComponent, recursive_build_proto_stack,
+    DoublePerlinNoiseBuilder, ProtoNoiseFunctionComponent,
 };
-use crate::noise_router::NOISE_ROUTER_ASTS;
 use crate::read_data_from_file;
-use crate::{
-    generation::noise_router::chunk_density_function::ChunkNoiseFunctionBuilderOptions,
-    noise_router::density_function_ast::DensityFunctionRepr,
-};
 
 use super::{NoisePos, PassThrough};
 
@@ -107,11 +103,14 @@ const TEST_SAMPLE_OPTIONS: ChunkNoiseFunctionSampleOptions =
 
 macro_rules! sample_router_function {
     ($name:ident, $pos: expr) => {{
+        todo!();
+        /*
         let function_ast = NOISE_ROUTER_ASTS.overworld().$name();
         let proto_stack = build_proto_stack!(function_ast);
         let mut stack = build_function_stack!(proto_stack);
         let mut function = build_function!(stack);
         function.sample(&$pos, &TEST_SAMPLE_OPTIONS)
+        */
     }};
 }
 
