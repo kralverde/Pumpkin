@@ -616,7 +616,8 @@ mod test {
         let expected_data: Vec<u16> =
             read_data_from_file!("../../assets/no_blend_no_beard_only_cell_cache_0_0.chunk");
 
-        let mut base_router = BASE_NOISE_ROUTER.clone();
+        let mut base_router =
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &RANDOM_CONFIG);
         base_router
             .component_stack
             .iter_mut()
@@ -664,7 +665,8 @@ mod test {
         let expected_data: Vec<u16> =
             read_data_from_file!("../../assets/no_blend_no_beard_only_cell_cache_0_0.chunk");
 
-        let mut base_router = BASE_NOISE_ROUTER.clone();
+        let mut base_router =
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &RANDOM_CONFIG);
         base_router
             .component_stack
             .iter_mut()
@@ -713,7 +715,8 @@ mod test {
             "../../assets/no_blend_no_beard_only_cell_cache_flat_cache_0_0.chunk"
         );
 
-        let mut base_router = BASE_NOISE_ROUTER.clone();
+        let mut base_router =
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &RANDOM_CONFIG);
         base_router
             .component_stack
             .iter_mut()
@@ -762,7 +765,8 @@ mod test {
             "../../assets/no_blend_no_beard_only_cell_cache_once_cache_0_0.chunk"
         );
 
-        let mut base_router = BASE_NOISE_ROUTER.clone();
+        let mut base_router =
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &RANDOM_CONFIG);
         base_router
             .component_stack
             .iter_mut()
@@ -811,7 +815,8 @@ mod test {
             "../../assets/no_blend_no_beard_only_cell_cache_interpolated_0_0.chunk"
         );
 
-        let mut base_router = BASE_NOISE_ROUTER.clone();
+        let mut base_router =
+            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &RANDOM_CONFIG);
         base_router
             .component_stack
             .iter_mut()

@@ -26,7 +26,6 @@ use super::{
     StaticIndependentChunkNoiseFunctionComponentImpl,
     NoiseFunctionComponentRange
 )]
-#[derive(Clone)]
 pub enum IndependentProtoNoiseFunctionComponent {
     Constant(Constant),
     EndIsland(EndIsland),
@@ -38,7 +37,6 @@ pub enum IndependentProtoNoiseFunctionComponent {
 }
 
 #[enum_dispatch(StaticChunkNoiseFunctionComponentImpl, NoiseFunctionComponentRange)]
-#[derive(Clone)]
 pub enum DependentProtoNoiseFunctionComponent {
     Linear(Linear),
     Unary(Unary),
@@ -51,7 +49,6 @@ pub enum DependentProtoNoiseFunctionComponent {
 }
 
 #[enum_dispatch(NoiseFunctionComponentRange)]
-#[derive(Clone)]
 pub enum ProtoNoiseFunctionComponent {
     Independent(IndependentProtoNoiseFunctionComponent),
     Dependent(DependentProtoNoiseFunctionComponent),
@@ -83,7 +80,6 @@ impl<'a> DoublePerlinNoiseBuilder<'a> {
     }
 }
 
-#[derive(Clone)]
 pub struct GlobalProtoNoiseRouter {
     pub barrier_noise: usize,
     pub fluid_level_floodedness_noise: usize,
@@ -125,14 +121,16 @@ fn build_spline_recursive(spline_repr: &SplineRepr) -> SplineValue {
 }
 
 impl GlobalProtoNoiseRouter {
-    pub fn generate(base: &BaseNoiseRouter, random_config: &GlobalRandomConfig) -> Self {
+    pub fn generate_proto_stack(
+        base_stack: &[BaseNoiseFunctionComponent],
+        random_config: &GlobalRandomConfig,
+    ) -> Box<[ProtoNoiseFunctionComponent]> {
         let mut perlin_noise_builder = DoublePerlinNoiseBuilder::new(random_config);
 
         // Contiguous memory for our function components
-        let mut stack =
-            Vec::<ProtoNoiseFunctionComponent>::with_capacity(base.full_component_stack.len());
+        let mut stack = Vec::<ProtoNoiseFunctionComponent>::with_capacity(base_stack.len());
 
-        for component in base.full_component_stack {
+        for component in base_stack {
             let converted = match component {
                 BaseNoiseFunctionComponent::Spline { spline } => {
                     let spline = match build_spline_recursive(spline) {
@@ -397,6 +395,12 @@ impl GlobalProtoNoiseRouter {
             stack.push(converted);
         }
 
+        stack.into()
+    }
+
+    pub fn generate(base: &BaseNoiseRouter, random_config: &GlobalRandomConfig) -> Self {
+        let component_stack = Self::generate_proto_stack(base.full_component_stack, random_config);
+
         Self {
             barrier_noise: base.barrier_noise,
             fluid_level_floodedness_noise: base.fluid_level_floodedness_noise,
@@ -413,7 +417,7 @@ impl GlobalProtoNoiseRouter {
             vegetation: base.vegetation,
             continents: base.continents,
             initial_density_without_jaggedness: base.initial_density_without_jaggedness,
-            component_stack: stack.into_boxed_slice(),
+            component_stack,
         }
     }
 }

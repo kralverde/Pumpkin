@@ -152,6 +152,7 @@ impl StaticChunkNoiseFunctionComponentImpl for Binary {
             }
             BinaryOperation::Min => {
                 let input2_min = component_stack[self.input2_index].min();
+                let input2_min = f64::NEG_INFINITY;
                 if input1_density < input2_min {
                     input1_density
                 } else {
@@ -165,6 +166,7 @@ impl StaticChunkNoiseFunctionComponentImpl for Binary {
             }
             BinaryOperation::Max => {
                 let input2_max = component_stack[self.input2_index].max();
+                let input2_max = f64::INFINITY;
                 if input1_density > input2_max {
                     input1_density
                 } else {
@@ -220,6 +222,7 @@ impl StaticChunkNoiseFunctionComponentImpl for Binary {
             }
             BinaryOperation::Min => {
                 let input2_min = component_stack[self.input2_index].min();
+                let input2_min = f64::NEG_INFINITY;
                 array.iter_mut().enumerate().for_each(|(index, value)| {
                     if *value > input2_min {
                         let pos = mapper.at(index, Some(sample_options));
@@ -234,6 +237,7 @@ impl StaticChunkNoiseFunctionComponentImpl for Binary {
             }
             BinaryOperation::Max => {
                 let input2_max = component_stack[self.input2_index].max();
+                let input2_max = f64::INFINITY;
                 array.iter_mut().enumerate().for_each(|(index, value)| {
                     if *value < input2_max {
                         let pos = mapper.at(index, Some(sample_options));

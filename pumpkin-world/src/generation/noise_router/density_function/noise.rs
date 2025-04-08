@@ -1,3 +1,5 @@
+use std::array;
+
 use pumpkin_data::noise_router::{InterpolatedNoiseSamplerData, NoiseData, ShiftedNoiseData};
 use pumpkin_util::{
     math::clamped_lerp, noise::perlin::OctavePerlinNoiseSampler, random::RandomGenerator,
@@ -15,7 +17,6 @@ use super::{
     NoiseFunctionComponentRange, NoisePos, StaticIndependentChunkNoiseFunctionComponentImpl,
 };
 
-#[derive(Clone)]
 pub struct Noise {
     sampler: DoublePerlinNoiseSampler,
     data: &'static NoiseData,
@@ -54,7 +55,6 @@ fn shift_sample_3d(sampler: &DoublePerlinNoiseSampler, x: f64, y: f64, z: f64) -
     sampler.sample(x * 0.25f64, y * 0.25f64, z * 0.25f64) * 4f64
 }
 
-#[derive(Clone)]
 pub struct ShiftA {
     sampler: DoublePerlinNoiseSampler,
 }
@@ -83,7 +83,6 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for ShiftA {
     }
 }
 
-#[derive(Clone)]
 pub struct ShiftB {
     sampler: DoublePerlinNoiseSampler,
 }
@@ -112,7 +111,6 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for ShiftB {
     }
 }
 
-#[derive(Clone)]
 pub struct ShiftedNoise {
     input_x_index: usize,
     input_y_index: usize,
@@ -182,12 +180,12 @@ impl ShiftedNoise {
     }
 }
 
-#[derive(Clone)]
 pub struct InterpolatedNoiseSampler {
     lower_noise: Box<OctavePerlinNoiseSampler>,
     upper_noise: Box<OctavePerlinNoiseSampler>,
     noise: Box<OctavePerlinNoiseSampler>,
     data: &'static InterpolatedNoiseSamplerData,
+    fractions: [f64; 16],
     max_value: f64,
 }
 
@@ -220,11 +218,20 @@ impl InterpolatedNoiseSampler {
 
         let max_value = lower_noise.get_total_amplitude(data.scaled_y_scale + 2.0);
 
+        let fractions = array::from_fn(|index| {
+            let mut o = 1.0;
+            for _ in 0..index {
+                o /= 2.0;
+            }
+            o
+        });
+
         Self {
             lower_noise,
             upper_noise,
             noise,
             data,
+            fractions,
             max_value,
         }
     }
@@ -255,53 +262,79 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for InterpolatedNoiseSampl
         let j = self.data.scaled_y_scale * self.data.smear_scale_multiplier;
         let k = j / self.data.y_factor;
 
-        let mut n = 0f64;
-        let mut o = 1f64;
+        // It's ok the the fractions are more than this; zip will cut it short
+        let n: f64 = self
+            .noise
+            .samplers
+            .iter()
+            .rev()
+            .zip(self.fractions)
+            .map(|(data, fraction)| {
+                let mapped_x = OctavePerlinNoiseSampler::maintain_precision(g * fraction);
+                let mapped_y = OctavePerlinNoiseSampler::maintain_precision(h * fraction);
+                let mapped_z = OctavePerlinNoiseSampler::maintain_precision(i * fraction);
 
-        for p in 0..8 {
-            let sampler = self.noise.get_octave(p);
-            if let Some(sampler) = sampler {
-                n += sampler.sample_no_fade(
-                    OctavePerlinNoiseSampler::maintain_precision(g * o),
-                    OctavePerlinNoiseSampler::maintain_precision(h * o),
-                    OctavePerlinNoiseSampler::maintain_precision(i * o),
-                    k * o,
-                    h * o,
-                ) / o;
-            }
-
-            o /= 2f64;
-        }
+                data.sampler.sample_no_fade(
+                    mapped_x,
+                    mapped_y,
+                    mapped_z,
+                    k * fraction,
+                    h * fraction,
+                ) / fraction
+            })
+            .sum();
 
         let q = (n / 10f64 + 1f64) / 2f64;
         let bl2 = q >= 1f64;
         let bl3 = q <= 0f64;
-        let mut o = 1f64;
-        let mut l = 0f64;
-        let mut m = 0f64;
 
-        for r in 0..16 {
-            let s = OctavePerlinNoiseSampler::maintain_precision(d * o);
-            let t = OctavePerlinNoiseSampler::maintain_precision(e * o);
-            let u = OctavePerlinNoiseSampler::maintain_precision(f * o);
-            let v = j * o;
+        let l = if !bl2 {
+            self.lower_noise
+                .samplers
+                .iter()
+                .rev()
+                .zip(self.fractions)
+                .map(|(data, fraction)| {
+                    let mapped_x = OctavePerlinNoiseSampler::maintain_precision(d * fraction);
+                    let mapped_y = OctavePerlinNoiseSampler::maintain_precision(e * fraction);
+                    let mapped_z = OctavePerlinNoiseSampler::maintain_precision(f * fraction);
 
-            if !bl2 {
-                let sampler = self.lower_noise.get_octave(r);
-                if let Some(sampler) = sampler {
-                    l += sampler.sample_no_fade(s, t, u, v, e * o) / o;
-                }
-            }
+                    data.sampler.sample_no_fade(
+                        mapped_x,
+                        mapped_y,
+                        mapped_z,
+                        j * fraction,
+                        e * fraction,
+                    ) / fraction
+                })
+                .sum()
+        } else {
+            0.0
+        };
 
-            if !bl3 {
-                let sampler = self.upper_noise.get_octave(r);
-                if let Some(sampler) = sampler {
-                    m += sampler.sample_no_fade(s, t, u, v, e * o) / o;
-                }
-            }
+        let m = if !bl3 {
+            self.upper_noise
+                .samplers
+                .iter()
+                .rev()
+                .zip(self.fractions)
+                .map(|(data, fraction)| {
+                    let mapped_x = OctavePerlinNoiseSampler::maintain_precision(d * fraction);
+                    let mapped_y = OctavePerlinNoiseSampler::maintain_precision(e * fraction);
+                    let mapped_z = OctavePerlinNoiseSampler::maintain_precision(f * fraction);
 
-            o /= 2f64;
-        }
+                    data.sampler.sample_no_fade(
+                        mapped_x,
+                        mapped_y,
+                        mapped_z,
+                        j * fraction,
+                        e * fraction,
+                    ) / fraction
+                })
+                .sum()
+        } else {
+            0.0
+        };
 
         clamped_lerp(l / 512f64, m / 512f64, q) / 128f64
     }

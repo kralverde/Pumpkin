@@ -13,10 +13,12 @@ pub(crate) mod misc;
 pub(crate) mod noise;
 pub(crate) mod spline;
 
-/*
 #[cfg(test)]
 mod test;
-*/
+
+// Helper functions for deserializing unique density functions for testing
+#[cfg(test)]
+mod test_deserializer;
 
 pub trait NoisePos: Debug {
     fn x(&self) -> i32;

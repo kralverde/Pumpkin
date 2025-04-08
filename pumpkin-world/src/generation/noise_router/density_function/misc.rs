@@ -88,7 +88,6 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for EndIsland {
     }
 }
 
-#[derive(Clone)]
 pub struct WeirdScaled {
     pub input_index: usize,
     pub sampler: DoublePerlinNoiseSampler,

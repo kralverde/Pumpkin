@@ -268,11 +268,13 @@ impl StaticChunkNoiseFunctionComponentImpl for SplineFunction {
 impl NoiseFunctionComponentRange for SplineFunction {
     #[inline]
     fn min(&self) -> f64 {
-        self.min_value
+        f64::NEG_INFINITY
+        //self.min_value
     }
 
     #[inline]
     fn max(&self) -> f64 {
-        self.max_value
+        f64::INFINITY
+        //self.max_value
     }
 }

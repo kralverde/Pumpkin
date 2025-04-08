@@ -827,7 +827,6 @@ impl DensityFunctionRepr {
                 let xz_factor = data.xz_factor;
                 let y_factor = data.y_factor;
                 let smear_scale_multiplier = data.smear_scale_multiplier;
-                let max_value = data.max_value;
 
                 quote! {
                     BaseNoiseFunctionComponent::InterpolatedNoiseSampler {
@@ -837,7 +836,6 @@ impl DensityFunctionRepr {
                             xz_factor: #xz_factor,
                             y_factor: #y_factor,
                             smear_scale_multiplier: #smear_scale_multiplier,
-                            max_value: #max_value,
                         }
                     }
                 }
@@ -1071,7 +1069,6 @@ pub(crate) fn build() -> TokenStream {
             pub xz_factor: f64,
             pub y_factor: f64,
             pub smear_scale_multiplier: f64,
-            pub max_value: f64,
         }
 
         pub struct ClampedYGradientData {
