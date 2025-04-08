@@ -75,6 +75,91 @@ pub enum ChunkNoiseFunctionComponent<'a> {
     Panic(String),
 }
 
+/*
+impl ChunkNoiseFunctionComponent<'_> {
+    pub fn display_test(&self, stack: &[ChunkNoiseFunctionComponent<'_>]) -> String {
+        match self {
+            Self::Independent(independent) => match independent {
+                IndependentProtoNoiseFunctionComponent::ClampedYGradient(_) => {
+                    "ClampedYGradient".into()
+                }
+                IndependentProtoNoiseFunctionComponent::InterpolatedNoise(_) => {
+                    "InterpolatedNoise".into()
+                }
+                IndependentProtoNoiseFunctionComponent::EndIsland(_) => "EndIsland".into(),
+                IndependentProtoNoiseFunctionComponent::Constant(_) => "Constant".into(),
+                IndependentProtoNoiseFunctionComponent::Noise(_) => "Noise".into(),
+                IndependentProtoNoiseFunctionComponent::ShiftA(_) => "ShiftA".into(),
+                IndependentProtoNoiseFunctionComponent::ShiftB(_) => "ShiftB".into(),
+            },
+            Self::Dependent(dependent) => match dependent {
+                DependentProtoNoiseFunctionComponent::Spline(spine) => "Spline(todo)".into(),
+                DependentProtoNoiseFunctionComponent::Unary(x) => {
+                    let a = stack[x.input_index].display_test(stack);
+                    format!("Unary({})", a)
+                }
+                DependentProtoNoiseFunctionComponent::ShiftedNoise(x) => {
+                    format!("ShiftedNoise(todo)")
+                }
+                DependentProtoNoiseFunctionComponent::Linear(x) => {
+                    let a = stack[x.input_index].display_test(stack);
+                    format!("Linear({})", a)
+                }
+                DependentProtoNoiseFunctionComponent::Binary(x) => {
+                    let a = stack[x.input1_index].display_test(stack);
+                    let b = stack[x.input2_index].display_test(stack);
+                    format!("Binary({}, {})", a, b)
+                }
+                DependentProtoNoiseFunctionComponent::WeirdScaled(x) => {
+                    format!("WeirdScaled(todo)")
+                }
+                DependentProtoNoiseFunctionComponent::Clamp(x) => {
+                    format!("Clamp(todo)")
+                }
+                DependentProtoNoiseFunctionComponent::RangeChoice(x) => {
+                    let when_in = stack[x.when_in_index].display_test(stack);
+                    let when_out = stack[x.when_out_index].display_test(stack);
+                    format!("RangeChoice({}, {})", when_in, when_out)
+                }
+            },
+            Self::Chunk(chunk) => match &**chunk {
+                ChunkSpecificNoiseFunctionComponent::CellCache(x) => {
+                    let input = &stack[x.input_index];
+                    let input_display = input.display_test(stack);
+                    format!("CellCache({})", input_display)
+                }
+                ChunkSpecificNoiseFunctionComponent::Cache2D(x) => {
+                    let input = &stack[x.input_index];
+                    let input_display = input.display_test(stack);
+                    format!("Cache2D({})", input_display)
+                }
+                ChunkSpecificNoiseFunctionComponent::DensityInterpolator(x) => {
+                    let input = &stack[x.input_index];
+                    let input_display = input.display_test(stack);
+                    format!("DensityInterpolator({})", input_display)
+                }
+                ChunkSpecificNoiseFunctionComponent::FlatCache(x) => {
+                    let input = &stack[x.input_index];
+                    let input_display = input.display_test(stack);
+                    format!("FlatCache({})", input_display)
+                }
+                ChunkSpecificNoiseFunctionComponent::CacheOnce(x) => {
+                    let input = &stack[x.input_index];
+                    let input_display = input.display_test(stack);
+                    format!("CacheOnce({})", input_display)
+                }
+            },
+            Self::PassThrough(x) => {
+                let input = &stack[x.input_index()];
+                let input_display = input.display_test(stack);
+                format!("PassThrough({})", input_display)
+            }
+            Self::Panic(_) => unreachable!(),
+        }
+    }
+}
+*/
+
 impl NoiseFunctionComponentRange for ChunkNoiseFunctionComponent<'_> {
     #[inline]
     fn min(&self) -> f64 {
