@@ -3,6 +3,7 @@ use pumpkin_data::{
     chunk::DoublePerlinNoiseParameters,
     noise_router::{
         BaseNoiseFunctionComponent, BaseNoiseRouter, BinaryOperation, LinearOperation, SplineRepr,
+        UnaryOperation,
     },
 };
 use pumpkin_util::random::RandomDeriverImpl;
@@ -265,7 +266,7 @@ impl GlobalProtoNoiseRouter {
                             } else if arg1_max < 0.0 && arg2_max < 0.0 {
                                 arg1_min * arg2_min
                             } else {
-                                (arg1_min * arg2_min).min(arg1_max * arg2_max)
+                                (arg1_min * arg2_min).max(arg1_max * arg2_max)
                             };
 
                             (min, max)
@@ -332,7 +333,7 @@ impl GlobalProtoNoiseRouter {
                             } else if arg1_max < 0.0 && data.argument < 0.0 {
                                 arg1_min * data.argument
                             } else {
-                                (arg1_min * data.argument).min(arg1_max * data.argument)
+                                (arg1_min * data.argument).max(arg1_max * data.argument)
                             };
 
                             (min, max)
@@ -357,8 +358,19 @@ impl GlobalProtoNoiseRouter {
                     let arg1_min = stack[*input_index].min();
                     let arg1_max = stack[*input_index].max();
 
-                    let min_value = data.apply_density(arg1_min);
-                    let max_value = data.apply_density(arg1_max);
+                    let applied_min_value = data.apply_density(arg1_min);
+                    let applied_max_value = data.apply_density(arg1_max);
+
+                    let (min_value, max_value) = match data.operation {
+                        // TODO: I'm pretty sure this can be more restrictive
+                        UnaryOperation::Abs | UnaryOperation::Square => {
+                            (arg1_min.max(0.0), applied_min_value.max(applied_max_value))
+                        }
+                        UnaryOperation::Squeeze
+                        | UnaryOperation::Cube
+                        | UnaryOperation::QuarterNegative
+                        | UnaryOperation::HalfNegative => (applied_min_value, applied_max_value),
+                    };
 
                     ProtoNoiseFunctionComponent::Dependent(
                         DependentProtoNoiseFunctionComponent::Unary(Unary::new(

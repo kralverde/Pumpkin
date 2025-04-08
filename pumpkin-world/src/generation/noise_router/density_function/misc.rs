@@ -212,8 +212,8 @@ impl StaticIndependentChunkNoiseFunctionComponentImpl for ClampedYGradient {
 #[derive(Clone)]
 pub struct RangeChoice {
     input_index: usize,
-    when_in_index: usize,
-    when_out_index: usize,
+    pub(crate) when_in_index: usize,
+    pub(crate) when_out_index: usize,
     data: &'static RangeChoiceData,
     min_value: f64,
     max_value: f64,

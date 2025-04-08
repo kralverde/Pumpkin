@@ -1,18 +1,12 @@
 use sha2::{Digest, Sha256};
-use std::{cell::RefCell, sync::LazyLock};
+use std::cell::RefCell;
 
 use enum_dispatch::enum_dispatch;
-use multi_noise::BiomeTree;
-use pumpkin_data::chunk::Biome;
+use pumpkin_data::chunk::{Biome, BiomeTree, OVERWORLD_BIOME_SOURCE};
 use pumpkin_util::math::vector3::Vector3;
 
 use crate::generation::noise_router::multi_noise_sampler::MultiNoiseSampler;
 pub mod multi_noise;
-
-pub static BIOME_SEARCH_TREE: LazyLock<BiomeTree> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../../assets/multi_noise_biome_tree.json"))
-        .expect("Could not parse multi_noise_biome_tree.json")
-});
 
 thread_local! {
     /// A shortcut; check if last used biome is what we should use
@@ -31,7 +25,9 @@ pub struct MultiNoiseBiomeSupplier;
 impl BiomeSupplier for MultiNoiseBiomeSupplier {
     fn biome(global_biome_pos: &Vector3<i32>, noise: &mut MultiNoiseSampler<'_>) -> &'static Biome {
         let point = noise.sample(global_biome_pos.x, global_biome_pos.y, global_biome_pos.z);
-        LAST_RESULT_NODE.with_borrow_mut(|last_result| BIOME_SEARCH_TREE.get(&point, last_result))
+        let point_list = point.convert_to_list();
+        LAST_RESULT_NODE
+            .with_borrow_mut(|last_result| OVERWORLD_BIOME_SOURCE.get(&point_list, last_result))
     }
 }
 

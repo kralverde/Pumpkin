@@ -997,6 +997,9 @@ pub(crate) fn build() -> TokenStream {
     fix_final_density!(reprs.overworld_large_biomes);
     fix_final_density!(reprs.nether);
 
+    let _ = reprs.end;
+    let _ = reprs.end_islands;
+
     let overworld_router = reprs.overworld.into_token_stream();
 
     quote! {
