@@ -34,11 +34,11 @@ mod test {
     use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
 
     use crate::{
-        GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
-        ProtoChunk,
+        GENERATION_SETTINGS, GeneratorSetting, GlobalRandomConfig, ProtoChunk,
         biome::{BiomeSupplier, MultiNoiseBiomeSupplier},
-        generation::noise_router::multi_noise_sampler::{
-            MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
+        generation::noise_router::{
+            multi_noise_sampler::{MultiNoiseSampler, MultiNoiseSamplerBuilderOptions},
+            proto_noise_router::ProtoNoiseRouters,
         },
         read_data_from_file,
     };
@@ -53,7 +53,7 @@ mod test {
         let chunk_pos = Vector2::new(0, 0);
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_rounter =
-            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
+            ProtoNoiseRouters::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
 
         let surface_config = GENERATION_SETTINGS
             .get(&GeneratorSetting::Overworld)
@@ -80,10 +80,10 @@ mod test {
         let seed = 0;
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_router =
-            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
+            ProtoNoiseRouters::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
 
         let mut sampler = MultiNoiseSampler::generate(
-            &noise_router,
+            &noise_router.multi_noise,
             &MultiNoiseSamplerBuilderOptions::new(0, 0, 4),
         );
 

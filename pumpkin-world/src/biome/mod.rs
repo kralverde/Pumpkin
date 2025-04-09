@@ -45,11 +45,11 @@ mod test {
     use serde::Deserialize;
 
     use crate::{
-        GENERATION_SETTINGS, GeneratorSetting, GlobalProtoNoiseRouter, GlobalRandomConfig,
-        ProtoChunk,
+        GENERATION_SETTINGS, GeneratorSetting, GlobalRandomConfig, ProtoChunk,
         chunk::palette::BIOME_NETWORK_MAX_BITS,
-        generation::noise_router::multi_noise_sampler::{
-            MultiNoiseSampler, MultiNoiseSamplerBuilderOptions,
+        generation::noise_router::{
+            multi_noise_sampler::{MultiNoiseSampler, MultiNoiseSamplerBuilderOptions},
+            proto_noise_router::ProtoNoiseRouters,
         },
         read_data_from_file,
     };
@@ -60,10 +60,11 @@ mod test {
     fn test_biome_desert() {
         let seed = 13579;
         let random_config = GlobalRandomConfig::new(seed, false);
-        let noise_rounter =
-            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
+        let noise_router =
+            ProtoNoiseRouters::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
         let multi_noise_config = MultiNoiseSamplerBuilderOptions::new(1, 1, 1);
-        let mut sampler = MultiNoiseSampler::generate(&noise_rounter, &multi_noise_config);
+        let mut sampler =
+            MultiNoiseSampler::generate(&noise_router.multi_noise, &multi_noise_config);
         let biome = MultiNoiseBiomeSupplier::biome(
             &pumpkin_util::math::vector3::Vector3 { x: -24, y: 1, z: 8 },
             &mut sampler,
@@ -86,7 +87,7 @@ mod test {
         let seed = 0;
         let random_config = GlobalRandomConfig::new(seed, false);
         let noise_router =
-            GlobalProtoNoiseRouter::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
+            ProtoNoiseRouters::generate(&OVERWORLD_BASE_NOISE_ROUTER, &random_config);
         let surface_settings = GENERATION_SETTINGS
             .get(&GeneratorSetting::Overworld)
             .unwrap();

@@ -2,7 +2,7 @@ use enum_dispatch::enum_dispatch;
 use pumpkin_data::{
     chunk::DoublePerlinNoiseParameters,
     noise_router::{
-        BaseNoiseFunctionComponent, BaseNoiseRouter, BinaryOperation, LinearOperation, SplineRepr,
+        BaseNoiseFunctionComponent, BaseNoiseRouters, BinaryOperation, LinearOperation, SplineRepr,
         UnaryOperation,
     },
 };
@@ -81,24 +81,38 @@ impl<'a> DoublePerlinNoiseBuilder<'a> {
     }
 }
 
-pub struct GlobalProtoNoiseRouter {
+pub struct ProtoNoiseRouter {
+    pub full_component_stack: Box<[ProtoNoiseFunctionComponent]>,
     pub barrier_noise: usize,
     pub fluid_level_floodedness_noise: usize,
     pub fluid_level_spread_noise: usize,
     pub lava_noise: usize,
     pub erosion: usize,
     pub depth: usize,
-    pub initial_density_without_jaggedness: usize,
     pub final_density: usize,
     pub vein_toggle: usize,
     pub vein_ridged: usize,
     pub vein_gap: usize,
-    pub ridges: usize,
-    pub temperature: usize,
-    pub continents: usize,
-    pub vegetation: usize,
+}
 
-    pub component_stack: Box<[ProtoNoiseFunctionComponent]>,
+pub struct ProtoSurfaceEstimator {
+    pub full_component_stack: Box<[ProtoNoiseFunctionComponent]>,
+}
+
+pub struct ProtoMultiNoiseRouter {
+    pub full_component_stack: Box<[ProtoNoiseFunctionComponent]>,
+    pub temperature: usize,
+    pub vegetation: usize,
+    pub continents: usize,
+    pub erosion: usize,
+    pub depth: usize,
+    pub ridges: usize,
+}
+
+pub struct ProtoNoiseRouters {
+    pub noise: ProtoNoiseRouter,
+    pub surface_estimator: ProtoSurfaceEstimator,
+    pub multi_noise: ProtoMultiNoiseRouter,
 }
 
 fn build_spline_recursive(spline_repr: &SplineRepr) -> SplineValue {
@@ -121,7 +135,7 @@ fn build_spline_recursive(spline_repr: &SplineRepr) -> SplineValue {
     }
 }
 
-impl GlobalProtoNoiseRouter {
+impl ProtoNoiseRouters {
     pub fn generate_proto_stack(
         base_stack: &[BaseNoiseFunctionComponent],
         random_config: &GlobalRandomConfig,
@@ -410,26 +424,40 @@ impl GlobalProtoNoiseRouter {
         stack.into()
     }
 
-    pub fn generate(base: &BaseNoiseRouter, random_config: &GlobalRandomConfig) -> Self {
-        let component_stack = Self::generate_proto_stack(base.full_component_stack, random_config);
+    pub fn generate(base: &BaseNoiseRouters, random_config: &GlobalRandomConfig) -> Self {
+        let noise_stack =
+            Self::generate_proto_stack(base.noise.full_component_stack, random_config);
+        let surface_stack =
+            Self::generate_proto_stack(base.surface_estimator.full_component_stack, random_config);
+        let multi_noise_stack =
+            Self::generate_proto_stack(base.multi_noise.full_component_stack, random_config);
 
         Self {
-            barrier_noise: base.barrier_noise,
-            fluid_level_floodedness_noise: base.fluid_level_floodedness_noise,
-            fluid_level_spread_noise: base.fluid_level_spread_noise,
-            final_density: base.final_density,
-            lava_noise: base.lava_noise,
-            erosion: base.erosion,
-            depth: base.depth,
-            vein_toggle: base.vein_toggle,
-            vein_ridged: base.vein_ridged,
-            vein_gap: base.vein_gap,
-            ridges: base.ridges,
-            temperature: base.temperature,
-            vegetation: base.vegetation,
-            continents: base.continents,
-            initial_density_without_jaggedness: base.initial_density_without_jaggedness,
-            component_stack,
+            noise: ProtoNoiseRouter {
+                full_component_stack: noise_stack,
+                barrier_noise: base.noise.barrier_noise,
+                fluid_level_floodedness_noise: base.noise.fluid_level_floodedness_noise,
+                fluid_level_spread_noise: base.noise.fluid_level_spread_noise,
+                lava_noise: base.noise.lava_noise,
+                erosion: base.noise.erosion,
+                depth: base.noise.depth,
+                final_density: base.noise.final_density,
+                vein_toggle: base.noise.vein_toggle,
+                vein_ridged: base.noise.vein_ridged,
+                vein_gap: base.noise.vein_gap,
+            },
+            surface_estimator: ProtoSurfaceEstimator {
+                full_component_stack: surface_stack,
+            },
+            multi_noise: ProtoMultiNoiseRouter {
+                full_component_stack: multi_noise_stack,
+                temperature: base.multi_noise.temperature,
+                vegetation: base.multi_noise.vegetation,
+                continents: base.multi_noise.continents,
+                erosion: base.multi_noise.erosion,
+                depth: base.multi_noise.depth,
+                ridges: base.multi_noise.ridges,
+            },
         }
     }
 }

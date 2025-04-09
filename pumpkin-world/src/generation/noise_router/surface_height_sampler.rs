@@ -3,10 +3,7 @@ use std::collections::HashMap;
 use pumpkin_data::noise_router::WrapperType;
 use pumpkin_util::math::vector2::Vector2;
 
-use crate::{
-    GlobalProtoNoiseRouter,
-    generation::{biome_coords, positions::chunk_pos},
-};
+use crate::generation::{biome_coords, positions::chunk_pos};
 
 use super::{
     chunk_density_function::{
@@ -15,7 +12,7 @@ use super::{
     },
     chunk_noise_router::ChunkNoiseFunctionComponent,
     density_function::{NoiseFunctionComponentRange, PassThrough, UnblendedNoisePos},
-    proto_noise_router::ProtoNoiseFunctionComponent,
+    proto_noise_router::{ProtoNoiseFunctionComponent, ProtoSurfaceEstimator},
 };
 
 pub struct SurfaceHeightSamplerBuilderOptions {
@@ -58,7 +55,6 @@ pub struct SurfaceHeightEstimateSampler<'a> {
     maximum_y: i32,
     y_level_step_count: usize,
 
-    initial_density_without_jaggedness: usize,
     component_stack: Box<[ChunkNoiseFunctionComponent<'a>]>,
 
     // TODO: Can this be a flat map? I think the aquifer sampler samples outside of the chunk
@@ -89,7 +85,7 @@ impl<'a> SurfaceHeightEstimateSampler<'a> {
         {
             let pos = UnblendedNoisePos::new(aligned_x, y, aligned_z);
             let density_sample = ChunkNoiseFunctionComponent::sample_from_stack(
-                &mut self.component_stack[..=self.initial_density_without_jaggedness],
+                &mut self.component_stack,
                 &pos,
                 &ChunkNoiseFunctionSampleOptions::new(false, SampleAction::SkipCellCaches, 0, 0, 0),
             );
@@ -103,15 +99,15 @@ impl<'a> SurfaceHeightEstimateSampler<'a> {
     }
 
     pub fn generate(
-        base: &'a GlobalProtoNoiseRouter,
+        base: &'a ProtoSurfaceEstimator,
         build_options: &SurfaceHeightSamplerBuilderOptions,
     ) -> Self {
         // TODO: It seems kind of wasteful to iter over all components (even those we dont need
         // because they're for chunk population), but this is the best I've got for now.
         // (Should we traverse the functions and update the indices?)
         let mut component_stack =
-            Vec::<ChunkNoiseFunctionComponent>::with_capacity(base.component_stack.len());
-        for base_component in base.component_stack.iter() {
+            Vec::<ChunkNoiseFunctionComponent>::with_capacity(base.full_component_stack.len());
+        for base_component in base.full_component_stack.iter() {
             let chunk_component = match base_component {
                 ProtoNoiseFunctionComponent::Dependent(dependent) => {
                     ChunkNoiseFunctionComponent::Dependent(dependent)
@@ -203,7 +199,6 @@ impl<'a> SurfaceHeightEstimateSampler<'a> {
         }
 
         Self {
-            initial_density_without_jaggedness: base.initial_density_without_jaggedness,
             component_stack: component_stack.into_boxed_slice(),
 
             maximum_y: build_options.maximum_y,

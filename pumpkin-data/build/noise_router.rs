@@ -8,6 +8,7 @@ use quote::{ToTokens, TokenStreamExt, quote};
 use serde::Deserialize;
 use syn::Ident;
 
+#[derive(Clone)]
 struct HashableF32(pub f32);
 
 // Normally this is bad, but we just care about checking if components are the same
@@ -46,6 +47,7 @@ impl<'de> Deserialize<'de> for HashableF32 {
     }
 }
 
+#[derive(Clone)]
 struct HashableF64(pub f64);
 
 // Normally this is bad, but we just care about checking if components are the same
@@ -84,7 +86,7 @@ impl<'de> Deserialize<'de> for HashableF64 {
     }
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 #[serde(tag = "_type", content = "value")]
 enum SplineRepr {
     #[serde(rename(deserialize = "standard"))]
@@ -340,7 +342,7 @@ impl WrapperType {
     }
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct NoiseData {
     #[serde(rename(deserialize = "noise"))]
     noise_id: String,
@@ -350,7 +352,7 @@ struct NoiseData {
     y_scale: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct ShiftedNoiseData {
     #[serde(rename(deserialize = "xzScale"))]
     xz_scale: HashableF64,
@@ -360,7 +362,7 @@ struct ShiftedNoiseData {
     noise_id: String,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct WeirdScaledData {
     #[serde(rename(deserialize = "noise"))]
     noise_id: String,
@@ -368,7 +370,7 @@ struct WeirdScaledData {
     mapper: WeirdScaledMapper,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct InterpolatedNoiseSamplerData {
     #[serde(rename(deserialize = "scaledXzScale"))]
     scaled_xz_scale: HashableF64,
@@ -389,7 +391,7 @@ struct InterpolatedNoiseSamplerData {
     //y_scale: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct ClampedYGradientData {
     #[serde(rename(deserialize = "fromY"))]
     from_y: i32,
@@ -401,7 +403,7 @@ struct ClampedYGradientData {
     to_value: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct BinaryData {
     #[serde(rename(deserialize = "type"))]
     operation: BinaryOperation,
@@ -411,7 +413,7 @@ struct BinaryData {
     max_value: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct LinearData {
     #[serde(rename(deserialize = "specificType"))]
     operation: LinearOperation,
@@ -422,7 +424,7 @@ struct LinearData {
     max_value: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct UnaryData {
     #[serde(rename(deserialize = "type"))]
     operation: UnaryOperation,
@@ -432,7 +434,7 @@ struct UnaryData {
     max_value: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct ClampData {
     #[serde(rename(deserialize = "minValue"))]
     min_value: HashableF64,
@@ -440,7 +442,7 @@ struct ClampData {
     max_value: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct RangeChoiceData {
     #[serde(rename(deserialize = "minInclusive"))]
     min_inclusive: HashableF64,
@@ -448,7 +450,7 @@ struct RangeChoiceData {
     max_exclusive: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 struct SplineData {
     #[serde(rename(deserialize = "minValue"))]
     min_value: HashableF64,
@@ -456,7 +458,7 @@ struct SplineData {
     max_value: HashableF64,
 }
 
-#[derive(Deserialize, Hash)]
+#[derive(Deserialize, Hash, Clone)]
 #[serde(tag = "_class", content = "value")]
 enum DensityFunctionRepr {
     // This is a placeholder for leaving space for world structures
@@ -887,81 +889,101 @@ struct NoiseRouterRepr {
 
 impl NoiseRouterRepr {
     fn into_token_stream(self) -> TokenStream {
-        let mut component_stack = Vec::new();
-        let mut lookup_map = HashMap::new();
+        let mut noise_component_stack = Vec::new();
+        let mut noise_lookup_map = HashMap::new();
 
         // The aquifer sampler is called most often
         let final_density = self
             .final_density
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
         let barrier_noise = self
             .barrier_noise
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
         let fluid_level_floodedness_noise = self
             .fluid_level_floodedness_noise
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
         let fluid_level_spread_noise = self
             .fluid_level_spread_noise
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
         let lava_noise = self
             .lava_noise
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
 
         // Ore sampler is called fewer times than aquifer sampler
         let vein_toggle = self
             .vein_toggle
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
         let vein_ridged = self
             .vein_ridged
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
         let vein_gap = self
             .vein_gap
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
 
         // These should all be cached so it doesnt matter where their components are
-        let erosion = self
+        let noise_erosion = self
             .erosion
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
-        let depth = self
+            .clone()
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
+        let noise_depth = self
             .depth
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
-        let initial_density_without_jaggedness = self
-            .initial_density_without_jaggedness
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .clone()
+            .get_index_for_component(&mut noise_component_stack, &mut noise_lookup_map);
 
-        // TODO: Split up noise generation and noise sampler stacks
-        //NOTE: Invariant: MultiNoiseSampler functions are pushed after the populate noise functions with
+        let mut surface_component_stack = Vec::new();
+        let mut surface_lookup_map = HashMap::new();
+        let _ = self
+            .initial_density_without_jaggedness
+            .get_index_for_component(&mut surface_component_stack, &mut surface_lookup_map);
+
+        let mut multinoise_component_stack = Vec::new();
+        let mut multinoise_lookup_map = HashMap::new();
         let ridges = self
             .ridges
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut multinoise_component_stack, &mut multinoise_lookup_map);
         let temperature = self
             .temperature
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut multinoise_component_stack, &mut multinoise_lookup_map);
         let vegetation = self
             .vegetation
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut multinoise_component_stack, &mut multinoise_lookup_map);
         let continents = self
             .continents
-            .get_index_for_component(&mut component_stack, &mut lookup_map);
+            .get_index_for_component(&mut multinoise_component_stack, &mut multinoise_lookup_map);
+        let multi_erosion = self
+            .erosion
+            .get_index_for_component(&mut multinoise_component_stack, &mut multinoise_lookup_map);
+        let multi_depth = self
+            .depth
+            .get_index_for_component(&mut multinoise_component_stack, &mut multinoise_lookup_map);
 
         quote! {
-            BaseNoiseRouter {
-                full_component_stack: &[#(#component_stack),*],
-                barrier_noise: #barrier_noise,
-                fluid_level_floodedness_noise: #fluid_level_floodedness_noise,
-                fluid_level_spread_noise: #fluid_level_spread_noise,
-                lava_noise: #lava_noise,
-                temperature: #temperature,
-                vegetation: #vegetation,
-                continents: #continents,
-                erosion: #erosion,
-                depth: #depth,
-                ridges: #ridges,
-                initial_density_without_jaggedness: #initial_density_without_jaggedness,
-                final_density: #final_density,
-                vein_toggle: #vein_toggle,
-                vein_ridged: #vein_ridged,
-                vein_gap: #vein_gap,
+            BaseNoiseRouters {
+                noise: BaseNoiseRouter {
+                    full_component_stack: &[#(#noise_component_stack),*],
+                    barrier_noise: #barrier_noise,
+                    fluid_level_floodedness_noise: #fluid_level_floodedness_noise,
+                    fluid_level_spread_noise: #fluid_level_spread_noise,
+                    lava_noise: #lava_noise,
+                    erosion: #noise_erosion,
+                    depth: #noise_depth,
+                    final_density: #final_density,
+                    vein_toggle: #vein_toggle,
+                    vein_ridged: #vein_ridged,
+                    vein_gap: #vein_gap,
+                },
+                surface_estimator: BaseSurfaceEstimator {
+                    full_component_stack: &[#(#surface_component_stack),*],
+                },
+                multi_noise: BaseMultiNoiseRouter {
+                    full_component_stack: &[#(#multinoise_component_stack),*],
+                    temperature: #temperature,
+                    vegetation: #vegetation,
+                    continents: #continents,
+                    erosion: #multi_erosion,
+                    depth: #multi_depth,
+                    ridges: #ridges,
+                },
             }
         }
     }
@@ -1275,19 +1297,34 @@ pub(crate) fn build() -> TokenStream {
             pub fluid_level_floodedness_noise: usize,
             pub fluid_level_spread_noise: usize,
             pub lava_noise: usize,
-            pub temperature: usize,
-            pub vegetation: usize,
-            pub continents: usize,
             pub erosion: usize,
             pub depth: usize,
-            pub ridges: usize,
-            pub initial_density_without_jaggedness: usize,
             pub final_density: usize,
             pub vein_toggle: usize,
             pub vein_ridged: usize,
             pub vein_gap: usize,
         }
 
-        pub const OVERWORLD_BASE_NOISE_ROUTER: BaseNoiseRouter = #overworld_router;
+        pub struct BaseSurfaceEstimator {
+            pub full_component_stack: &'static [BaseNoiseFunctionComponent],
+        }
+
+        pub struct BaseMultiNoiseRouter {
+            pub full_component_stack: &'static [BaseNoiseFunctionComponent],
+            pub temperature: usize,
+            pub vegetation: usize,
+            pub continents: usize,
+            pub erosion: usize,
+            pub depth: usize,
+            pub ridges: usize,
+        }
+
+        pub struct BaseNoiseRouters {
+            pub noise: BaseNoiseRouter,
+            pub surface_estimator: BaseSurfaceEstimator,
+            pub multi_noise: BaseMultiNoiseRouter,
+        }
+
+        pub const OVERWORLD_BASE_NOISE_ROUTER: BaseNoiseRouters = #overworld_router;
     }
 }

@@ -14,8 +14,8 @@ use super::{
         StaticIndependentChunkNoiseFunctionComponentImpl, UnblendedNoisePos,
     },
     proto_noise_router::{
-        DependentProtoNoiseFunctionComponent, GlobalProtoNoiseRouter,
-        IndependentProtoNoiseFunctionComponent, ProtoNoiseFunctionComponent,
+        DependentProtoNoiseFunctionComponent, IndependentProtoNoiseFunctionComponent,
+        ProtoNoiseFunctionComponent, ProtoNoiseRouter,
     },
 };
 
@@ -305,7 +305,6 @@ pub struct ChunkNoiseRouter<'a> {
     lava_noise: usize,
     erosion: usize,
     depth: usize,
-    initial_density_without_jaggedness: usize,
     final_density: usize,
     vein_toggle: usize,
     vein_ridged: usize,
@@ -322,7 +321,6 @@ impl ChunkNoiseRouter<'_> {
     sample_function!(lava_noise);
     sample_function!(erosion);
     sample_function!(depth);
-    sample_function!(initial_density_without_jaggedness);
     sample_function!(final_density);
     sample_function!(vein_toggle);
     sample_function!(vein_ridged);
@@ -331,36 +329,15 @@ impl ChunkNoiseRouter<'_> {
 
 impl<'a> ChunkNoiseRouter<'a> {
     pub fn generate(
-        base: &'a GlobalProtoNoiseRouter,
+        base: &'a ProtoNoiseRouter,
         build_options: &ChunkNoiseFunctionBuilderOptions,
     ) -> Self {
         let mut component_stack =
-            Vec::<ChunkNoiseFunctionComponent>::with_capacity(base.component_stack.len());
+            Vec::<ChunkNoiseFunctionComponent>::with_capacity(base.full_component_stack.len());
         let mut cell_cache_indices = Vec::new();
         let mut interpolator_indices = Vec::new();
 
-        // NOTE: Only iter what we need; we dont care about the MultiNoiseSampler functions that are
-        // pushed after due to our invariant
-        let max_index = [
-            base.barrier_noise,
-            base.fluid_level_floodedness_noise,
-            base.fluid_level_spread_noise,
-            base.lava_noise,
-            base.erosion,
-            base.depth,
-            base.initial_density_without_jaggedness,
-            base.final_density,
-            base.vein_toggle,
-            base.vein_gap,
-            base.vein_ridged,
-        ]
-        .into_iter()
-        .max()
-        .unwrap();
-
-        for (component_index, base_component) in
-            base.component_stack[..=max_index].iter().enumerate()
-        {
+        for (component_index, base_component) in base.full_component_stack.iter().enumerate() {
             let chunk_component = match base_component {
                 ProtoNoiseFunctionComponent::Dependent(dependent) => {
                     ChunkNoiseFunctionComponent::Dependent(dependent)
@@ -485,7 +462,6 @@ impl<'a> ChunkNoiseRouter<'a> {
             lava_noise: base.lava_noise,
             erosion: base.erosion,
             depth: base.depth,
-            initial_density_without_jaggedness: base.initial_density_without_jaggedness,
             final_density: base.final_density,
             vein_toggle: base.vein_toggle,
             vein_ridged: base.vein_ridged,
