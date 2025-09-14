@@ -201,31 +201,26 @@ impl WorldAquiferSampler {
         // y values are contiguous in packed array:
         // ($local_x * $dim_z + $local_z) * $dim_y + $local_y
 
-        // (x, y - 1, z)
-        let x_0_z_0 = self.packed_position_index(x, y - 1, z);
-
-        // (x, y - 1, z + 1)
-        let x_0_z_1 = x_0_z_0 + self.size_y;
-
-        // (x + 1, y - 1, z)
-        let x_1_z_0 = x_0_z_0 + self.size_y * self.size_z;
-
-        // (x + 1, y - 1, z + 1)
-        let x_1_z_1 = x_1_z_0 + self.size_y;
+        let x0z0_index = self.packed_position_index(x, y - 1, z);
+        let x0z1_index = x0z0_index + self.size_y;
+        let x1z0_index = x0z0_index + self.size_y * self.size_z;
+        let x1z1_index = x1z0_index + self.size_y;
+        // Remove bounds checks on subsequent indexs
+        assert!(x1z1_index + 2 < self.packed_positions.len());
 
         [
-            self.packed_positions[x_0_z_0],
-            self.packed_positions[x_0_z_1],
-            self.packed_positions[x_1_z_0],
-            self.packed_positions[x_1_z_1],
-            self.packed_positions[x_0_z_0 + 1],
-            self.packed_positions[x_0_z_1 + 1],
-            self.packed_positions[x_1_z_0 + 1],
-            self.packed_positions[x_1_z_1 + 1],
-            self.packed_positions[x_0_z_0 + 2],
-            self.packed_positions[x_0_z_1 + 2],
-            self.packed_positions[x_1_z_0 + 2],
-            self.packed_positions[x_1_z_1 + 2],
+            self.packed_positions[x1z1_index + 2],
+            self.packed_positions[x1z0_index + 2],
+            self.packed_positions[x0z1_index + 2],
+            self.packed_positions[x0z0_index + 2],
+            self.packed_positions[x1z1_index + 1],
+            self.packed_positions[x1z0_index + 1],
+            self.packed_positions[x0z1_index + 1],
+            self.packed_positions[x0z0_index + 1],
+            self.packed_positions[x1z1_index],
+            self.packed_positions[x1z0_index],
+            self.packed_positions[x0z1_index],
+            self.packed_positions[x0z0_index],
         ]
     }
 
@@ -500,8 +495,7 @@ impl WorldAquiferSampler {
                 let scaled_y = local_y!(sample_y + 1);
                 let scaled_z = local_xz!(sample_z - 5);
 
-                // The 3 closest positions, closest to furthest
-                let mut packed_block_and_hypots = [(0, i32::MAX); 3];
+                let mut random_positions_and_hypot = [(0, i32::MAX); 3];
                 for packed_random in self.random_positions_for_pos(scaled_x, scaled_y, scaled_z) {
                     let unpacked_x = block_pos::unpack_x(packed_random);
                     let unpacked_y = block_pos::unpack_y(packed_random);
@@ -513,29 +507,31 @@ impl WorldAquiferSampler {
 
                     let hypot_squared = local_x * local_x + local_y * local_y + local_z * local_z;
 
-                    if packed_block_and_hypots[2].1 >= hypot_squared {
-                        packed_block_and_hypots[2] = (packed_random, hypot_squared);
+                    if random_positions_and_hypot[2].1 > hypot_squared {
+                        random_positions_and_hypot[2] = (packed_random, hypot_squared);
                     }
 
-                    if packed_block_and_hypots[1].1 >= hypot_squared {
-                        packed_block_and_hypots[2] = packed_block_and_hypots[1];
-                        packed_block_and_hypots[1] = (packed_random, hypot_squared);
+                    if random_positions_and_hypot[1].1 > hypot_squared {
+                        random_positions_and_hypot[2] = random_positions_and_hypot[1];
+                        random_positions_and_hypot[1] = (packed_random, hypot_squared);
                     }
 
-                    if packed_block_and_hypots[0].1 >= hypot_squared {
-                        packed_block_and_hypots[1] = packed_block_and_hypots[0];
-                        packed_block_and_hypots[0] = (packed_random, hypot_squared);
+                    if random_positions_and_hypot[0].1 > hypot_squared {
+                        random_positions_and_hypot[1] = random_positions_and_hypot[0];
+                        random_positions_and_hypot[0] = (packed_random, hypot_squared);
                     }
                 }
 
                 let fluid_level2 = self.get_water_level(
-                    packed_block_and_hypots[0].0,
+                    random_positions_and_hypot[0].0,
                     router,
                     height_estimator,
                     sample_options,
                 );
-                let d =
-                    Self::max_distance(packed_block_and_hypots[0].1, packed_block_and_hypots[1].1);
+                let d = Self::max_distance(
+                    random_positions_and_hypot[0].1,
+                    random_positions_and_hypot[1].1,
+                );
                 let block_state = fluid_level2.get_block(sample_y);
 
                 if d <= 0f64 {
@@ -553,7 +549,7 @@ impl WorldAquiferSampler {
                 } else {
                     let mut barrier_sample = None;
                     let fluid_level3 = self.get_water_level(
-                        packed_block_and_hypots[1].0,
+                        random_positions_and_hypot[1].0,
                         router,
                         height_estimator,
                         sample_options,
@@ -571,14 +567,14 @@ impl WorldAquiferSampler {
                         None
                     } else {
                         let fluid_level4 = self.get_water_level(
-                            packed_block_and_hypots[2].0,
+                            random_positions_and_hypot[2].0,
                             router,
                             height_estimator,
                             sample_options,
                         );
                         let f = Self::max_distance(
-                            packed_block_and_hypots[0].1,
-                            packed_block_and_hypots[2].1,
+                            random_positions_and_hypot[0].1,
+                            random_positions_and_hypot[2].1,
                         );
                         if f > 0f64 {
                             let g = d
@@ -597,8 +593,8 @@ impl WorldAquiferSampler {
                         }
 
                         let g = Self::max_distance(
-                            packed_block_and_hypots[1].1,
-                            packed_block_and_hypots[2].1,
+                            random_positions_and_hypot[1].1,
+                            random_positions_and_hypot[2].1,
                         );
                         if g > 0f64 {
                             let h = d
@@ -685,7 +681,7 @@ pub trait AquiferSamplerImpl {
 }
 
 #[cfg(test)]
-mod test {
+mod random_positions_and_hypot {
     use std::{mem, sync::LazyLock};
 
     use pumpkin_data::noise_router::OVERWORLD_BASE_NOISE_ROUTER;
